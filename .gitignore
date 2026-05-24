@@ -1,0 +1,27 @@
+# OS
+.DS_Store
+Thumbs.db
+
+# Node / Bun
+node_modules/
+bun.lockb
+dist/
+
+# Build output
+zwiki
+zwiki-darwin-arm64
+zwiki-darwin-x64
+zwiki-linux-x64
+zwiki-win-x64.exe
+
+# Runtime data (not in repo — lives at ~/.zwiki/)
+workspaces/
+.cache/
+
+# Kit reports (local session artifacts)
+.kit/reports/
+
+# Env
+.env
+.env.local
+*.env

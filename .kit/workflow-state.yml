@@ -1,0 +1,14 @@
+entry_phase: p1-project-scaffold
+current_phase: p1-project-scaffold
+
+spec: .kit/planning/SPEC.md
+roadmap: .kit/planning/ROADMAP.md
+
+active_context: .kit/planning/phases/p1-project-scaffold/p1-project-scaffold-CONTEXT.md
+active_plan: .kit/planning/phases/p1-project-scaffold/p1-project-scaffold-PLAN.md
+
+latest_cook_run: null
+latest_check_report: null
+handoff: null
+
+last_updated: 2026-05-24
