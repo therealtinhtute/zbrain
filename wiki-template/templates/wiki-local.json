@@ -1,0 +1,11 @@
+{
+  "_comment": "Copy file này vào .claude/wiki.json trong thư mục gốc của dự án (codebase). 'workspace' phải khớp tên thư mục trong wiki-template/workspaces/.",
+  "project": "{project-name}",
+  "workspace": "{workspace-name}",
+  "wiki_root": null,
+  "knowledge_map": "projects/{project-name}/knowledge-map.md",
+  "domain": "{domain-name}",
+  "patterns": [],
+  "contracts": [],
+  "services": []
+}
