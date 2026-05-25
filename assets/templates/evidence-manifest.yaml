@@ -1,0 +1,4 @@
+evidence_id: "{{evidence_id}}"
+applied_at: "{{applied_at}}"
+workspace: "{{workspace_name}}"
+mutations: []

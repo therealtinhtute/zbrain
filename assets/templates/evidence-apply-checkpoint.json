@@ -1,0 +1,6 @@
+{
+  "evidence_id": "{{evidence_id}}",
+  "status": "not_started",
+  "completed_paths": [],
+  "last_updated": "{{updated_at}}"
+}

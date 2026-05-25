@@ -1,0 +1,5 @@
+id: "{{evidence_id}}"
+type: "{{source_type}}"
+workspace_at_ingest: "{{workspace_name}}"
+ingested_at: "{{ingested_at}}"
+state: ingested

@@ -1,0 +1,23 @@
+import { describe, expect, test } from "bun:test";
+import { existsSync, readFileSync } from "node:fs";
+import { join } from "node:path";
+
+describe("engine and starter workspace assets", () => {
+  test("engine assets encode workspace isolation and evidence rules", () => {
+    const constraints = readFileSync(join(process.cwd(), "assets", "engine", "constraints.md"), "utf8");
+    const retrieval = readFileSync(join(process.cwd(), "assets", "engine", "retrieval-rules.md"), "utf8");
+    const evidence = readFileSync(join(process.cwd(), "assets", "engine", "evidence-rules.md"), "utf8");
+
+    expect(constraints.includes("Never mix knowledge across workspaces.")).toBe(true);
+    expect(retrieval.includes("current-task.md")).toBe(true);
+    expect(evidence.includes("Workspace lock")).toBe(true);
+  });
+
+  test("starter workspaces exist for the four MVP domains", () => {
+    const workspaces = ["programming", "finance", "health", "philosophy"];
+
+    for (const workspace of workspaces) {
+      expect(existsSync(join(process.cwd(), "assets", "workspaces", workspace, "workspace.md"))).toBe(true);
+    }
+  });
+});

@@ -1,32 +1,58 @@
-# Phase Context: P1 — Project Scaffold
+# Context: Product Scaffold
+
+Phase: p1-project-scaffold
+Status: ready
+Spec Link: ../../SPEC.md
+Roadmap Link: ../../ROADMAP.md
+Blast Radius: medium
+Expected Proof: unit
 
 ## Goal
-Bun project initialized, all dependencies installed, asset directory structure created, build compiles empty binary.
+Create the root Bun/TypeScript CLI skeleton and bundled asset tree that later phases build on.
 
-## Boundaries
-- **Allowed surfaces**: src/, assets/, package.json, tsconfig.json, build.ts, tests/
-- **Forbidden surfaces**: ~/.zwiki/ (runtime — not created yet), .claude/ (project integration — P3)
-- **Blast radius**: New project only — no existing files to break
+## Scope Boundary
+### Allowed Surfaces
+- `package.json`
+- `tsconfig.json`
+- `vitest.config.ts`
+- build entry such as `build.ts`
+- `src/index.ts` and bootstrap-only modules
+- root `assets/` directory
+- `tests/` smoke coverage
 
-## Implementation Decisions
-- Bun as package manager AND runtime (not pnpm — SPEC changed to Bun)
-- Commander.js for CLI framework with subcommands (setup, init, workspace, update)
-- Assets directory structure mirrors ~/.zwiki/ layout exactly
-- build.ts uses Bun.build with embedded assets via import
+### Forbidden Surfaces
+- `~/.zwiki/` runtime state
+- project-local `.claude/` integration logic beyond CLI registration
+- qmd execution logic
+- evidence and retrieval business logic
+
+## Spec Hooks
+- Bun is runtime, package manager, and compiler
+- command surface includes `setup`, `init`, `workspace create`, and `update`
+- binary distribution must embed runtime assets
+
+## Locked Decisions
+- source-of-truth bundled assets live only under root `assets/`
+- `src/index.ts` owns top-level command registration
+- smoke tests prove CLI boot and module loading before deeper logic exists
 
 ## Assumptions
-- Bun 1.1+ installed on dev machine
-- No existing package.json (fresh project)
+- Bun is available in the execution environment
+- compile-time asset embedding can be deferred to a documented approach if Bun needs a workaround
+
+## Canonical Refs
+- `.kit/planning/SPEC.md`
+- `.kit/planning/ROADMAP.md`
+- `wiki-template/` content only as migration source
 
 ## Rejected Options
-- pnpm as package manager (Bun handles both runtime + packages)
-- Single flat CLI entry (commander subcommands cleaner for 4+ commands)
+- implement product code under `wiki-template/` because it conflicts with the locked repo shape
+- postpone tests until later phases because scaffold regressions are cheap to catch now
 
-## Expected Proof
-- `bun run build` produces a binary at `./zwiki`
-- `./zwiki --help` shows commander help with subcommands
-- `bun test` passes (even if tests are stubs)
-- `assets/` contains all .md and .yaml template files
+## Deferred Ideas
+- full asset content fidelity
+- qmd binary checks and workspace creation logic
 
-## Escalation
-- If Bun compile fails with asset embedding → escalate to /brainstorm for alternative build approach
+## Escalate If
+- Bun compile cannot package runtime assets with an acceptable approach
+- root asset layout conflicts with the spec runtime paths

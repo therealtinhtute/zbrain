@@ -1,14 +1,10 @@
-entry_phase: p1-project-scaffold
-current_phase: p1-project-scaffold
-
+current_phase: p7-release-hardening
+entry_phase: p0-planning-alignment
 spec: .kit/planning/SPEC.md
 roadmap: .kit/planning/ROADMAP.md
-
-active_context: .kit/planning/phases/p1-project-scaffold/p1-project-scaffold-CONTEXT.md
-active_plan: .kit/planning/phases/p1-project-scaffold/p1-project-scaffold-PLAN.md
-
-latest_cook_run: null
-latest_check_report: null
-handoff: null
-
-last_updated: 2026-05-24
+active_context: .kit/planning/phases/p7-release-hardening/p7-release-hardening-CONTEXT.md
+active_plan: .kit/planning/phases/p7-release-hardening/p7-release-hardening-PLAN.md
+latest_cook_run: .kit/runs/cook/20260525-0320-p7-release-hardening.md
+latest_check_report: .kit/reports/check/20260525-0325-p7-release-hardening.md
+handoff: none
+last_updated: 2026-05-25 03:25
