@@ -1,6 +1,6 @@
 .DEFAULT_GOAL := help
 
-.PHONY: help install build test typecheck smoke clean purge
+.PHONY: help install install-local build test typecheck smoke clean purge
 
 help: ## Show available targets
 	@printf "Available targets:\n"
@@ -13,6 +13,11 @@ install: ## Install Bun dependencies and verify qmd is installed
 		printf "Run: npm i -g @tobilu/qmd\n"; \
 		exit 1; \
 	}
+
+install-local: build ## Build and install zbrain into ~/.local/bin
+	mkdir -p "$$HOME/.local/bin"
+	cp ./dist/zbrain "$$HOME/.local/bin/zbrain"
+	chmod +x "$$HOME/.local/bin/zbrain"
 
 build: ## Compile the standalone CLI with Bun
 	bun run build
