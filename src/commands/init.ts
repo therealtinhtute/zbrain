@@ -9,7 +9,7 @@ export interface InitCommandOptions {
 
 const initTargetOptions = [
   { value: "claude_rules", label: "CLAUDE.md rules", hint: "append non-destructively" },
-  { value: "commands", label: "Slash commands", hint: ".claude/commands" },
+  { value: "skills", label: "Agent skills", hint: ".claude/skills" },
   { value: "agents", label: "Subagents", hint: ".claude/agents" },
   { value: "mcp", label: "MCP config", hint: ".claude/settings.local.json" },
 ] as const;
@@ -34,7 +34,7 @@ export async function runInit(options: InitCommandOptions = {}): Promise<void> {
   const injectTargets = await ui.multiselect({
     message: "What should be injected into this project?",
     options: initTargetOptions.map((option) => ({ ...option })),
-    initialValues: ["claude_rules", "commands", "agents", "mcp"],
+    initialValues: ["claude_rules", "skills", "agents", "mcp"],
   });
 
   const spinner = ui.spinner();

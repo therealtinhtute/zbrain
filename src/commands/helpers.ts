@@ -213,9 +213,24 @@ export function initProject(
     }
   }
 
-  if (selection.injectTargets.includes("commands")) {
-    const commandsDir = join(claudeDir, "commands");
-    created.push(...syncAssetGroup(join(paths.runtimeDir, "commands"), commandsDir));
+  if (selection.injectTargets.includes("skills")) {
+    const skillsDir = join(claudeDir, "skills");
+    created.push(...syncAssetGroup(join(paths.runtimeDir, "skills"), skillsDir));
+    const staleCommandsDir = join(claudeDir, "commands", "zbrain");
+    if (existsSync(staleCommandsDir)) {
+      rmSync(staleCommandsDir, { recursive: true, force: true });
+      updated.push(staleCommandsDir);
+    }
+    const legacyCommandsDir = join(claudeDir, "commands");
+    if (existsSync(legacyCommandsDir)) {
+      for (const file of readdirSync(legacyCommandsDir)) {
+        if (file.startsWith("zbrain:") || file.startsWith("zwiki:")) {
+          const staleFile = join(legacyCommandsDir, file);
+          rmSync(staleFile, { force: true });
+          updated.push(staleFile);
+        }
+      }
+    }
   }
 
   if (selection.injectTargets.includes("agents")) {

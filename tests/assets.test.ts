@@ -11,8 +11,8 @@ describe("bundled asset tree", () => {
     expect(entries).toEqual([
       "README.md",
       "agents",
-      "commands",
       "engine",
+      "skills",
       "templates",
       "workspaces",
     ]);
@@ -22,7 +22,7 @@ describe("bundled asset tree", () => {
     const requiredFiles = [
       "engine/system-prompt.md",
       "templates/workspace.md",
-      "commands/ask.md",
+      "skills/zbrain-ask/SKILL.md",
       "agents/wiki-planner.md",
       "workspaces/README.md",
     ];

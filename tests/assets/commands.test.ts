@@ -1,54 +1,73 @@
 import { describe, expect, test } from "bun:test";
-import { readFileSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import YAML from "js-yaml";
 
-describe("command assets", () => {
-  test("use only the locked command names", () => {
-    const commandFiles = [
-      "ask.md",
-      "learn.md",
-      "reflect.md",
-      "workspace.md",
-      "reindex.md",
-    ];
+const skillsRoot = join(process.cwd(), "assets", "skills");
 
-    for (const file of commandFiles) {
-      const contents = readFileSync(join(process.cwd(), "assets", "commands", file), "utf8");
+const expectedSkills: Record<string, string> = {
+  "zbrain-ask": "zbrain:ask",
+  "zbrain-learn": "zbrain:learn",
+  "zbrain-reflect": "zbrain:reflect",
+  "zbrain-workspace": "zbrain:workspace",
+  "zbrain-reindex": "zbrain:reindex",
+};
 
-      expect(contents.includes("/use-wiki")).toBe(false);
-      expect(contents.includes("/switch-workspace")).toBe(false);
-      expect(contents.includes("/update-wiki")).toBe(false);
+describe("skill assets", () => {
+  test("ships all five zbrain skill directories", () => {
+    const dirs = readdirSync(skillsRoot).sort();
+    expect(dirs).toEqual(Object.keys(expectedSkills).sort());
+  });
+
+  test("each skill directory contains SKILL.md", () => {
+    for (const dir of Object.keys(expectedSkills)) {
+      const skillFile = join(skillsRoot, dir, "SKILL.md");
+      const contents = readFileSync(skillFile, "utf8");
+      expect(contents.trim().length).toBeGreaterThan(0);
     }
   });
 
-  test("document runtime paths and invariants where relevant", () => {
-    const ask = readFileSync(join(process.cwd(), "assets", "commands", "ask.md"), "utf8");
-    const learn = readFileSync(join(process.cwd(), "assets", "commands", "learn.md"), "utf8");
-    const workspace = readFileSync(join(process.cwd(), "assets", "commands", "workspace.md"), "utf8");
-
-    expect(ask.includes("current-task.md")).toBe(true);
-    expect(learn.includes("workspace_at_ingest")).toBe(true);
-    expect(workspace.includes(".claude/zbrain.json")).toBe(true);
-  });
-
-  test("command files expose frontmatter skill names", () => {
-    const expectedNames: Record<string, string> = {
-      "ask.md": "zbrain:ask",
-      "learn.md": "zbrain:learn",
-      "reflect.md": "zbrain:reflect",
-      "workspace.md": "zbrain:workspace",
-      "reindex.md": "zbrain:reindex",
-    };
-
-    for (const [file, expectedName] of Object.entries(expectedNames)) {
-      const contents = readFileSync(join(process.cwd(), "assets", "commands", file), "utf8");
+  test("each SKILL.md exposes the correct zbrain:* name in frontmatter", () => {
+    for (const [dir, expectedName] of Object.entries(expectedSkills)) {
+      const contents = readFileSync(join(skillsRoot, dir, "SKILL.md"), "utf8");
       const match = contents.match(/^---\n([\s\S]*?)\n---/);
       expect(match).not.toBeNull();
 
       const frontmatter = YAML.load(match![1]) as Record<string, unknown>;
       expect(frontmatter.name).toBe(expectedName);
       expect(typeof frontmatter.description).toBe("string");
+      expect((frontmatter.description as string).length).toBeGreaterThan(0);
     }
+  });
+
+  test("skill names do not reference legacy wiki-template commands", () => {
+    for (const dir of Object.keys(expectedSkills)) {
+      const contents = readFileSync(join(skillsRoot, dir, "SKILL.md"), "utf8");
+      expect(contents.includes("/use-wiki")).toBe(false);
+      expect(contents.includes("/switch-workspace")).toBe(false);
+      expect(contents.includes("/update-wiki")).toBe(false);
+    }
+  });
+
+  test("zbrain-ask documents current-task.md output path", () => {
+    const contents = readFileSync(join(skillsRoot, "zbrain-ask", "SKILL.md"), "utf8");
+    expect(contents.includes("current-task.md")).toBe(true);
+  });
+
+  test("zbrain-workspace documents zbrain.json pointer path", () => {
+    const contents = readFileSync(join(skillsRoot, "zbrain-workspace", "SKILL.md"), "utf8");
+    expect(contents.includes(".claude/zbrain.json")).toBe(true);
+  });
+
+  test("zbrain-learn has a references directory with pipeline.md", () => {
+    const pipelineRef = join(skillsRoot, "zbrain-learn", "references", "pipeline.md");
+    const contents = readFileSync(pipelineRef, "utf8");
+    expect(contents.includes("workspace_at_ingest")).toBe(true);
+    expect(contents.includes("verified-facts.md")).toBe(true);
+  });
+
+  test("zbrain-learn SKILL.md references pipeline.md", () => {
+    const contents = readFileSync(join(skillsRoot, "zbrain-learn", "SKILL.md"), "utf8");
+    expect(contents.includes("pipeline.md")).toBe(true);
   });
 });

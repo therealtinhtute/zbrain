@@ -11,7 +11,7 @@ describe("asset extraction", () => {
     const relativePaths = assets.map((asset) => asset.relativePath);
 
     expect(relativePaths).toContain("engine/system-prompt.md");
-    expect(relativePaths).toContain("commands/ask.md");
+    expect(relativePaths).toContain("skills/zbrain-ask/SKILL.md");
   });
 
   test("extracts assets into the runtime tree and preserves workspace content", () => {

@@ -2,6 +2,7 @@ import {
   copyFileSync,
   cpSync,
   existsSync,
+  lstatSync,
   mkdirSync,
   readdirSync,
   readFileSync,
@@ -45,7 +46,11 @@ export function createSymlinkOrCopy(target: string, destination: string): "symli
     symlinkSync(target, destination);
     return "symlink";
   } catch {
-    copyFileSync(target, destination);
+    if (lstatSync(target).isDirectory()) {
+      copyDirectory(target, destination);
+    } else {
+      copyFileSync(target, destination);
+    }
     return "copy";
   }
 }

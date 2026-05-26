@@ -83,7 +83,7 @@ describe("phase 4 command integrations", () => {
       await runSetup({ ui, pathOptions: { cwd: fixture.projectDir, homeDir: fixture.homeDir } });
 
       expect(existsSync(join(fixture.homeDir, ".zbrain", "config.yml"))).toBe(true);
-      expect(existsSync(join(fixture.homeDir, ".zbrain", "commands", "ask.md"))).toBe(true);
+      expect(existsSync(join(fixture.homeDir, ".zbrain", "skills", "zbrain-ask", "SKILL.md"))).toBe(true);
     } finally {
       rmSync(fixture.root, { recursive: true, force: true });
     }
@@ -134,7 +134,7 @@ describe("phase 4 command integrations", () => {
     const fixture = makeFixture();
     const ui = new FakeUi({
       selects: ["programming"],
-      multiselects: [["claude_rules", "commands", "agents", "mcp"]],
+      multiselects: [["claude_rules", "skills", "agents", "mcp"]],
     });
 
     try {
@@ -152,7 +152,7 @@ describe("phase 4 command integrations", () => {
       expect(readFileSync(join(fixture.projectDir, ".claude", "zbrain.json"), "utf8")).toContain("\"workspace\": \"programming\"");
       expect(readFileSync(join(fixture.projectDir, "CLAUDE.md"), "utf8")).toContain("# Existing");
       expect(readFileSync(join(fixture.projectDir, "CLAUDE.md"), "utf8")).toContain("# zbrain Integration");
-      expect(existsSync(join(fixture.projectDir, ".claude", "commands", "ask.md"))).toBe(true);
+      expect(existsSync(join(fixture.projectDir, ".claude", "skills", "zbrain-ask", "SKILL.md"))).toBe(true);
       expect(existsSync(join(fixture.projectDir, ".claude", "agents", "wiki-planner.md"))).toBe(true);
       expect(readFileSync(join(fixture.projectDir, ".claude", "settings.local.json"), "utf8")).toContain("\"qmd\"");
     } finally {
@@ -164,7 +164,7 @@ describe("phase 4 command integrations", () => {
     const fixture = makeFixture();
     const ui = new FakeUi({
       selects: ["programming"],
-      multiselects: [["claude_rules", "commands", "agents", "mcp"]],
+      multiselects: [["claude_rules", "skills", "agents", "mcp"]],
     });
 
     try {
@@ -191,15 +191,15 @@ describe("phase 4 command integrations", () => {
 
       expect(existsSync(join(claudeDir, "zbrain.json"))).toBe(true);
       expect(existsSync(join(claudeDir, "zwiki.json"))).toBe(false);
-      expect(existsSync(join(claudeDir, "commands", "ask.md"))).toBe(true);
+      expect(existsSync(join(claudeDir, "skills", "zbrain-ask", "SKILL.md"))).toBe(true);
       expect(existsSync(join(claudeDir, "commands", "zbrain:ask.md"))).toBe(false);
       expect(existsSync(join(claudeDir, "agents", "legacy-agent.md"))).toBe(false);
       expect(readFileSync(join(fixture.projectDir, "CLAUDE.md"), "utf8")).toContain("# zbrain Integration");
       expect(readFileSync(join(fixture.projectDir, "CLAUDE.md"), "utf8")).not.toContain("# zwiki Integration");
 
-      const askLink = join(claudeDir, "commands", "ask.md");
-      if (lstatSync(askLink).isSymbolicLink()) {
-        expect(readlinkSync(askLink)).toContain(".zbrain/commands/ask.md");
+      const skillDir = join(claudeDir, "skills", "zbrain-ask");
+      if (lstatSync(skillDir).isSymbolicLink()) {
+        expect(readlinkSync(skillDir)).toContain(".zbrain/skills/zbrain-ask");
       }
     } finally {
       rmSync(fixture.root, { recursive: true, force: true });
