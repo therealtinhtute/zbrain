@@ -147,6 +147,11 @@ export function appendClaudeRules(claudeFile: string, rulesContent: string): { u
     "",
   ).trimEnd();
 
+  withoutLegacy = withoutLegacy.replace(
+    /(?:^|\n)# zbrain Integration\n[\s\S]*?(?=\n# [^\n]+\n|\s*$)/g,
+    "",
+  ).trimEnd();
+
   if (withoutLegacy.includes(section)) {
     if (withoutLegacy === existing.trimEnd()) {
       return { updated: false };

@@ -13,6 +13,7 @@ const tierLabels: Record<RetrievalTier, string> = {
 export interface CurrentTaskInput {
   query: string;
   workspace: string;
+  secondaryWorkspaces?: string[];
   results: RankedRetrievalResult[];
 }
 
@@ -29,20 +30,22 @@ function groupByTier(results: RankedRetrievalResult[]): Map<RetrievalTier, Ranke
   return grouped;
 }
 
-export function generateCurrentTaskMarkdown({ query, workspace, results }: CurrentTaskInput): string {
+export function generateCurrentTaskMarkdown({ query, workspace, secondaryWorkspaces, results }: CurrentTaskInput): string {
   const grouped = groupByTier(results);
+  const hasMultiWorkspace = results.some((r) => r.workspace !== undefined);
+
   const lines: string[] = [
     `# Wiki Context - ${query}`,
     "",
     `Generated: ${new Date().toISOString()}`,
     `Workspace: ${workspace}`,
-    "Retrieval: qmd BM25 search",
-    "",
-    "## Search Keywords",
-    query,
-    "",
-    "## Retrieved Docs (by priority)",
   ];
+
+  if (secondaryWorkspaces && secondaryWorkspaces.length > 0) {
+    lines.push(`Secondary Workspaces: ${secondaryWorkspaces.join(", ")}`);
+  }
+
+  lines.push("Retrieval: qmd BM25 search", "", "## Search Keywords", query, "", "## Retrieved Docs (by priority)");
 
   for (const tier of ["P0", "P1", "P2", "P3"] as RetrievalTier[]) {
     const entries = grouped.get(tier) ?? [];
@@ -51,10 +54,19 @@ export function generateCurrentTaskMarkdown({ query, workspace, results }: Curre
     }
 
     lines.push(`### ${tier} - ${tierLabels[tier]}`);
-    lines.push("| Score | File | Preview |");
-    lines.push("| --- | --- | --- |");
-    for (const entry of entries) {
-      lines.push(`| ${entry.score} | ${entry.path} | ${entry.snippet.replace(/\n/g, " ")} |`);
+    if (hasMultiWorkspace) {
+      lines.push("| Score | Workspace | File | Preview |");
+      lines.push("| --- | --- | --- | --- |");
+      for (const entry of entries) {
+        const ws = entry.workspace ?? workspace;
+        lines.push(`| ${entry.score} | ${ws} | ${entry.path} | ${entry.snippet.replace(/\n/g, " ")} |`);
+      }
+    } else {
+      lines.push("| Score | File | Preview |");
+      lines.push("| --- | --- | --- |");
+      for (const entry of entries) {
+        lines.push(`| ${entry.score} | ${entry.path} | ${entry.snippet.replace(/\n/g, " ")} |`);
+      }
     }
     lines.push("");
   }
@@ -62,7 +74,10 @@ export function generateCurrentTaskMarkdown({ query, workspace, results }: Curre
   lines.push("## Full Context");
   lines.push("");
   for (const entry of results) {
-    lines.push(`### ${entry.path} (${entry.tier})`);
+    const sectionLabel = hasMultiWorkspace
+      ? `### [${entry.workspace ?? workspace}] ${entry.path} (${entry.tier})`
+      : `### ${entry.path} (${entry.tier})`;
+    lines.push(sectionLabel);
     lines.push(entry.body?.trim() || entry.snippet.trim() || "_No body returned._");
     lines.push("");
   }

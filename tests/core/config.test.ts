@@ -3,6 +3,7 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { parseGlobalConfig, parseProjectPointer, readGlobalConfig, readProjectPointer } from "../../src/core/config";
+import { projectPointerSchema } from "../../src/schemas/config";
 
 describe("config parsing", () => {
   test("parses empty global config as defaults", () => {
@@ -43,5 +44,53 @@ describe("config parsing", () => {
   test("rejects invalid config values", () => {
     expect(() => parseGlobalConfig("default_workspace: 42")).toThrow();
     expect(() => parseProjectPointer("{\"workspace\": \"\"}")).toThrow();
+  });
+});
+
+describe("secondary_workspaces schema", () => {
+  test("parses pointer with valid secondary_workspaces array", () => {
+    const result = projectPointerSchema.parse({
+      workspace: "ttdvkh",
+      secondary_workspaces: [
+        { workspace: "framework-core", keywords: ["file-storage", "boilerplate"], limit: 3 },
+      ],
+    });
+    expect(result.workspace).toBe("ttdvkh");
+    expect(result.secondary_workspaces).toHaveLength(1);
+    expect(result.secondary_workspaces![0]!.workspace).toBe("framework-core");
+    expect(result.secondary_workspaces![0]!.keywords).toEqual(["file-storage", "boilerplate"]);
+    expect(result.secondary_workspaces![0]!.limit).toBe(3);
+  });
+
+  test("parses pointer without secondary_workspaces (backward compat)", () => {
+    const result = projectPointerSchema.parse({ workspace: "ttdvkh" });
+    expect(result.workspace).toBe("ttdvkh");
+    expect(result.secondary_workspaces).toBeUndefined();
+  });
+
+  test("defaults limit to 3 when omitted", () => {
+    const result = projectPointerSchema.parse({
+      workspace: "ttdvkh",
+      secondary_workspaces: [{ workspace: "research", keywords: ["paper"] }],
+    });
+    expect(result.secondary_workspaces![0]!.limit).toBe(3);
+  });
+
+  test("rejects secondary_workspaces entry with empty workspace name", () => {
+    expect(() =>
+      projectPointerSchema.parse({
+        workspace: "ttdvkh",
+        secondary_workspaces: [{ workspace: "", keywords: ["paper"] }],
+      }),
+    ).toThrow();
+  });
+
+  test("rejects secondary_workspaces entry with empty keywords array", () => {
+    expect(() =>
+      projectPointerSchema.parse({
+        workspace: "ttdvkh",
+        secondary_workspaces: [{ workspace: "research", keywords: [] }],
+      }),
+    ).toThrow();
   });
 });

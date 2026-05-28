@@ -4,6 +4,7 @@ export type RetrievalTier = "P0" | "P1" | "P2" | "P3";
 
 export interface RankedRetrievalResult extends QmdSearchResult {
   tier: RetrievalTier;
+  workspace?: string;
 }
 
 const tierOrder: Record<RetrievalTier, number> = {

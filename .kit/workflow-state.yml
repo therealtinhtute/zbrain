@@ -1,10 +1,10 @@
-current_phase: p7-release-hardening
-entry_phase: p0-planning-alignment
-spec: .kit/planning/SPEC.md
-roadmap: .kit/planning/ROADMAP.md
-active_context: .kit/planning/phases/p7-release-hardening/p7-release-hardening-CONTEXT.md
-active_plan: .kit/planning/phases/p7-release-hardening/p7-release-hardening-PLAN.md
-latest_cook_run: .kit/runs/cook/20260525-0320-p7-release-hardening.md
-latest_check_report: .kit/reports/check/20260528-1200-interactive-cli-and-doc-rewrite.md
+current_phase: mw3-integration-proof
+entry_phase: mw1-schema-parser
+spec: .kit/planning/multi-workspace-context.md
+roadmap: .kit/planning/ROADMAP-multi-workspace.md
+active_context: .kit/planning/phases/mw3-integration-proof/mw3-integration-proof-CONTEXT.md
+active_plan: .kit/planning/phases/mw3-integration-proof/mw3-integration-proof-PLAN.md
+latest_cook_run: none
+latest_check_report: none
 handoff: .kit/HANDOFF.md
-last_updated: 2026-05-28 13:00
+last_updated: 2026-05-28 18:00

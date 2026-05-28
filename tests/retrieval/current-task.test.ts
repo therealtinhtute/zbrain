@@ -34,6 +34,34 @@ describe("current-task generation", () => {
     expect(markdown).toContain("No Mental Models results (P1) for this query.");
   });
 
+  test("single-workspace output has no Workspace column (backward compat)", () => {
+    const markdown = generateCurrentTaskMarkdown({
+      query: "clean arch",
+      workspace: "programming",
+      results: [{ path: "/ws/programming/axioms/solid.md", score: 5, snippet: "solid", tier: "P0" }],
+    });
+    expect(markdown).not.toContain("| Score | Workspace |");
+    expect(markdown).toContain("| Score | File | Preview |");
+    expect(markdown).toContain("### /ws/programming/axioms/solid.md (P0)");
+    expect(markdown).not.toContain("[programming]");
+  });
+
+  test("multi-workspace output shows Workspace column and section labels", () => {
+    const markdown = generateCurrentTaskMarkdown({
+      query: "file-storage @research",
+      workspace: "ttdvkh",
+      secondaryWorkspaces: ["framework-core"],
+      results: [
+        { path: "/ws/ttdvkh/axioms/arch.md", score: 8, snippet: "arch", tier: "P0" },
+        { path: "/ws/framework-core/projects/starter.md", score: 5, snippet: "starter", tier: "P2", workspace: "framework-core" },
+      ],
+    });
+    expect(markdown).toContain("Secondary Workspaces: framework-core");
+    expect(markdown).toContain("| Score | Workspace | File | Preview |");
+    expect(markdown).toContain("### [ttdvkh] /ws/ttdvkh/axioms/arch.md (P0)");
+    expect(markdown).toContain("### [framework-core] /ws/framework-core/projects/starter.md (P2)");
+  });
+
   test("writes current-task.md into the project .claude/context directory", () => {
     const root = mkdtempSync(join(tmpdir(), "zbrain-current-task-"));
 
