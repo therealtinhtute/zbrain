@@ -1,6 +1,0 @@
-{
-  "_comment": "Copy file này vào ~/.claude/wiki-global.json và điền đường dẫn thực tế. 'default_workspace' (optional) là fallback nếu .claude/wiki.json của project không khai báo 'workspace'.",
-  "wiki_root": "d:/tool/wiki-template",
-  "default_workspace": null,
-  "default_domain": null
-}

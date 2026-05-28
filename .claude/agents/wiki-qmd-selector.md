@@ -1,1 +1,1 @@
-/home/tinhpt/.zwiki/agents/wiki-qmd-selector.md
+/home/tinhpt/.zbrain/agents/wiki-qmd-selector.md

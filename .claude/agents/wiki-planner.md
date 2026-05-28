@@ -1,1 +1,1 @@
-/home/tinhpt/.zwiki/agents/wiki-planner.md
+/home/tinhpt/.zbrain/agents/wiki-planner.md
