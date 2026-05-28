@@ -7,4 +7,4 @@ active_plan: .kit/planning/phases/p7-release-hardening/p7-release-hardening-PLAN
 latest_cook_run: .kit/runs/cook/20260525-0320-p7-release-hardening.md
 latest_check_report: .kit/reports/check/20260528-1200-interactive-cli-and-doc-rewrite.md
 handoff: .kit/HANDOFF.md
-last_updated: 2026-05-28 12:00
+last_updated: 2026-05-28 13:00

@@ -1,81 +1,71 @@
 # HANDOFF
 
-**Branch:** `master` (synced with `origin/master`)  
-**Continuity mode:** harness (post-phase)  
-**Active phase:** post-p7 (all roadmap phases complete)  
-**Latest cook run:** `.kit/runs/cook/20260525-0320-p7-release-hardening.md`  
-**Latest check verdict:** APPROVE with requests (`.kit/reports/check/20260526-1650-commands-to-skills.md`)  
-**Session date:** 2026-05-26
+**Branch:** `master` (synced with `origin/master` — clean, nothing uncommitted)
+**Continuity mode:** harness (post-phase)
+**Active phase:** post-p7 (all roadmap phases complete)
+**Latest cook run:** `.kit/runs/cook/20260525-0320-p7-release-hardening.md`
+**Latest check verdict:** APPROVE (`.kit/reports/check/20260528-1200-interactive-cli-and-doc-rewrite.md`)
+**Session date:** 2026-05-28
 
 ---
 
 ## Completed This Session
 
-1. **Migrated `assets/commands/` → `assets/skills/`** — converted 5 flat command files into skill-creator-compliant skill directories with SKILL.md, role, security, numbered workflows, invariants.
-2. **Created `zbrain-learn/references/pipeline.md`** — 4-stage evidence pipeline detail (ingest/analyze/qa/apply) moved out of SKILL.md to stay under 150-line budget.
-3. **Updated `src/core/fs.ts`** — `createSymlinkOrCopy` now handles directory targets via `lstatSync` + `copyDirectory` fallback (Windows safety).
-4. **Updated `src/commands/helpers.ts`** — renamed inject target `commands` → `skills`; syncs `runtimeDir/skills/` → `.claude/skills/`; auto-removes stale `commands/zbrain/` directory and colon-named legacy files.
-5. **Updated `src/commands/init.ts`** — UI option renamed "Slash commands" → "Agent skills", hint shows `.claude/skills`.
-6. **Regenerated `src/generated/bundled-assets.ts`** — 6 skill files bundled, 0 command files.
-7. **Updated 4 test files** — `tests/assets.test.ts`, `tests/core/assets.test.ts`, `tests/assets/commands.test.ts` (rewritten as skills test), `tests/commands.integration.test.ts`.
-8. **Ran `/check full`** — gate passed (52/52 tests, types clean, build clean); applied 2 safe_auto fixes (restored `.claude/zbrain.json` + agents, fixed `init.ts:37` `initialValues`).
+1. **Rewrote `wiki-spec.md`** — full rewrite from stale wiki-template analysis into living zbrain product spec (CLI layer, engine/skills/workspace architecture, BM25 retrieval pipeline, evidence pipeline, MVP-1 scope).
+2. **Rewrote `AGENTS.md`** — now describes actual Bun/TypeScript project layout, bun commands, asset authoring rules. All wiki-template/ references removed.
+3. **Added interactive guided menu** (`src/commands/interactive.ts`) — state-aware menu on `zbrain` (no args + TTY): shows only relevant options based on whether runtime and workspaces exist; preset workspace names; custom name via `ui.text()`.
+4. **Added `text()` to `CommandUi`** (`src/commands/ui.ts`) — new prompt method + clackUi implementation + FakeUi support in both integration test files.
+5. **Fixed Ctrl+C crash** (`src/index.ts`) — top-level try/catch catches `"Command cancelled"` → `process.exit(0)`; before this fix, cancelling any prompt printed an unhandled exception stack trace.
+6. **Routed banner through `ui.intro()`** (`src/commands/interactive.ts`) — moved `console.log(BANNER)` to `ui.intro(BANNER)` to keep all output through the CommandUi abstraction; eliminates 4× banner noise in test output.
+7. **Removed `wiki-template/`** — deleted all 46 legacy files (~8000 lines); migration to `assets/` was complete.
+8. **57/57 tests pass** — 5 new tests: 4 interactive menu paths + 1 Ctrl+C regression guard.
+9. **All 3 commits pushed** to `origin/master`.
 
 ---
 
 ## In Progress
 
-**None** — migration complete, gate passed, all tests green.
+**None** — working tree clean, all changes committed and pushed.
 
 ---
 
 ## Blockers
 
-**None** — check verdict is APPROVE with requests, not REQUEST CHANGES.
+**None.**
 
 ---
 
-## Open Requests (Doc Debt)
+## Open Doc Debt
 
-**README.md** has 5 stale references to `assets/commands/`, `.claude/commands/`, and "slash commands" terminology:
-- Line 42: `files are stored as flat markdown under assets/commands/*.md`
-- Line 74: `commands/`
-- Line 81: `optional symlinked commands/ and agents/`
-- Line 133: `slash commands are shipped as assets for project integration`
-
-These should be updated to reflect `assets/skills/`, `.claude/skills/`, and "agent skills" terminology.
+- **`assets/README.md:5`** — still says "wiki-template/ is migration input material only" — stale post-deletion. Low priority (bundled into binary, not user-visible). One-line fix.
+- **No wizard chaining** after first-run setup — user picks "Setup runtime," it completes, menu exits with no prompt to create a workspace next. UX improvement; explicitly out of scope for current session.
+- **Dead code `assetGroupPaths`** in `helpers.ts:265` — pre-existing unused function returning `{ commands: ... }`. Safe to delete but not introduced by this session.
 
 ---
 
 ## Next Steps
 
-1. **→ START HERE:** Update README.md lines 42, 74, 81, 133 — replace `commands/` references with `skills/`, "slash commands" with "agent skills".
-2. Commit the migration: `git add -A && git commit -m "feat(skills): migrate commands to skill-creator format"`.
-3. Optional: remove dead code `assetGroupPaths` in `helpers.ts:265` (pre-existing, not introduced by this diff).
-4. Optional: run acceptance test against rebuilt binary to verify skills load correctly in `.claude/skills/zbrain-*/`.
+1. **→ START HERE:** Run `zbrain setup && zbrain workspace create programming && zbrain init` via the interactive menu against real `~/.zbrain/` to verify first-run UX end-to-end. Acceptance walkthrough is at `docs/acceptance-walkthrough.md`.
+2. Fix `assets/README.md:5` — remove or update the stale wiki-template reference (1 line).
+3. UX: add wizard chaining — after "Setup runtime" completes, prompt "Create a workspace now?" → if yes, go directly to `promptWorkspaceName`. This is the biggest remaining first-run UX gap.
+4. Delete dead code `assetGroupPaths` in `helpers.ts:265`.
 
 ---
 
 ## Key Decisions This Session
 
-- **Skills install project-local** (`.claude/skills/`) not global — workspace isolation requires this; skills are only active in projects where `zbrain init` has run.
-- **Directory symlinks** — `syncAssetGroup` creates directory symlinks for skill dirs (e.g., `.claude/skills/zbrain-ask/` → `~/.zbrain/skills/zbrain-ask/`), not copied directories. Consistent with how agents were already installed.
-- **Colon-file cleanup added** — the old `commands/zbrain:ask.md` artifact would have persisted; added a loop in `helpers.ts` to remove any file in `.claude/commands/` starting with `zbrain:` or `zwiki:`.
-- **`zbrain-learn` gets `references/pipeline.md`** — only skill with a reference file; others fit in 150 lines.
+- **Interactive mode = no-args TTY only** — `zbrain setup`, `zbrain init`, etc. still work exactly as before; interactive mode only activates when no args and `process.stdin.isTTY`. Non-TTY (CI, scripts) falls through to Commander normally.
+- **Cancellation caught at top level only** — `clackUi` throws `"Command cancelled"` on Ctrl+C; the catch is in `index.ts` entry point only. `runInteractive` propagates the error — the regression test confirms this contract.
+- **Banner via `ui.intro()`** — routes through CommandUi abstraction so FakeUi silently swallows it in tests; no test noise, no behavioral difference in real TTY.
+- **`text()` added to CommandUi interface** — required method (not optional) so TypeScript enforces all FakeUi implementations stay complete.
 
 ---
 
 ## Environment
 
 - Working directory: `/home/tinhpt/Lab/zbrain`
-- Runtime home: `~/.zbrain/` (legacy `~/.zwiki/` still exists with 7 workspaces)
+- Runtime home: `~/.zbrain/`
 - Active workspace for this project: `programming` (`.claude/zbrain.json`)
-- Tests: 52/52 pass
-- Build: 39 modules, 56ms
-- Uncommitted changes: 13 modified/deleted tracked files + 6 new skill files + 1 implementation notes file
-
----
-
-## Notes
-
-- The two bugs found by `/check` (`.claude/zbrain.json` deletion, `init.ts:37` stale `initialValues`) were both introduced during this session's implementation and fixed via safe_auto before writing this handoff.
-- Implementation notes with full decision log: `.kit/plans/20260526-commands-to-skills/implementation-notes.md`
+- Tests: 57/57 pass (`bun test --run`)
+- Build: 40 modules, ~30ms (`bun run build.ts`)
+- Binary: `dist/zbrain` — interactive mode works; `--help` works; Ctrl+C exits cleanly
