@@ -20,6 +20,7 @@ export interface CommandUi {
     stop(message: string): void;
   };
   confirm(options: { message: string; initialValue?: boolean }): Promise<boolean>;
+  text(options: { message: string; placeholder?: string; validate?: (v: string | undefined) => string | undefined }): Promise<string>;
   select(options: {
     message: string;
     options: SelectOption[];
@@ -47,6 +48,13 @@ export const clackUi: CommandUi = {
   },
   spinner() {
     return clack.spinner();
+  },
+  async text({ message, placeholder, validate }) {
+    const result = await clack.text({ message, placeholder, validate });
+    if (clack.isCancel(result)) {
+      throw new Error("Command cancelled");
+    }
+    return result;
   },
   async confirm({ message, initialValue }) {
     const result = await clack.confirm({ message, initialValue });

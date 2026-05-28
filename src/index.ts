@@ -5,6 +5,7 @@ import { runInit } from "./commands/init";
 import { runSetup } from "./commands/setup";
 import { runUpdate } from "./commands/update";
 import { registerWorkspaceCommands } from "./commands/workspace";
+import { runInteractive } from "./commands/interactive";
 
 export function createProgram(): Command {
   const program = new Command();
@@ -35,5 +36,17 @@ export function createProgram(): Command {
 }
 
 if (import.meta.main) {
-  await createProgram().parseAsync(Bun.argv);
+  const userArgs = Bun.argv.slice(2);
+  try {
+    if (userArgs.length === 0 && process.stdin.isTTY) {
+      await runInteractive();
+    } else {
+      await createProgram().parseAsync(Bun.argv);
+    }
+  } catch (err) {
+    if (err instanceof Error && err.message === "Command cancelled") {
+      process.exit(0);
+    }
+    throw err;
+  }
 }

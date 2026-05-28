@@ -6,6 +6,7 @@ import { runInit } from "../src/commands/init";
 import { runSetup } from "../src/commands/setup";
 import { runUpdate } from "../src/commands/update";
 import { runWorkspaceCreate } from "../src/commands/workspace";
+import { runInteractive } from "../src/commands/interactive";
 import type { CommandUi } from "../src/commands/ui";
 
 class FakeUi implements CommandUi {
@@ -14,11 +15,13 @@ class FakeUi implements CommandUi {
   confirms: boolean[];
   selects: string[];
   multiselects: string[][];
+  texts: string[];
 
-  constructor(options: { confirms?: boolean[]; selects?: string[]; multiselects?: string[][] } = {}) {
+  constructor(options: { confirms?: boolean[]; selects?: string[]; multiselects?: string[][]; texts?: string[] } = {}) {
     this.confirms = options.confirms ?? [];
     this.selects = options.selects ?? [];
     this.multiselects = options.multiselects ?? [];
+    this.texts = options.texts ?? [];
   }
 
   intro(message: string): void {
@@ -50,6 +53,14 @@ class FakeUi implements CommandUi {
 
   async confirm(): Promise<boolean> {
     return this.confirms.shift() ?? true;
+  }
+
+  async text(): Promise<string> {
+    const value = this.texts.shift();
+    if (value === undefined) {
+      throw new Error("No fake text value available");
+    }
+    return value;
   }
 
   async select(): Promise<string> {
@@ -201,6 +212,92 @@ describe("phase 4 command integrations", () => {
       if (lstatSync(skillDir).isSymbolicLink()) {
         expect(readlinkSync(skillDir)).toContain(".zbrain/skills/zbrain-ask");
       }
+    } finally {
+      rmSync(fixture.root, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("interactive mode", () => {
+  test("shows setup option and runs setup when runtime does not exist", async () => {
+    const fixture = makeFixture();
+    // selects[0] = menu action "setup"
+    const ui = new FakeUi({ selects: ["setup"] });
+
+    try {
+      await runInteractive({ ui, pathOptions: { cwd: fixture.projectDir, homeDir: fixture.homeDir } });
+
+      expect(existsSync(join(fixture.homeDir, ".zbrain", "config.yml"))).toBe(true);
+    } finally {
+      rmSync(fixture.root, { recursive: true, force: true });
+    }
+  });
+
+  test("shows workspace_create option after setup and scaffolds preset workspace", async () => {
+    const fixture = makeFixture();
+    const setupUi = new FakeUi();
+    // selects[0] = menu action "workspace_create", selects[1] = preset name "finance"
+    const ui = new FakeUi({ selects: ["workspace_create", "finance"], confirms: [true] });
+
+    try {
+      await runSetup({ ui: setupUi, pathOptions: { cwd: fixture.projectDir, homeDir: fixture.homeDir } });
+      await runInteractive({ ui, pathOptions: { cwd: fixture.projectDir, homeDir: fixture.homeDir } });
+
+      expect(existsSync(join(fixture.homeDir, ".zbrain", "workspaces", "finance", "workspace.md"))).toBe(true);
+    } finally {
+      rmSync(fixture.root, { recursive: true, force: true });
+    }
+  });
+
+  test("workspace_create with custom name prompts for text input", async () => {
+    const fixture = makeFixture();
+    const setupUi = new FakeUi();
+    // selects[0] = "workspace_create", selects[1] = "__custom__", texts[0] = custom name
+    const ui = new FakeUi({ selects: ["workspace_create", "__custom__"], texts: ["my-notes"], confirms: [true] });
+
+    try {
+      await runSetup({ ui: setupUi, pathOptions: { cwd: fixture.projectDir, homeDir: fixture.homeDir } });
+      await runInteractive({ ui, pathOptions: { cwd: fixture.projectDir, homeDir: fixture.homeDir } });
+
+      expect(existsSync(join(fixture.homeDir, ".zbrain", "workspaces", "my-notes", "workspace.md"))).toBe(true);
+    } finally {
+      rmSync(fixture.root, { recursive: true, force: true });
+    }
+  });
+
+  test("shows init option once a workspace exists", async () => {
+    const fixture = makeFixture();
+    // selects[0] = "init", selects[1] = workspace for init, multiselects[0] = inject targets
+    const ui = new FakeUi({
+      selects: ["init", "programming"],
+      multiselects: [["claude_rules"]],
+    });
+
+    try {
+      await runSetup({ ui: new FakeUi(), pathOptions: { cwd: fixture.projectDir, homeDir: fixture.homeDir } });
+      await runWorkspaceCreate("programming", {
+        ui: new FakeUi({ confirms: [true] }),
+        pathOptions: { cwd: fixture.projectDir, homeDir: fixture.homeDir },
+        nowIso: "2026-05-28T00:00:00.000Z",
+      });
+      await runInteractive({ ui, pathOptions: { cwd: fixture.projectDir, homeDir: fixture.homeDir } });
+
+      expect(existsSync(join(fixture.projectDir, ".claude", "zbrain.json"))).toBe(true);
+    } finally {
+      rmSync(fixture.root, { recursive: true, force: true });
+    }
+  });
+
+  test("propagates Command cancelled so the top-level handler in index.ts can exit cleanly", async () => {
+    const fixture = makeFixture();
+    // Simulate Ctrl+C at the top-level menu: select throws "Command cancelled"
+    const cancelUi = new FakeUi();
+    cancelUi.select = async () => { throw new Error("Command cancelled"); };
+
+    try {
+      await expect(
+        runInteractive({ ui: cancelUi, pathOptions: { cwd: fixture.projectDir, homeDir: fixture.homeDir } })
+      ).rejects.toThrow("Command cancelled");
     } finally {
       rmSync(fixture.root, { recursive: true, force: true });
     }

@@ -26,6 +26,9 @@ class FakeUi implements CommandUi {
   async confirm(): Promise<boolean> {
     return this.confirms.shift() ?? true;
   }
+  async text(): Promise<string> {
+    throw new Error("text() not expected in acceptance tests");
+  }
   async select(): Promise<string> {
     const value = this.selects.shift();
     if (!value) throw new Error("Missing fake select value");
