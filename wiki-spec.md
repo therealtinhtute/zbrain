@@ -61,8 +61,10 @@ zbrain = ENGINE (shared runtime) + N WORKSPACES (isolated personal domains)
 | Skill | Invocation | Role |
 |-------|-----------|------|
 | `zbrain:ask` | `/zbrain:ask "question"` | 3-stage retrieval → `current-task.md` |
-| `zbrain:learn` | `/zbrain:learn` | 4-stage evidence pipeline driver |
-| `zbrain:reflect` | `/zbrain:reflect` | Post-task reflection → evidence pipeline handoff |
+| `zbrain:ingest` | `/zbrain:ingest [--from-project {path}]` | Full evidence pipeline driver for existing material |
+| `zbrain:learn` | `/zbrain:learn "topic"` | Web search + fetch → filter primary sources → create evidence items via `zbrain:ingest` |
+| `zbrain:reflect` | `/zbrain:reflect` | Post-task reflection → routes to `zbrain:ingest` |
+| `zbrain:state` | `/zbrain:state` | Pipeline state navigator: all items + next action |
 | `zbrain:workspace` | `/zbrain:workspace [name]` | Inspect or switch active workspace pointer |
 | `zbrain:reindex` | `/zbrain:reindex` | Rebuild qmd BM25 index for active workspace |
 
@@ -139,9 +141,9 @@ Triggered before answering any question about the active workspace. Three stages
 
 ---
 
-## 6. Evidence Pipeline (`zbrain:learn`)
+## 6. Evidence Pipeline (`zbrain:ingest`)
 
-When new material arrives (article, book, code snapshot, notes), use the evidence pipeline instead of editing workspace knowledge directly.
+When new material arrives (article, book, code snapshot, notes, project directory), use the evidence pipeline instead of editing workspace knowledge directly.
 
 ### State Machine
 
@@ -155,12 +157,14 @@ Only `qa_done → qa_in_progress` is a valid backward transition.
 
 ### Stages
 
-| Stage | Command arg | What it does |
-|-------|-------------|-------------|
-| Ingest | (no arg) | Store raw content as `sources/{id}/raw.md` + `source.yaml`; append to `_index.md` |
-| Analyze | `--analyze {id}` | Four structured passes (domain map, entity extract, pattern candidates, fact candidates) → `analysis/{id}/analysis.md` |
-| QA | `--qa {id}` | Prioritized question batch (P0–P3) → user resolves → `qa/{id}/verified-facts.md` |
-| Apply | `--apply {id}` | Write verified facts to knowledge-tier files; trigger `zbrain:reindex`; write `applied/{id}/manifest.yaml` |
+| Stage | Command | What it does |
+|-------|---------|-------------|
+| Ingest | `zbrain:ingest` | Store raw content as `sources/{id}/raw.md` + `source.yaml`; append to `_index.md` |
+| Ingest (batch) | `zbrain:ingest --from-project {path}` | Walk project directory; create one evidence item per key file |
+| Analyze | `zbrain:ingest --analyze {id}` | Four structured passes (domain map, entity extract, pattern candidates, fact candidates) → `analysis/{id}/analysis.md` |
+| QA | `zbrain:ingest --qa {id}` | Prioritized question batch (P0–P3) → user resolves → `qa/{id}/verified-facts.md` |
+| Apply | `zbrain:ingest --apply {id}` | Write verified facts to knowledge-tier files; trigger `zbrain:reindex`; write `applied/{id}/manifest.yaml` |
+| Check state | `zbrain:state` | Show all items and their current pipeline state with next-action guidance |
 
 ### Key Invariants
 
@@ -189,12 +193,12 @@ Used after completing a task, debugging session, or reading to extract what was 
 1. Summarize what was just executed or read (1–3 sentences)
 2. Identify new facts, pattern variations, or corrections vs. existing workspace knowledge
 3. Classify outcome:
-   - New knowledge  → draft ingest prompt → offer zbrain:learn
+   - New knowledge  → draft ingest prompt → offer zbrain:ingest
    - Confirmation   → note confirmed; no action
    - Contradiction  → flag conflict with citations from old + new source; never auto-update
 ```
 
-**Invariant:** never apply updates directly — all new facts must go through `zbrain:learn`.
+**Invariant:** never apply updates directly — all new facts must go through `zbrain:ingest`.
 
 ---
 
@@ -214,8 +218,10 @@ Used after completing a task, debugging session, or reading to extract what was 
 | Skill | Description |
 |-------|-------------|
 | `zbrain:ask` | Retrieve ranked workspace context before answering a question |
-| `zbrain:learn` | Drive a learning item through the 4-stage evidence pipeline |
-| `zbrain:reflect` | Extract learnings from a completed session; route into evidence pipeline |
+| `zbrain:ingest` | Drive existing material (file, URL, project) through the 4-stage evidence pipeline |
+| `zbrain:learn` | Web search + fetch primary sources as Markdown → create one evidence item per source via `zbrain:ingest` |
+| `zbrain:reflect` | Extract learnings from a completed session; routes to `zbrain:ingest` |
+| `zbrain:state` | Show all evidence items, current pipeline state, and next-action command per item |
 | `zbrain:workspace` | Inspect or switch the active workspace pointer for the current project |
 | `zbrain:reindex` | Rebuild the qmd BM25 index for the active workspace |
 

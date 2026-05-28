@@ -20,7 +20,7 @@ Act as a reflection facilitator. Extract learning from what just happened and ro
 1. Summarize what was just executed, read, or investigated (1–3 sentences).
 2. Identify new facts, pattern variations, or corrections relative to existing workspace knowledge.
 3. Classify the outcome:
-   - **New knowledge** → create a brief evidence item and offer to run `zbrain:learn`.
+   - **New knowledge** → create a brief evidence item and offer to run `zbrain:ingest`.
    - **Confirmation** → note what was confirmed; no action needed.
    - **Contradiction** → flag the conflict with citations from both old and new sources; do not auto-update.
 4. Output one of:
