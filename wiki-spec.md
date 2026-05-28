@@ -1,87 +1,104 @@
-# wiki-template — Project Spec for Brainstorm
+# zbrain — Product Spec
 
-> Purpose of this file: capture full analysis of `wiki-template/` so the next session can brainstorm building a personal LLM-wiki based on the same model.
+> Living reference for the zbrain product. Updated to reflect the current implementation.
 
 ---
 
 ## 1. What Is This Project
 
-A **knowledge management system** for engineers who work across multiple companies/projects. It serves as **runtime context** for AI coding agents (Claude Code), not just human documentation. The agents read it before writing any code — as a constraint source, not a reference.
+`zbrain` is a **local-first CLI for building a personal LLM wiki** that AI agents can use safely. It stores knowledge in workspace-isolated directories, retrieves it via BM25 search before answering questions, and ingests new material through a structured evidence pipeline.
 
-**Core claim:** Throwing a full wiki into a prompt causes hallucination or selective ignoring. This system filters, ranks, and structures knowledge *before* an agent sees it.
+**Core claim:** Dumping a full wiki into a prompt causes hallucination or selective ignoring. zbrain filters, ranks, and scopes knowledge *before* an agent sees it — using BM25 retrieval and knowledge-tier re-ranking, not full-context injection.
+
+**Distribution:** Bun-compiled binary (`zbrain`) + bundled Claude Code skills extracted to `~/.zbrain/` on `zbrain setup`.
 
 ---
 
 ## 2. Mental Model
 
 ```
-wiki-template = ENGINE (shared) + N WORKSPACES (isolated sandboxes)
+zbrain = ENGINE (shared runtime) + N WORKSPACES (isolated personal domains)
 
-wiki-template/
-├── agents/          ← ENGINE: system prompt, coding rules, constraints, pipeline
-├── templates/       ← ENGINE: skeletons for new workspaces and new doc types
-├── .claude/commands/ ← ENGINE: slash commands
+~/.zbrain/
+├── engine/          ← prompts, constraints, retrieval rules
+├── templates/       ← scaffolds for workspaces and doc types
+├── commands/        ← bundled skills
+├── agents/          ← agent definitions
 └── workspaces/
-    ├── example-surgery/   ← Workspace A (Company/Project A)
-    └── c08/               ← Workspace B (Company/Project B)
+    ├── programming/     ← Workspace: software engineering knowledge
+    ├── finance/         ← Workspace: personal finance
+    ├── health/          ← Workspace: health and fitness
+    └── philosophy/      ← Workspace: philosophical frameworks
 ```
 
-**Key invariant:** Knowledge from Workspace A is NEVER used when working in Workspace B. Active workspace is **per-codebase** (declared in `<codebase>/.claude/wiki.json`), not global.
+**Key invariant:** Knowledge from workspace A is NEVER used when working in workspace B. Active workspace is **per-project** (declared in `<cwd>/.claude/zbrain.json`), not global.
 
 ---
 
 ## 3. Architecture
 
-### 3.1 Engine Layer
+### 3.1 CLI Layer
+
+| Command | What it does |
+|---------|-------------|
+| `zbrain setup` | Extract bundled assets → `~/.zbrain/`, install config |
+| `zbrain init` | Create `<cwd>/.claude/zbrain.json` for the current project |
+| `zbrain workspace create <name>` | Scaffold a new workspace from template |
+| `zbrain update` | Sync runtime assets from a new binary version |
+
+### 3.2 Engine Layer
 
 | Component | Location | Role |
 |-----------|----------|------|
-| System prompt | `agents/system-prompt.md` | Agent role + workspace scope rules |
-| Coding rules | `agents/coding-rules.md` | Universal code constraints (Java, Kafka, MQTT) |
-| Constraints | `agents/constraints.md` | Hard don'ts — never bypass retry, never hardcode topic names, etc. |
-| Pipeline | `agents/pipeline/` | 5-stage retrieval pipeline (see §5) |
-| Slash commands | `.claude/commands/` | `/use-wiki`, `/update-wiki`, `/evidence-ingest`, etc. |
-| Templates | `templates/` | Skeleton for workspace, service, ADR, runbook, pattern docs |
+| System prompt | `assets/engine/system-prompt.md` | Agent role + workspace scope rules |
+| Constraints | `assets/engine/constraints.md` | Hard rules: no cross-workspace, no unsourced answers |
+| Retrieval rules | `assets/engine/retrieval-rules.md` | BM25 + tier re-ranking logic |
+| Evidence rules | `assets/engine/evidence-rules.md` | Evidence pipeline state machine + invariants |
+| Claude rules | `assets/engine/claude-rules.md` | Non-destructive CLAUDE.md injection rules |
 
-### 3.2 Workspace Layer
+### 3.3 Skills Layer
 
-Each workspace = one company or project context.
+| Skill | Invocation | Role |
+|-------|-----------|------|
+| `zbrain:ask` | `/zbrain:ask "question"` | 3-stage retrieval → `current-task.md` |
+| `zbrain:learn` | `/zbrain:learn` | 4-stage evidence pipeline driver |
+| `zbrain:reflect` | `/zbrain:reflect` | Post-task reflection → evidence pipeline handoff |
+| `zbrain:workspace` | `/zbrain:workspace [name]` | Inspect or switch active workspace pointer |
+| `zbrain:reindex` | `/zbrain:reindex` | Rebuild qmd BM25 index for active workspace |
 
-```
-workspaces/{name}/
-├── workspace.md           ← identity: company, role, stack, period
-├── patterns-index.md      ← quick lookup table (pattern name → file)
-├── platform/
-│   ├── contracts/         ← HIGHEST PRIORITY — API schemas, topic formats, MUST-FOLLOW
-│   ├── patterns/          ← canonical implementations to reuse
-│   ├── architecture/      ← system topology, service map
-│   └── infrastructure/    ← deployment config
-├── domains/{domain}/
-│   └── workflow.md        ← business state machines, allowed transitions
-├── projects/{project}/
-│   ├── knowledge-map.md   ← entry point for each project
-│   ├── services/          ← per-service docs, local config overrides
-│   └── decisions/         ← project-level ADRs
-├── runbooks/              ← incident handling procedures
-├── decisions/             ← workspace-level ADRs
-├── evidence/              ← raw data pipeline (source → wiki change)
-│   ├── _index.md          ← state tracker for all evidence items
-│   ├── sources/{id}/      ← immutable raw data (raw.md + source.yaml)
-│   ├── analysis/{id}/     ← 4 CORE analysis files (tech-stack, service-map, patterns, contracts)
-│   ├── qa/{id}/           ← Q&A batches + verified-facts.md
-│   └── applied/{id}/      ← manifest + checkpoint of applied changes
-└── agents/                ← OPTIONAL: workspace overrides engine defaults
-    ├── constraints.md
-    └── pipeline/validator-rules.md
-```
-
-### 3.3 Active Workspace Resolution
+### 3.4 Workspace Structure
 
 ```
-Priority 1: <cwd>/.claude/wiki.json → field "workspace"
-Priority 2: ~/.claude/wiki-global.json → field "default_workspace"
-Priority 3: if only 1 workspace exists → use it
-Priority 4: STOP, ask user to /switch-workspace
+~/.zbrain/workspaces/{name}/
+├── workspace.md           ← identity: domain, purpose, operating rules
+├── axioms/                ← P0: core facts that other knowledge must not contradict
+├── mental-models/         ← P1: reusable frameworks and thinking patterns
+├── projects/              ← P2: book notes, course notes, experiments
+├── decisions/             ← P3: logged personal decisions with reasoning
+└── evidence/
+    ├── _index.md          ← state tracker for all evidence items
+    ├── sources/{id}/      ← immutable raw data (raw.md + source.yaml)
+    ├── analysis/{id}/     ← structured analysis output (analysis.md)
+    ├── qa/{id}/           ← Q&A batches + verified-facts.md
+    └── applied/{id}/      ← manifest + checkpoint of applied changes
+```
+
+### 3.5 Active Workspace Resolution
+
+```
+Priority 1: <cwd>/.claude/zbrain.json → field "workspace"
+Priority 2: ~/.zbrain/config.yml       → field "default_workspace"
+Priority 3: STOP — report missing pointer, do not auto-select
+```
+
+### 3.6 Project Integration Files
+
+```
+<cwd>/
+└── .claude/
+    ├── zbrain.json         ← {"workspace": "programming"}
+    ├── settings.json       ← Claude Code settings (zbrain rules injected non-destructively)
+    └── commands/           ← optional symlinks to ~/.zbrain/commands/
 ```
 
 ---
@@ -89,192 +106,190 @@ Priority 4: STOP, ask user to /switch-workspace
 ## 4. Knowledge Priority Order
 
 ```
-Contracts > Platform Patterns > Project Docs > Domain Knowledge
+axioms/ > mental-models/ > projects/ > decisions/
 ```
 
-Applied strictly within the active workspace scope. When two sources conflict, higher-priority wins. When knowledge is missing, agent says so — never guesses, never borrows from another workspace.
+Applied strictly within the active workspace. When two sources conflict, higher-priority wins. When knowledge is missing, the agent stops and reports the gap — never guesses, never borrows from another workspace.
 
 ---
 
-## 5. The 5-Stage Coding Pipeline (`/use-wiki`)
+## 5. Retrieval Pipeline (`zbrain:ask`)
 
-Triggered before writing any code. Each stage has a narrow job + fixed output schema.
+Triggered before answering any question about the active workspace. Three stages.
 
 ```
-[Stage 0] Main agent         → resolve workspace + wiki_root from <cwd>/.claude/wiki.json
+[Stage 1] Keyword parse
+    Parse the question into 3–7 workspace-scoped BM25 keywords
     ↓
-[Stage 1] wiki-planner       → parse task → intent JSON
+[Stage 2] BM25 search
+    Call qmd search against the active workspace collection only
     ↓
-[Stage 2] wiki-context-selector → map intent → file paths → slice sections → write current-task.md
-    ↓
-[Stage 2.5] wiki-plan-reviewer  → 4 checks: patterns exist? context complete? conflicts? gaps? → APPROVED or BLOCK
-    ↓
-[Stage 3] Main agent (Builder)  → read current-task.md → code using prompt-template
-    ↓
-[Stage 4] wiki-reviewer (opt)   → compare code vs contracts/patterns → APPROVED or Violations
+[Stage 3] Tier re-rank + write
+    Re-rank results by tier before score:
+      P0 axioms/ → P1 mental-models/ → P2 projects/ → P3 decisions/
+    Fetch full bodies for top-ranked documents
+    Write ranked context + citation paths → current-task.md
 ```
 
-**Intent JSON schema (Stage 1 output):**
-```json
-{
-  "workspace": "example-surgery",
-  "type": "implement_feature | fix_bug | design | incident | review",
-  "domain": "surgery",
-  "components": ["kafka", "mqtt", "batch", "http", "db"],
-  "scope": "surgery-service",
-  "patterns_needed": ["kafka-event-processing"],
-  "contracts_touched": ["mqtt-topic-contract"],
-  "missing_knowledge": []
-}
-```
+**`current-task.md`** = single source of truth for the current retrieval session. Contains: ranked context docs, citation paths (`workspace/tier/file`), and knowledge gap report if results are insufficient.
 
-**`current-task.md`** = single source of truth for the session. Contains: ranked context docs, knowledge gaps, plan review warnings.
+**On empty or insufficient results:** record the knowledge gap and stop. Never answer from memory.
 
-**Builder output format (Stage 3):**
-```
-## Understanding
-## Knowledge Mapping   ← link to sections in current-task.md
-## Design
-## Implementation
-## Edge Cases
-## Assumptions
-```
+**qmd prerequisite:** `npm i -g @tobilu/qmd` — installed separately, not bundled in the binary.
 
 ---
 
-## 6. Evidence Pipeline (wiki update from external sources)
+## 6. Evidence Pipeline (`zbrain:learn`)
 
-When wiki needs to be updated from an external source (Confluence page, API response, incident report, codebase snapshot), use the evidence pipeline instead of editing wiki directly.
+When new material arrives (article, book, code snapshot, notes), use the evidence pipeline instead of editing workspace knowledge directly.
 
 ### State Machine
 
 ```
 ingested → analyzed → qa_in_progress → qa_done → applied → archived
-                              ↕
-                    qa_awaiting_external
+                            ↕
+                  qa_awaiting_external
 ```
+
+Only `qa_done → qa_in_progress` is a valid backward transition.
 
 ### Stages
 
-| Command | What it does |
-|---------|-------------|
-| `/evidence-ingest` | Fetch raw from MCP/API/paste/code → store in `sources/{id}/raw.*` + `source.yaml` |
-| `/evidence-analyze` | Run 4 CORE prompts: tech-stack, service-map, pattern-proposals, contract-proposals |
-| `/evidence-qa` | Batch Q&A to resolve unknowns → build `verified-facts.md` |
-| `/evidence-apply` | Apply verified facts → update wiki files, write `applied/{id}/manifest.yaml` |
+| Stage | Command arg | What it does |
+|-------|-------------|-------------|
+| Ingest | (no arg) | Store raw content as `sources/{id}/raw.md` + `source.yaml`; append to `_index.md` |
+| Analyze | `--analyze {id}` | Four structured passes (domain map, entity extract, pattern candidates, fact candidates) → `analysis/{id}/analysis.md` |
+| QA | `--qa {id}` | Prioritized question batch (P0–P3) → user resolves → `qa/{id}/verified-facts.md` |
+| Apply | `--apply {id}` | Write verified facts to knowledge-tier files; trigger `zbrain:reindex`; write `applied/{id}/manifest.yaml` |
 
 ### Key Invariants
 
-- **I-1 Immutable sources**: `raw.*` and `source.yaml` cannot be modified after ingest
-- **I-2 Workspace lock**: `source.yaml#workspace_at_ingest` must match current active workspace at every stage
-- **I-3 State monotonicity**: no backward transitions except `qa_done → qa_in_progress`
-- **I-5 Citation requirement**: every entry in `verified-facts.md` must cite a question ID + wiki file path
+- **I-1 Immutable sources:** `raw.md` and `source.yaml` cannot be modified after ingest.
+- **I-2 Workspace lock:** `source.yaml#workspace_at_ingest` must match current active workspace at every stage.
+- **I-3 State monotonicity:** no backward transitions except `qa_done → qa_in_progress`.
+- **I-4 QA gate:** apply blocks if any P0 or P1 question is `awaiting_external` or `deferred`.
+- **I-5 Citation requirement:** every entry in `verified-facts.md` must cite a `question_id` and a target wiki file path.
 
-### Code Snapshot (`--source code`)
+### QA Gate Rules
 
-When source is a codebase, `raw.md` is a structured snapshot with 10 sections: project metadata, dependencies, configs (secrets redacted), REST endpoints, message consumers, services, DB schema, public APIs, git summary, notes. Each entry has file citations `(path:L{start}-L{end})`.
+| Priority | `awaiting_external` | `deferred` |
+|----------|---------------------|------------|
+| P0 | Block apply | Block apply |
+| P1 | Block apply | Block apply |
+| P2 | Warn, allow | Allow |
+| P3 | Allow | Allow |
 
 ---
 
-## 7. Slash Commands Reference
+## 7. Reflection Flow (`zbrain:reflect`)
+
+Used after completing a task, debugging session, or reading to extract what was learned and route it into the evidence pipeline.
+
+```
+1. Summarize what was just executed or read (1–3 sentences)
+2. Identify new facts, pattern variations, or corrections vs. existing workspace knowledge
+3. Classify outcome:
+   - New knowledge  → draft ingest prompt → offer zbrain:learn
+   - Confirmation   → note confirmed; no action
+   - Contradiction  → flag conflict with citations from old + new source; never auto-update
+```
+
+**Invariant:** never apply updates directly — all new facts must go through `zbrain:learn`.
+
+---
+
+## 8. CLI Commands Reference
 
 | Command | What it does |
 |---------|-------------|
-| `/wiki-setup` | Create `<cwd>/.claude/wiki.json` for a codebase |
-| `/switch-workspace {name}` | Change active workspace for current codebase |
-| `/list-workspaces` | Show all workspaces + which one is active |
-| `/new-workspace {name}` | Scaffold new workspace from template |
-| `/use-wiki "task"` | Run 5-stage pipeline before coding |
-| `/update-wiki` | Sync wiki after code changes |
-| `/rebase-wiki` | Verify wiki vs codebase, flag stale docs |
-| `/code-analyze` | Snapshot codebase → evidence pipeline (ingest + analyze) |
-| `/evidence-ingest` | Step 1 of evidence pipeline |
-| `/evidence-analyze` | Step 2 |
-| `/evidence-qa` | Step 3 |
-| `/evidence-apply` | Step 4 |
+| `zbrain setup` | First-run: extract bundled assets into `~/.zbrain/`, write `config.yml` |
+| `zbrain init` | Create `.claude/zbrain.json` in the current project; inject `CLAUDE.md` rules non-destructively |
+| `zbrain workspace create <name>` | Scaffold a new workspace directory from template |
+| `zbrain update` | Re-extract assets from the current binary version into `~/.zbrain/` |
 
 ---
 
-## 8. Design Philosophy
+## 9. Skills Reference
 
-1. **Write for machines, not just humans** — every doc must be parseable by agent, not just readable by human
-2. **Workspace isolation is sacred** — one context bleed = hallucination risk
-3. **Don't invent architecture** — agent follows knowledge base, doesn't create new patterns
-4. **Narrow retrieval > full dump** — pipeline filters before agent sees; more context ≠ better
-5. **Evidence trail** — every wiki fact must be traceable to a source
-6. **Gate early** — Plan-Reviewer (Stage 2.5) catches issues before Builder spends tokens
-7. **Fixed schemas** — each stage has a fixed output format → auditable, resumable on failure
-8. **Workspace overrides engine** — workspace-specific rules take priority over engine defaults when conflicting
+| Skill | Description |
+|-------|-------------|
+| `zbrain:ask` | Retrieve ranked workspace context before answering a question |
+| `zbrain:learn` | Drive a learning item through the 4-stage evidence pipeline |
+| `zbrain:reflect` | Extract learnings from a completed session; route into evidence pipeline |
+| `zbrain:workspace` | Inspect or switch the active workspace pointer for the current project |
+| `zbrain:reindex` | Rebuild the qmd BM25 index for the active workspace |
 
 ---
 
-## 9. Goals
+## 10. Design Philosophy
+
+1. **Workspace isolation is sacred** — one context bleed = hallucination risk; no cross-workspace reads
+2. **Narrow retrieval > full dump** — BM25 + tier re-ranking filters before agent sees; more context ≠ better
+3. **Evidence trail** — every wiki fact must be traceable to a source; never answer from memory
+4. **Stop on gaps** — agent stops and reports missing knowledge instead of guessing
+5. **Immutable raw sources** — ingested material is immutable; analysis builds on top, never replaces
+6. **Local-first** — no external sync, no server, no network required for retrieval
+7. **BM25 only (MVP-1)** — vector search and hybrid retrieval explicitly out of scope
+
+---
+
+## 11. Goals
 
 | Goal | Mechanism |
 |------|-----------|
-| AI follows organizational constraints, not hallucinations | Contracts are highest priority, agent cannot bypass |
-| One engineer works across N companies without knowledge bleed | Workspace isolation + per-codebase active pointer |
-| Knowledge stays in sync with code | `/update-wiki` after code changes; `/rebase-wiki` for drift check |
+| Agent follows personal knowledge, not hallucinations | axioms/ is highest priority; agent cannot bypass |
+| One person works across N domains without knowledge bleed | Workspace isolation + per-project active pointer |
+| Knowledge stays in sync with learning | `zbrain:reflect` after sessions; `zbrain:reindex` after apply |
 | Every wiki fact has a source | Evidence pipeline with immutable raw + citation requirement |
-| Context window efficiency | Narrow retrieval pipeline, not full wiki dump |
-| Resume sessions mid-task | `current-task.md` persists full context for session |
+| Context window efficiency | 3-stage retrieval pipeline, not full wiki dump |
+| Resume sessions mid-task | `current-task.md` persists ranked context for the session |
 
 ---
 
-## 10. Metrics / Quality Signals
+## 12. MVP-1 Scope
 
-| Signal | What it measures |
-|--------|-----------------|
-| Plan-Reviewer BLOCK rate | Gaps/conflicts caught before code generation |
-| Violations Found rate (Stage 4) | Contract/pattern violations in generated code |
-| `missing_knowledge` frequency in intent JSON | Coverage gaps in wiki relative to actual tasks |
-| Evidence pipeline completion rate | % of external knowledge ingested vs left in ad-hoc notes |
-| `/rebase-wiki` staleness count | Drift between wiki and actual codebase |
+**In scope:**
+- 4 default workspaces: `programming`, `finance`, `health`, `philosophy`
+- 4-stage evidence pipeline: ingest → analyze → qa → apply
+- 3-stage retrieval: keyword parse → qmd BM25 → tier re-rank
+- Bun binary distribution with bundled asset extraction
+- Project integration via `zbrain init`
 
----
-
-## 11. What to Build for Personal LLM-Wiki (Next Brainstorm)
-
-The template is designed for **multi-company engineering work with AI agents**. For a personal knowledge wiki the same model applies but with different domain types.
-
-### Potential Adaptations
-
-| wiki-template concept | Personal LLM-wiki equivalent |
-|----------------------|------------------------------|
-| Workspace = company/project | Workspace = domain/topic area (e.g. finance, health, programming) |
-| `platform/contracts/` | Core facts / axioms that other knowledge must not contradict |
-| `platform/patterns/` | Reusable frameworks / mental models |
-| `domains/{domain}/workflow.md` | Decision trees / processes for a domain |
-| `projects/{project}/` | Specific books, courses, experiments |
-| Evidence pipeline | Learning pipeline: raw notes → analysis → Q&A → knowledge entries |
-| Agent coding rules | Agent writing/reasoning rules |
-| `/use-wiki "task"` | `/use-wiki "question"` to retrieve relevant personal knowledge before answering |
-
-### Key Questions for Brainstorm
-
-1. What are the "workspace" boundaries in personal knowledge? (by topic? by life area? by project?)
-2. What replaces "contracts" — what is highest-priority personal knowledge that cannot be overridden?
-3. How does the evidence pipeline map to personal learning flow (raw → notes → verified → published)?
-4. What is the personal equivalent of "don't invent architecture" — don't fabricate facts, cite sources?
-5. Should the 5-stage pipeline be simplified for personal use or kept full?
-6. What does "/update-wiki" mean for personal knowledge — after reading a book? after an experience?
+**Out of scope:**
+- Web UI
+- Vector search or hybrid retrieval
+- External sync integrations (Confluence, Notion, etc.)
+- Cross-workspace retrieval
+- npm package distribution
+- qmd bundled into the binary
 
 ---
 
-## 12. File Map (Key Files to Re-read)
+## 13. File Map (Key Files)
 
 ```
-wiki-template/
-├── README.md                                   ← project overview + workflow
-├── CLAUDE.md                                   ← AI agent instructions (complete)
-├── agents/system-prompt.md                     ← agent role + workspace scope rules
-├── agents/pipeline/multi-agent-pipeline.md     ← 5-stage pipeline design
-├── agents/pipeline/intent-parser.md            ← intent JSON schema
-├── agents/pipeline/context-retrieval-map.md    ← intent → file path mapping
-├── agents/pipeline/evidence-state-rules.md     ← evidence state machine + invariants
-├── workspaces/README.md                        ← workspace model + override rules
-├── templates/workspace.md                      ← workspace scaffold
-├── .claude/commands/use-wiki.md                ← execution flow (spec-of-record)
-├── .claude/commands/evidence-ingest.md         ← evidence pipeline step 1
-└── workspaces/example-surgery/                 ← full working example
+zbrain/
+├── README.md                              ← quick-start and command surface
+├── CLAUDE.md                              ← zbrain runtime pointer rules
+├── wiki-spec.md                           ← this file — full product spec
+├── src/
+│   ├── index.ts                           ← CLI entry point
+│   ├── commands/                          ← setup, init, workspace, update, update
+│   ├── core/                              ← evidence pipeline, retrieval, qmd adapter, assets
+│   └── schemas/config.ts                  ← globalConfigSchema, projectPointerSchema
+├── assets/
+│   ├── engine/                            ← system-prompt, constraints, retrieval-rules, evidence-rules
+│   ├── skills/
+│   │   ├── zbrain-ask/SKILL.md            ← 3-stage retrieval spec
+│   │   ├── zbrain-learn/SKILL.md          ← evidence pipeline driver spec
+│   │   ├── zbrain-learn/references/pipeline.md ← per-stage flows + QA gate rules
+│   │   ├── zbrain-reflect/SKILL.md        ← reflection flow spec
+│   │   ├── zbrain-workspace/SKILL.md      ← workspace pointer manager spec
+│   │   └── zbrain-reindex/SKILL.md        ← BM25 reindex spec
+│   ├── templates/                         ← workspace.md, axiom.md, mental-model.md, project.md, evidence-*
+│   └── workspaces/                        ← seed workspace.md for 4 default domains
+├── docs/
+│   ├── acceptance-walkthrough.md          ← end-to-end proof of full path
+│   └── release.md                         ← release guidance
+└── .kit/planning/                         ← locked SPEC.md, roadmap, phase plans
 ```

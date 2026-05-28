@@ -108,7 +108,6 @@ Acceptance proof for the full path is in [docs/acceptance-walkthrough.md](/home/
 The product implementation for MVP-1 lives in the repository root.
 
 - `.kit/planning/` contains the locked spec, roadmap, and per-phase execution plans
-- `wiki-template/` is legacy source material to adapt into root `assets/`
 - root `src/`, `assets/`, and Bun project files are the target implementation surfaces
 
 ## Prerequisites

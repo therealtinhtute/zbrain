@@ -5,6 +5,6 @@ roadmap: .kit/planning/ROADMAP.md
 active_context: .kit/planning/phases/p7-release-hardening/p7-release-hardening-CONTEXT.md
 active_plan: .kit/planning/phases/p7-release-hardening/p7-release-hardening-PLAN.md
 latest_cook_run: .kit/runs/cook/20260525-0320-p7-release-hardening.md
-latest_check_report: .kit/reports/check/20260526-1650-commands-to-skills.md
-handoff: none
-last_updated: 2026-05-26 16:50
+latest_check_report: .kit/reports/check/20260528-1200-interactive-cli-and-doc-rewrite.md
+handoff: .kit/HANDOFF.md
+last_updated: 2026-05-28 12:00
