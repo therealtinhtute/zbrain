@@ -236,14 +236,14 @@ describe("interactive mode", () => {
   test("shows workspace_create option after setup and scaffolds preset workspace", async () => {
     const fixture = makeFixture();
     const setupUi = new FakeUi();
-    // selects[0] = menu action "workspace_create", selects[1] = preset name "finance"
-    const ui = new FakeUi({ selects: ["workspace_create", "finance"], confirms: [true] });
+    // selects[0] = menu action "workspace_create", selects[1] = preset name "research"
+    const ui = new FakeUi({ selects: ["workspace_create", "research"], confirms: [true] });
 
     try {
       await runSetup({ ui: setupUi, pathOptions: { cwd: fixture.projectDir, homeDir: fixture.homeDir } });
       await runInteractive({ ui, pathOptions: { cwd: fixture.projectDir, homeDir: fixture.homeDir } });
 
-      expect(existsSync(join(fixture.homeDir, ".zbrain", "workspaces", "finance", "workspace.md"))).toBe(true);
+      expect(existsSync(join(fixture.homeDir, ".zbrain", "workspaces", "research", "workspace.md"))).toBe(true);
     } finally {
       rmSync(fixture.root, { recursive: true, force: true });
     }

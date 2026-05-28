@@ -13,11 +13,7 @@ describe("engine and starter workspace assets", () => {
     expect(evidence.includes("Workspace lock")).toBe(true);
   });
 
-  test("starter workspaces exist for the four MVP domains", () => {
-    const workspaces = ["programming", "finance", "health", "philosophy"];
-
-    for (const workspace of workspaces) {
-      expect(existsSync(join(process.cwd(), "assets", "workspaces", workspace, "workspace.md"))).toBe(true);
-    }
+  test("starter workspace exists for research domain", () => {
+    expect(existsSync(join(process.cwd(), "assets", "workspaces", "research", "workspace.md"))).toBe(true);
   });
 });

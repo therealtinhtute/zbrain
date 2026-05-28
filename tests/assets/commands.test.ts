@@ -7,14 +7,16 @@ const skillsRoot = join(process.cwd(), "assets", "skills");
 
 const expectedSkills: Record<string, string> = {
   "zbrain-ask": "zbrain:ask",
+  "zbrain-ingest": "zbrain:ingest",
   "zbrain-learn": "zbrain:learn",
   "zbrain-reflect": "zbrain:reflect",
-  "zbrain-workspace": "zbrain:workspace",
   "zbrain-reindex": "zbrain:reindex",
+  "zbrain-state": "zbrain:state",
+  "zbrain-workspace": "zbrain:workspace",
 };
 
 describe("skill assets", () => {
-  test("ships all five zbrain skill directories", () => {
+  test("ships all seven zbrain skill directories", () => {
     const dirs = readdirSync(skillsRoot).sort();
     expect(dirs).toEqual(Object.keys(expectedSkills).sort());
   });
@@ -59,15 +61,27 @@ describe("skill assets", () => {
     expect(contents.includes(".claude/zbrain.json")).toBe(true);
   });
 
-  test("zbrain-learn has a references directory with pipeline.md", () => {
-    const pipelineRef = join(skillsRoot, "zbrain-learn", "references", "pipeline.md");
+  test("zbrain-ingest has a references directory with pipeline.md", () => {
+    const pipelineRef = join(skillsRoot, "zbrain-ingest", "references", "pipeline.md");
     const contents = readFileSync(pipelineRef, "utf8");
     expect(contents.includes("workspace_at_ingest")).toBe(true);
     expect(contents.includes("verified-facts.md")).toBe(true);
   });
 
-  test("zbrain-learn SKILL.md references pipeline.md", () => {
-    const contents = readFileSync(join(skillsRoot, "zbrain-learn", "SKILL.md"), "utf8");
+  test("zbrain-ingest SKILL.md references pipeline.md", () => {
+    const contents = readFileSync(join(skillsRoot, "zbrain-ingest", "SKILL.md"), "utf8");
     expect(contents.includes("pipeline.md")).toBe(true);
+  });
+
+  test("zbrain-learn has a references directory with fetch.md", () => {
+    const fetchRef = join(skillsRoot, "zbrain-learn", "references", "fetch.md");
+    const contents = readFileSync(fetchRef, "utf8");
+    expect(contents.includes("defuddle.md")).toBe(true);
+    expect(contents.includes("r.jina.ai")).toBe(true);
+  });
+
+  test("zbrain-learn SKILL.md references fetch.md", () => {
+    const contents = readFileSync(join(skillsRoot, "zbrain-learn", "SKILL.md"), "utf8");
+    expect(contents.includes("fetch.md")).toBe(true);
   });
 });
