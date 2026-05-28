@@ -12,7 +12,7 @@ const BANNER = `
 ░█▄▄▒█▄█░█▀▄░█▀█░█░█▒▀█▒░
 `;
 
-const PRESET_WORKSPACES = ["programming", "finance", "health", "philosophy"];
+const PRESET_WORKSPACES = ["research"];
 
 export interface InteractiveOptions {
   ui?: CommandUi;
