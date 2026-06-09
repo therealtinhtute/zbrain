@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { ensureDir, writeTextFile } from "./fs";
 import { join } from "node:path";
 import { type RuntimePaths } from "./runtime-paths";
@@ -102,12 +103,16 @@ export function generateCurrentTaskMarkdown({ query, workspace, secondaryWorkspa
 }
 
 export function currentTaskFilePath(paths: RuntimePaths): string {
-  return join(paths.cwd, ".claude", "context", "current-task.md");
+  return join(paths.projectsDir, projectRuntimeKey(paths.cwd), "current-task.md");
 }
 
 export function writeCurrentTask(paths: RuntimePaths, markdown: string): string {
   const filePath = currentTaskFilePath(paths);
-  ensureDir(join(paths.cwd, ".claude", "context"));
+  ensureDir(join(paths.projectsDir, projectRuntimeKey(paths.cwd)));
   writeTextFile(filePath, markdown, { overwrite: true });
   return filePath;
+}
+
+export function projectRuntimeKey(projectRoot: string): string {
+  return createHash("sha256").update(projectRoot).digest("hex").slice(0, 16);
 }

@@ -1,9 +1,9 @@
 import { existsSync, readdirSync } from "node:fs";
 import { join } from "node:path";
-import { readGlobalConfig, readProjectPointer } from "./config";
+import { readGlobalConfig, readProjectBinding, readProjectPointer } from "./config";
 import { type RuntimePaths } from "./runtime-paths";
 
-export type WorkspaceResolutionSource = "project_pointer" | "global_config" | "single_workspace_auto";
+export type WorkspaceResolutionSource = "project_registry" | "legacy_project_pointer" | "global_config" | "single_workspace_auto";
 
 export interface ResolvedWorkspace {
   name: string;
@@ -41,10 +41,16 @@ function assertWorkspaceExists(workspacesDir: string, workspaceName: string, sou
 }
 
 export function resolveActiveWorkspace(paths: RuntimePaths): ResolvedWorkspace {
-  const projectPointer = readProjectPointer(paths.projectPointerFile);
+  const projectBinding = readProjectBinding(paths.projectRegistryFile, paths.cwd);
+
+  if (projectBinding) {
+    return assertWorkspaceExists(paths.workspacesDir, projectBinding.workspace, "project_registry");
+  }
+
+  const projectPointer = readProjectPointer(paths.legacyProjectPointerFile);
 
   if (projectPointer) {
-    return assertWorkspaceExists(paths.workspacesDir, projectPointer.workspace, "project_pointer");
+    return assertWorkspaceExists(paths.workspacesDir, projectPointer.workspace, "legacy_project_pointer");
   }
 
   const globalConfig = readGlobalConfig(paths.configFile);
@@ -60,6 +66,6 @@ export function resolveActiveWorkspace(paths: RuntimePaths): ResolvedWorkspace {
   }
 
   throw new WorkspaceResolutionError(
-    "Unable to resolve an active workspace. Run `zbrain init` or set `default_workspace` in ~/.zbrain/config.yml.",
+    "Unable to resolve an active workspace. Run `zbrain init` to register this project or set `default_workspace` in ~/.zbrain/config.yml.",
   );
 }

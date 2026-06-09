@@ -62,7 +62,7 @@ describe("current-task generation", () => {
     expect(markdown).toContain("### [framework-core] /ws/framework-core/projects/starter.md (P2)");
   });
 
-  test("writes current-task.md into the project .claude/context directory", () => {
+  test("writes current-task.md into the central runtime project state directory", () => {
     const root = mkdtempSync(join(tmpdir(), "zbrain-current-task-"));
 
     try {
@@ -70,6 +70,7 @@ describe("current-task generation", () => {
       const filePath = writeCurrentTask(paths, "# Wiki Context");
 
       expect(filePath).toBe(currentTaskFilePath(paths));
+      expect(filePath.startsWith(join(root, "runtime", "projects"))).toBe(true);
       expect(readFileSync(filePath, "utf8")).toBe("# Wiki Context");
     } finally {
       rmSync(root, { recursive: true, force: true });

@@ -2,20 +2,17 @@
 
 ## Pipeline
 
-1. ingest
-2. analyze
-3. qa
-4. apply
+1. learn
+2. ingest
+3. ask
 
 ## Skill Routing
 
-| Source type | Entry skill |
-|-------------|------------|
-| Existing file, URL, or pasted text | `zbrain:ingest` |
-| Existing project directory | `zbrain:ingest --from-project {path}` |
-| New topic to research | `zbrain:learn "topic"` → routes to `zbrain:ingest` |
-| Post-task reflection | `zbrain:reflect` → routes to `zbrain:ingest` |
-| Check pipeline progress | `zbrain:state` |
+| Need | Entry skill |
+|------|------------|
+| Record raw source material | `zbrain:learn` |
+| Analyze, QA, apply, or list evidence | `zbrain:ingest` |
+| Retrieve context before answering | `zbrain:ask` |
 
 ## Required Guards
 

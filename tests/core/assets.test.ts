@@ -27,7 +27,7 @@ describe("asset extraction", () => {
       );
 
       expect(result.copied.length).toBeGreaterThan(0);
-      expect(result.skipped).toContain("workspaces/README.md");
+      expect(result.copied).toContain("engine/system-prompt.md");
       expect(existsSync(join(runtimeDir, "engine", "system-prompt.md"))).toBe(true);
       expect(readFileSync(join(workspacesDir, "README.md"), "utf8")).toBe("user workspace content\n");
     } finally {

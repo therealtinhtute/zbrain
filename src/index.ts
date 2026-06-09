@@ -6,6 +6,9 @@ import { runSetup } from "./commands/setup";
 import { runUpdate } from "./commands/update";
 import { registerWorkspaceCommands } from "./commands/workspace";
 import { runInteractive } from "./commands/interactive";
+import { registerLearnCommand } from "./commands/learn";
+import { registerIngestCommands } from "./commands/ingest";
+import { registerAskCommand } from "./commands/ask";
 
 export function createProgram(): Command {
   const program = new Command();
@@ -26,6 +29,9 @@ export function createProgram(): Command {
     .action(runInit);
 
   registerWorkspaceCommands(program);
+  registerLearnCommand(program);
+  registerIngestCommands(program);
+  registerAskCommand(program);
 
   program
     .command("update")

@@ -14,7 +14,6 @@ describe("bundled asset tree", () => {
       "engine",
       "skills",
       "templates",
-      "workspaces",
     ]);
   });
 
@@ -24,7 +23,6 @@ describe("bundled asset tree", () => {
       "templates/workspace.md",
       "skills/zbrain-ask/SKILL.md",
       "agents/wiki-planner.md",
-      "workspaces/README.md",
     ];
 
     for (const file of requiredFiles) {

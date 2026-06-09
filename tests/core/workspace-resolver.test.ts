@@ -8,8 +8,8 @@ import { resolveRuntimePaths } from "../../src/core/runtime-paths";
 function createRuntimeFixture() {
   const rootDir = join(tmpdir(), `zbrain-resolver-${Date.now()}-${Math.random()}`);
   mkdirSync(rootDir, { recursive: true });
-  mkdirSync(join(rootDir, "project", ".claude"), { recursive: true });
   mkdirSync(join(rootDir, "runtime", "workspaces"), { recursive: true });
+  mkdirSync(join(rootDir, "project"), { recursive: true });
 
   return {
     rootDir,
@@ -19,7 +19,7 @@ function createRuntimeFixture() {
 }
 
 describe("resolveActiveWorkspace", () => {
-  test("prefers the project pointer over global config", () => {
+  test("prefers the project registry over global config", () => {
     const fixture = createRuntimeFixture();
 
     try {
@@ -27,8 +27,16 @@ describe("resolveActiveWorkspace", () => {
       mkdirSync(join(fixture.runtimeDir, "workspaces", "finance"));
       writeFileSync(join(fixture.runtimeDir, "config.yml"), "default_workspace: programming\n");
       writeFileSync(
-        join(fixture.projectDir, ".claude", "zbrain.json"),
-        JSON.stringify({ workspace: "finance" }),
+        join(fixture.runtimeDir, "projects.json"),
+        JSON.stringify({
+          projects: [
+            {
+              project_root: fixture.projectDir,
+              workspace: "finance",
+              context_file: join(fixture.runtimeDir, "projects", "abc", "current-task.md"),
+            },
+          ],
+        }),
       );
 
       const resolved = resolveActiveWorkspace(
@@ -36,7 +44,26 @@ describe("resolveActiveWorkspace", () => {
       );
 
       expect(resolved.name).toBe("finance");
-      expect(resolved.source).toBe("project_pointer");
+      expect(resolved.source).toBe("project_registry");
+    } finally {
+      rmSync(fixture.rootDir, { recursive: true, force: true });
+    }
+  });
+
+  test("falls back to the legacy project pointer when registry is missing", () => {
+    const fixture = createRuntimeFixture();
+
+    try {
+      mkdirSync(join(fixture.projectDir, ".claude"), { recursive: true });
+      mkdirSync(join(fixture.runtimeDir, "workspaces", "finance"));
+      writeFileSync(join(fixture.projectDir, ".claude", "zbrain.json"), JSON.stringify({ workspace: "finance" }));
+
+      const resolved = resolveActiveWorkspace(
+        resolveRuntimePaths({ cwd: fixture.projectDir, runtimeDir: fixture.runtimeDir }),
+      );
+
+      expect(resolved.name).toBe("finance");
+      expect(resolved.source).toBe("legacy_project_pointer");
     } finally {
       rmSync(fixture.rootDir, { recursive: true, force: true });
     }

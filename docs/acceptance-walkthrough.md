@@ -6,8 +6,8 @@ This MVP walkthrough demonstrates:
 
 1. `zbrain setup`
 2. `zbrain init`
-3. learn flow via evidence ingest -> analyze -> qa -> apply
-4. ask flow via retrieval and `current-task.md`
+3. learn flow via `zbrain learn` -> `zbrain ingest analyze/qa/apply`
+4. ask flow via retrieval and the project `context_file`
 
 ## Validation Sources
 

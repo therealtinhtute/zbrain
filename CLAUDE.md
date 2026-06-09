@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Use the active workspace only. Cite the retrieved evidence. Do not infer facts from another workspace.
 
-Project-local pointer: `<cwd>/.claude/zbrain.json`
+Project registry: `~/.zbrain/projects.json`
 Runtime root: `~/.zbrain/`
 
 ---
@@ -32,6 +32,9 @@ The binary is a single Bun-compiled executable. Run it directly during developme
 bun run src/index.ts setup
 bun run src/index.ts init
 bun run src/index.ts workspace create research
+bun run src/index.ts learn --workspace research --label note
+bun run src/index.ts ingest list
+bun run src/index.ts ask "question"
 ```
 
 ## Architecture
@@ -43,7 +46,7 @@ dist/zbrain (binary)          ← bun build --compile
   ↓ zbrain setup extracts
 ~/.zbrain/ (runtime)          ← engine, skills, agents, templates, workspaces
   ↓ zbrain init injects
-<project>/.claude/ (project)  ← zbrain.json pointer, symlinked skills/agents
+<project>/.claude/ (project)  ← optional Claude-specific skills/agents/settings
 ```
 
 **CLI layer** (`src/commands/`) handles interactive setup and project integration. All CLI commands use `@clack/prompts` for UX (intro/outro, spinners, select, notes) — no raw `console.log`.
@@ -55,12 +58,12 @@ dist/zbrain (binary)          ← bun build --compile
 ### Workspace and Project Pointer
 
 Active workspace resolution order (highest priority first):
-1. `<cwd>/.claude/zbrain.json` → `workspace` field
+1. `~/.zbrain/projects.json` entry matching the current project root → `workspace`
 2. `~/.zbrain/config.yml` → `default_workspace`
 3. Auto-detect if exactly one workspace exists
 4. Error
 
-`zbrain.json` also accepts an optional `secondary_workspaces` array for cross-workspace context loading — see `src/schemas/config.ts` for the full Zod schema.
+Project registry entries also accept an optional `secondary_workspaces` array for cross-workspace context loading — see `src/schemas/config.ts` for the full Zod schema.
 
 ### Retrieval Pipeline
 
@@ -69,7 +72,7 @@ Active workspace resolution order (highest priority first):
 - `retrieveWorkspaceContext()` — single workspace; used by skills directly.
 - `retrieveMultiWorkspaceContext()` — primary workspace + optional secondary workspaces resolved from `zbrain.json`. Secondaries are triggered by keyword config or `@workspace` tags in the query. Primary results fill slots first; secondaries share remainder.
 
-Both functions write a ranked context to `.claude/context/current-task.md`. The Claude Code skill then reads that file to answer the user's question.
+Both functions write a ranked context to the registered project's `context_file` under `~/.zbrain/projects/`. Runtime adapters then read that file to answer the user's question.
 
 Retrieval ranking is tier-first: `axioms/` (P0) > `mental-models/` (P1) > `projects/` (P2) > `decisions/` (P3), then by BM25 score within tier.
 
@@ -78,7 +81,7 @@ Retrieval ranking is tier-first: `axioms/` (P0) > `mental-models/` (P1) > `proje
 State machine: `ingested → analyzed → qa_in_progress → qa_done → applied → archived`
 
 Invariants enforced in code:
-- `sources/{id}/raw.md` and `source.yaml` are immutable after ingest (SHA-256 checked on every access).
+- `zbrain learn` creates `sources/{id}/raw.md` and `source.yaml`; they are immutable afterward (SHA-256 checked on every access).
 - `source.yaml#workspace_at_ingest` must match the active workspace at every state transition.
 - Apply stage (`qa_done → applied`) blocks if any P0/P1 question is `awaiting_external`.
 
@@ -94,7 +97,7 @@ Evidence files live in `~/.zbrain/workspaces/{workspace}/evidence/`. The `eviden
 ### Key Schema Types
 
 Defined in `src/schemas/config.ts` with Zod:
-- `ProjectPointer` — `.claude/zbrain.json` shape (`workspace`, optional `secondary_workspaces`)
+- `ProjectBinding` — central project registration shape (`project_root`, `workspace`, `context_file`, optional `secondary_workspaces`, `runtimes`)
 - `SecondaryWorkspaceEntry` — one secondary workspace entry (`workspace`, `keywords`, optional `limit`)
 - `GlobalConfig` — `~/.zbrain/config.yml` shape
 

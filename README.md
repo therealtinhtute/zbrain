@@ -7,10 +7,10 @@
 The current MVP is a local-first CLI product with:
 
 - Workspace-isolated knowledge bases for `programming`, `finance`, `health`, and `philosophy`
-- A 4-stage evidence pipeline: `ingest -> analyze -> qa -> apply`
-- A 3-stage retrieval pipeline for `zbrain:ask` using qmd BM25 search only
+- A 3-verb knowledge workflow: `learn -> ingest -> ask`
+- A retrieval pipeline for `zbrain ask` / `zbrain:ask` using qmd BM25 search only
 - Bundled runtime assets extracted into `~/.zbrain/`
-- Project integration through `zbrain init` and `<cwd>/.claude/zbrain.json`
+- Project registration through `zbrain init` and `~/.zbrain/projects.json`
 
 Out of scope for MVP-1:
 
@@ -27,15 +27,16 @@ Public CLI commands:
 - `zbrain setup`
 - `zbrain init`
 - `zbrain workspace create <name>`
+- `zbrain learn`
+- `zbrain ingest list|analyze|qa|apply`
+- `zbrain ask <question>`
 - `zbrain update`
 
-Bundled Claude Code slash commands:
+Bundled runtime skills:
 
-- `zbrain:ask`
 - `zbrain:learn`
-- `zbrain:reflect`
-- `zbrain:workspace`
-- `zbrain:reindex`
+- `zbrain:ingest`
+- `zbrain:ask`
 
 Command asset format:
 
@@ -69,17 +70,17 @@ ZBRAIN_HOME=/tmp/zbrain-smoke ./dist/zbrain setup
 After `zbrain setup`, the runtime lives in `~/.zbrain/`:
 
 - `config.yml`
+- `projects.json`
 - `engine/`
 - `templates/`
-- `commands/`
+- `skills/`
 - `agents/`
 - `workspaces/`
 
-Project-local integration lives in the current repo under `.claude/`:
+Project-local integration is runtime-specific while project config stays in `~/.zbrain/`:
 
-- `.claude/zbrain.json`
-- optional symlinked `commands/` and `agents/`
-- non-destructive `CLAUDE.md` rules injection
+- Claude: optional `.claude/skills`, `.claude/agents`, `.claude/settings.local.json`, `CLAUDE.md`
+- Codex: optional `AGENTS.md` rules injection
 
 ## CLI Usage
 
@@ -98,8 +99,9 @@ zbrain init
 
 The learning and retrieval cores are implemented in the runtime:
 
-- learn flow: ingest -> analyze -> qa -> apply
-- ask flow: workspace-scoped qmd retrieval -> `current-task.md`
+- learn: record raw source material into workspace evidence sources
+- ingest: list, analyze, QA, and apply evidence into workspace knowledge
+- ask: workspace-scoped qmd retrieval -> project `context_file` under `~/.zbrain/projects/`
 
 Acceptance proof for the full path is in [docs/acceptance-walkthrough.md](/home/tinhpt/Lab/zbrain/docs/acceptance-walkthrough.md).
 

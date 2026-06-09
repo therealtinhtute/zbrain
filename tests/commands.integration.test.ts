@@ -7,6 +7,9 @@ import { runSetup } from "../src/commands/setup";
 import { runUpdate } from "../src/commands/update";
 import { runWorkspaceCreate } from "../src/commands/workspace";
 import { runInteractive } from "../src/commands/interactive";
+import { runAsk } from "../src/commands/ask";
+import { runIngestAnalyze, runIngestApply, runIngestList, runIngestQa } from "../src/commands/ingest";
+import { runLearn } from "../src/commands/learn";
 import type { CommandUi } from "../src/commands/ui";
 
 class FakeUi implements CommandUi {
@@ -141,7 +144,7 @@ describe("phase 4 command integrations", () => {
     }
   });
 
-  test("init writes project pointers, preserves existing CLAUDE.md, and links runtime assets", async () => {
+  test("init writes central project registration, preserves existing CLAUDE.md, and links runtime assets", async () => {
     const fixture = makeFixture();
     const ui = new FakeUi({
       selects: ["programming"],
@@ -160,7 +163,8 @@ describe("phase 4 command integrations", () => {
 
       await runInit({ ui, pathOptions: { cwd: fixture.projectDir, homeDir: fixture.homeDir } });
 
-      expect(readFileSync(join(fixture.projectDir, ".claude", "zbrain.json"), "utf8")).toContain("\"workspace\": \"programming\"");
+      expect(readFileSync(join(fixture.homeDir, ".zbrain", "projects.json"), "utf8")).toContain("\"workspace\": \"programming\"");
+      expect(readFileSync(join(fixture.homeDir, ".zbrain", "projects.json"), "utf8")).toContain(`"project_root": "${fixture.projectDir}"`);
       expect(readFileSync(join(fixture.projectDir, "CLAUDE.md"), "utf8")).toContain("# Existing");
       expect(readFileSync(join(fixture.projectDir, "CLAUDE.md"), "utf8")).toContain("# zbrain Integration");
       expect(existsSync(join(fixture.projectDir, ".claude", "skills", "zbrain-ask", "SKILL.md"))).toBe(true);
@@ -200,18 +204,169 @@ describe("phase 4 command integrations", () => {
 
       await runInit({ ui, pathOptions: { cwd: fixture.projectDir, homeDir: fixture.homeDir } });
 
-      expect(existsSync(join(claudeDir, "zbrain.json"))).toBe(true);
+      expect(existsSync(join(claudeDir, "zbrain.json"))).toBe(false);
       expect(existsSync(join(claudeDir, "zwiki.json"))).toBe(false);
       expect(existsSync(join(claudeDir, "skills", "zbrain-ask", "SKILL.md"))).toBe(true);
       expect(existsSync(join(claudeDir, "commands", "zbrain:ask.md"))).toBe(false);
       expect(existsSync(join(claudeDir, "agents", "legacy-agent.md"))).toBe(false);
       expect(readFileSync(join(fixture.projectDir, "CLAUDE.md"), "utf8")).toContain("# zbrain Integration");
       expect(readFileSync(join(fixture.projectDir, "CLAUDE.md"), "utf8")).not.toContain("# zwiki Integration");
+      expect(readFileSync(join(fixture.homeDir, ".zbrain", "projects.json"), "utf8")).toContain(`"project_root": "${fixture.projectDir}"`);
 
       const skillDir = join(claudeDir, "skills", "zbrain-ask");
       if (lstatSync(skillDir).isSymbolicLink()) {
         expect(readlinkSync(skillDir)).toContain(".zbrain/skills/zbrain-ask");
       }
+    } finally {
+      rmSync(fixture.root, { recursive: true, force: true });
+    }
+  });
+  test("init can integrate Codex rules while keeping project config in ~/.zbrain", async () => {
+    const fixture = makeFixture();
+    const ui = new FakeUi({
+      selects: ["programming"],
+      multiselects: [["codex_rules"]],
+    });
+
+    try {
+      await runSetup({ ui: new FakeUi(), pathOptions: { cwd: fixture.projectDir, homeDir: fixture.homeDir } });
+      await runWorkspaceCreate("programming", {
+        ui: new FakeUi({ confirms: [true] }),
+        pathOptions: { cwd: fixture.projectDir, homeDir: fixture.homeDir },
+        nowIso: "2026-05-25T01:00:00.000Z",
+      });
+
+      writeFileSync(join(fixture.projectDir, "AGENTS.md"), "# Existing Codex Rules\n");
+
+      await runInit({ ui, pathOptions: { cwd: fixture.projectDir, homeDir: fixture.homeDir } });
+      const projectRegistry = JSON.parse(readFileSync(join(fixture.homeDir, ".zbrain", "projects.json"), "utf8")) as {
+        projects: Array<{ project_root: string; runtimes?: string[] }>;
+      };
+      const projectEntry = projectRegistry.projects.find((entry) => entry.project_root === fixture.projectDir);
+
+      expect(readFileSync(join(fixture.projectDir, "AGENTS.md"), "utf8")).toContain("# Existing Codex Rules");
+      expect(readFileSync(join(fixture.projectDir, "AGENTS.md"), "utf8")).toContain("# zbrain Integration");
+      expect(projectEntry?.runtimes).toEqual(["codex"]);
+      expect(existsSync(join(fixture.projectDir, ".claude", "zbrain.json"))).toBe(false);
+    } finally {
+      rmSync(fixture.root, { recursive: true, force: true });
+    }
+  });
+
+  test("learn records source material into workspace evidence sources", async () => {
+    const fixture = makeFixture();
+    const ui = new FakeUi();
+
+    try {
+      await runSetup({ ui: new FakeUi(), pathOptions: { cwd: fixture.projectDir, homeDir: fixture.homeDir } });
+      await runWorkspaceCreate("programming", {
+        ui: new FakeUi({ confirms: [true] }),
+        pathOptions: { cwd: fixture.projectDir, homeDir: fixture.homeDir },
+        nowIso: "2026-05-25T01:00:00.000Z",
+      });
+
+      await runLearn({
+        ui,
+        pathOptions: { cwd: fixture.projectDir, homeDir: fixture.homeDir },
+        workspace: "programming",
+        type: "paste",
+        origin: "test",
+        label: "Runtime note",
+        rawContent: "Prefer reversible changes.",
+        nowIso: "2026-05-25T02:00:00.000Z",
+      });
+
+      const evidenceRoot = join(fixture.homeDir, ".zbrain", "workspaces", "programming", "evidence");
+      const sourceFile = join(evidenceRoot, "sources", "2026-05-25-paste-runtime-note", "source.yaml");
+      expect(readFileSync(sourceFile, "utf8")).toContain("label: Runtime note");
+      expect(readFileSync(join(evidenceRoot, "_index.md"), "utf8")).toContain("2026-05-25-paste-runtime-note");
+      expect(ui.notes.join("\n")).toContain("next: zbrain ingest analyze 2026-05-25-paste-runtime-note");
+    } finally {
+      rmSync(fixture.root, { recursive: true, force: true });
+    }
+  });
+
+  test("ingest list, analyze, qa, and apply process learned evidence", async () => {
+    const fixture = makeFixture();
+
+    try {
+      await runSetup({ ui: new FakeUi(), pathOptions: { cwd: fixture.projectDir, homeDir: fixture.homeDir } });
+      await runWorkspaceCreate("programming", {
+        ui: new FakeUi({ confirms: [true] }),
+        pathOptions: { cwd: fixture.projectDir, homeDir: fixture.homeDir },
+        nowIso: "2026-05-25T01:00:00.000Z",
+      });
+      await runLearn({
+        ui: new FakeUi(),
+        pathOptions: { cwd: fixture.projectDir, homeDir: fixture.homeDir },
+        workspace: "programming",
+        label: "Runtime note",
+        rawContent: "Prefer reversible changes.",
+        nowIso: "2026-05-25T02:00:00.000Z",
+      });
+
+      const evidenceId = "2026-05-25-paste-runtime-note";
+      const listUi = new FakeUi();
+      await runIngestList({ ui: listUi, pathOptions: { cwd: fixture.projectDir, homeDir: fixture.homeDir }, workspace: "programming" });
+      await runIngestAnalyze(evidenceId, {
+        ui: new FakeUi(),
+        pathOptions: { cwd: fixture.projectDir, homeDir: fixture.homeDir },
+        workspace: "programming",
+        nowIso: "2026-05-25T02:01:00.000Z",
+      });
+      await runIngestQa(evidenceId, {
+        ui: new FakeUi(),
+        pathOptions: { cwd: fixture.projectDir, homeDir: fixture.homeDir },
+        workspace: "programming",
+        fact: "Prefer reversible changes.",
+        wikiPath: "axioms/reversible-changes.md",
+        nowIso: "2026-05-25T02:02:00.000Z",
+      });
+      await runIngestApply(evidenceId, {
+        ui: new FakeUi(),
+        pathOptions: { cwd: fixture.projectDir, homeDir: fixture.homeDir },
+        workspace: "programming",
+        path: "axioms/reversible-changes.md",
+        content: "# Reversible Changes\n\nPrefer reversible changes.\n",
+        nowIso: "2026-05-25T02:03:00.000Z",
+      });
+
+      expect(listUi.notes.join("\n")).toContain("zbrain ingest analyze");
+      expect(readFileSync(join(fixture.homeDir, ".zbrain", "workspaces", "programming", "axioms", "reversible-changes.md"), "utf8")).toContain("Prefer reversible changes.");
+    } finally {
+      rmSync(fixture.root, { recursive: true, force: true });
+    }
+  });
+
+  test("ask writes current task context for the active workspace", async () => {
+    const fixture = makeFixture();
+    const ui = new FakeUi();
+
+    try {
+      await runSetup({ ui: new FakeUi(), pathOptions: { cwd: fixture.projectDir, homeDir: fixture.homeDir } });
+      await runWorkspaceCreate("programming", {
+        ui: new FakeUi({ confirms: [true] }),
+        pathOptions: { cwd: fixture.projectDir, homeDir: fixture.homeDir },
+        nowIso: "2026-05-25T01:00:00.000Z",
+      });
+      await runInit({
+        ui: new FakeUi({ selects: ["programming"], multiselects: [[]] }),
+        pathOptions: { cwd: fixture.projectDir, homeDir: fixture.homeDir },
+      });
+
+      await runAsk("reversible changes", {
+        ui,
+        pathOptions: { cwd: fixture.projectDir, homeDir: fixture.homeDir },
+        adapter: {
+          searchWorkspace: ({ workspace }) => {
+            expect(workspace).toBe("programming");
+            return [{ path: "/ws/programming/axioms/reversible.md", score: 5, snippet: "reversible", body: "Prefer reversible changes." }];
+          },
+        },
+      });
+
+      expect(ui.notes.join("\n")).toContain("results: 1");
+      expect(ui.notes.join("\n")).toContain(".zbrain/projects");
     } finally {
       rmSync(fixture.root, { recursive: true, force: true });
     }
@@ -282,7 +437,7 @@ describe("interactive mode", () => {
       });
       await runInteractive({ ui, pathOptions: { cwd: fixture.projectDir, homeDir: fixture.homeDir } });
 
-      expect(existsSync(join(fixture.projectDir, ".claude", "zbrain.json"))).toBe(true);
+      expect(existsSync(join(fixture.homeDir, ".zbrain", "projects.json"))).toBe(true);
     } finally {
       rmSync(fixture.root, { recursive: true, force: true });
     }

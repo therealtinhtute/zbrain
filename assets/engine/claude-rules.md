@@ -1,24 +1,23 @@
 ## zbrain Integration
 
 zbrain is a workspace-isolated knowledge retrieval layer. Skills live in `.claude/skills/zbrain-*`.
-Runtime root: `~/.zbrain/`. Project pointer: `<cwd>/.claude/zbrain.json`.
+Runtime root: `~/.zbrain/`. Project registry: `~/.zbrain/projects.json`.
 
 ### Workspace Resolution
 
-1. Read `<cwd>/.claude/zbrain.json` → `workspace` field (highest priority).
-2. Fallback: `~/.zbrain/config.yml` → `default_workspace`.
-3. If neither resolves, stop and report — never guess a workspace.
+1. Read `~/.zbrain/projects.json`.
+2. Find the entry whose `project_root` matches the current project root.
+3. Use that entry's `workspace` and `context_file`.
+4. Fallback: `~/.zbrain/config.yml` → `default_workspace`.
+5. If neither resolves, stop and report — never guess a workspace.
 
 ### Skill Triggers
 
 | When you need to… | Use |
 |--------------------|-----|
 | Answer domain questions (architecture, decisions, patterns) | `zbrain:ask` |
-| Add a file, URL, or pasted text to the workspace | `zbrain:ingest` |
-| Research a topic online and ingest results | `zbrain:learn` |
-| Check evidence pipeline status | `zbrain:state` |
-| See or switch the active workspace | `zbrain:workspace` |
-| Rebuild the search index after bulk changes | `zbrain:reindex` |
+| Record a file, URL content, pasted text, or observation | `zbrain:learn` |
+| List, analyze, QA, or apply evidence | `zbrain:ingest` |
 
 **Before answering any question about domain knowledge, project decisions, or architectural patterns — invoke `zbrain:ask` first. Never answer from memory.**
 
@@ -30,18 +29,18 @@ Higher-tier results rank first regardless of BM25 score.
 
 ### Evidence Pipeline
 
-Each piece of external material moves through four stages:
+Each piece of external material moves through three public verbs:
 
 ```
-ingest → analyze → qa → apply
+learn → ingest → ask
 ```
 
-Use `zbrain:state` to see which stage each item is in and what command runs next.
+Use `zbrain:ingest list` to see which stage each item is in and what command runs next.
 **Never advance to apply if any P0 or P1 question is unresolved.**
 
 ### Secondary Workspaces (optional)
 
-`zbrain.json` supports a `secondary_workspaces` array for cross-workspace context.
+Each project registry entry supports a `secondary_workspaces` array for cross-workspace context.
 Each entry has `workspace`, `keywords`, and optional `limit`.
 Secondary results fill remaining slots after primary results.
 

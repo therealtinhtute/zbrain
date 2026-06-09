@@ -4,10 +4,11 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { runInit } from "../../src/commands/init";
 import { runSetup } from "../../src/commands/setup";
+import { runWorkspaceCreate } from "../../src/commands/workspace";
+import { runLearn } from "../../src/commands/learn";
 import type { CommandUi } from "../../src/commands/ui";
 import { analyzeEvidence } from "../../src/core/evidence-analyze";
 import { applyEvidence } from "../../src/core/evidence-apply";
-import { ingestEvidence } from "../../src/core/evidence-ingest";
 import { completeEvidenceQa } from "../../src/core/evidence-qa";
 import { retrieveWorkspaceContext } from "../../src/core/retrieval";
 import { resolveRuntimePaths } from "../../src/core/runtime-paths";
@@ -49,29 +50,37 @@ describe("release acceptance path", () => {
 
     try {
       await runSetup({ ui: new FakeUi(), pathOptions: { cwd: projectDir, homeDir } });
+      await runWorkspaceCreate("programming", {
+        ui: new FakeUi(),
+        pathOptions: { cwd: projectDir, homeDir },
+        nowIso: "2026-05-25T03:00:00.000Z",
+      });
 
       const initUi = new FakeUi();
       initUi.selects = ["programming"];
-      initUi.multiselects = [["claude_rules", "commands", "agents", "mcp"]];
+      initUi.multiselects = [["claude_rules", "skills", "agents", "mcp"]];
       await runInit({ ui: initUi, pathOptions: { cwd: projectDir, homeDir } });
 
       const paths = resolveRuntimePaths({ cwd: projectDir, homeDir });
-      const ingested = ingestEvidence(paths, {
+      await runLearn({
+        ui: new FakeUi(),
+        pathOptions: { cwd: projectDir, homeDir },
         workspace: "programming",
-        sourceType: "paste",
+        type: "paste",
         origin: "inline",
         label: "Acceptance note",
         rawContent: "Prefer small reversible changes when editing production systems.",
         nowIso: "2026-05-25T03:10:00.000Z",
       });
+      const evidenceId = "2026-05-25-paste-acceptance-note";
       analyzeEvidence(paths, {
         workspace: "programming",
-        evidenceId: ingested.evidenceId,
+        evidenceId,
         nowIso: "2026-05-25T03:11:00.000Z",
       });
       completeEvidenceQa(paths, {
         workspace: "programming",
-        evidenceId: ingested.evidenceId,
+        evidenceId,
         nowIso: "2026-05-25T03:12:00.000Z",
         questions: [{ id: "q-1", severity: "P0", status: "answered" }],
         facts: [
@@ -85,7 +94,7 @@ describe("release acceptance path", () => {
 
       applyEvidence(paths, {
         workspace: "programming",
-        evidenceId: ingested.evidenceId,
+        evidenceId,
         nowIso: "2026-05-25T03:13:00.000Z",
         questions: [{ id: "q-1", severity: "P0", status: "answered" }],
         mutations: [
@@ -115,10 +124,11 @@ describe("release acceptance path", () => {
         },
       );
 
-      expect(readFileSync(join(projectDir, ".claude", "zbrain.json"), "utf8")).toContain("\"workspace\": \"programming\"");
+      expect(readFileSync(join(homeDir, ".zbrain", "projects.json"), "utf8")).toContain("\"workspace\": \"programming\"");
       expect(readFileSync(join(paths.workspacesDir, "programming", "axioms", "reversible-changes.md"), "utf8")).toContain("Reversible Changes");
       expect(retrieval.markdown).toContain("Prefer small reversible changes");
-      expect(readFileSync(join(projectDir, ".claude", "context", "current-task.md"), "utf8")).toContain("Workspace: programming");
+      expect(readFileSync(retrieval.filePath, "utf8")).toContain("Workspace: programming");
+      expect(retrieval.filePath.startsWith(join(homeDir, ".zbrain", "projects"))).toBe(true);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

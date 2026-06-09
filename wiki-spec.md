@@ -31,7 +31,7 @@ zbrain = ENGINE (shared runtime) + N WORKSPACES (isolated personal domains)
     └── philosophy/      ← Workspace: philosophical frameworks
 ```
 
-**Key invariant:** Knowledge from workspace A is NEVER used when working in workspace B. Active workspace is **per-project** (declared in `<cwd>/.claude/zbrain.json`), not global.
+**Key invariant:** Knowledge from workspace A is NEVER used when working in workspace B. Active workspace is **per-project** (declared in `~/.zbrain/projects.json`), not global.
 
 ---
 
@@ -42,8 +42,11 @@ zbrain = ENGINE (shared runtime) + N WORKSPACES (isolated personal domains)
 | Command | What it does |
 |---------|-------------|
 | `zbrain setup` | Extract bundled assets → `~/.zbrain/`, install config |
-| `zbrain init` | Create `<cwd>/.claude/zbrain.json` for the current project |
+| `zbrain init` | Register the current project in `~/.zbrain/projects.json` |
 | `zbrain workspace create <name>` | Scaffold a new workspace from template |
+| `zbrain learn` | Record raw source material into workspace evidence sources |
+| `zbrain ingest` | List, analyze, QA, and apply learned evidence |
+| `zbrain ask` | Retrieve ranked workspace context for a question |
 | `zbrain update` | Sync runtime assets from a new binary version |
 
 ### 3.2 Engine Layer
@@ -60,13 +63,9 @@ zbrain = ENGINE (shared runtime) + N WORKSPACES (isolated personal domains)
 
 | Skill | Invocation | Role |
 |-------|-----------|------|
+| `zbrain:learn` | `/zbrain:learn [source]` | Record raw source material into workspace evidence sources |
+| `zbrain:ingest` | `/zbrain:ingest list|analyze|qa|apply` | Process learned evidence into workspace knowledge |
 | `zbrain:ask` | `/zbrain:ask "question"` | 3-stage retrieval → `current-task.md` |
-| `zbrain:ingest` | `/zbrain:ingest [--from-project {path}]` | Full evidence pipeline driver for existing material |
-| `zbrain:learn` | `/zbrain:learn "topic"` | Web search + fetch → filter primary sources → create evidence items via `zbrain:ingest` |
-| `zbrain:reflect` | `/zbrain:reflect` | Post-task reflection → routes to `zbrain:ingest` |
-| `zbrain:state` | `/zbrain:state` | Pipeline state navigator: all items + next action |
-| `zbrain:workspace` | `/zbrain:workspace [name]` | Inspect or switch active workspace pointer |
-| `zbrain:reindex` | `/zbrain:reindex` | Rebuild qmd BM25 index for active workspace |
 
 ### 3.4 Workspace Structure
 
@@ -88,7 +87,7 @@ zbrain = ENGINE (shared runtime) + N WORKSPACES (isolated personal domains)
 ### 3.5 Active Workspace Resolution
 
 ```
-Priority 1: <cwd>/.claude/zbrain.json → field "workspace"
+Priority 1: ~/.zbrain/projects.json → matching `project_root` entry → field `workspace`
 Priority 2: ~/.zbrain/config.yml       → field "default_workspace"
 Priority 3: STOP — report missing pointer, do not auto-select
 ```
@@ -141,9 +140,9 @@ Triggered before answering any question about the active workspace. Three stages
 
 ---
 
-## 6. Evidence Pipeline (`zbrain:ingest`)
+## 6. Learn + Evidence Pipeline (`zbrain:learn`, `zbrain:ingest`)
 
-When new material arrives (article, book, code snapshot, notes, project directory), use the evidence pipeline instead of editing workspace knowledge directly.
+When new material arrives, use `zbrain learn` to record it as immutable evidence. Use `zbrain ingest` to analyze, QA, and apply it instead of editing workspace knowledge directly.
 
 ### State Machine
 
@@ -159,12 +158,11 @@ Only `qa_done → qa_in_progress` is a valid backward transition.
 
 | Stage | Command | What it does |
 |-------|---------|-------------|
-| Ingest | `zbrain:ingest` | Store raw content as `sources/{id}/raw.md` + `source.yaml`; append to `_index.md` |
-| Ingest (batch) | `zbrain:ingest --from-project {path}` | Walk project directory; create one evidence item per key file |
-| Analyze | `zbrain:ingest --analyze {id}` | Four structured passes (domain map, entity extract, pattern candidates, fact candidates) → `analysis/{id}/analysis.md` |
-| QA | `zbrain:ingest --qa {id}` | Prioritized question batch (P0–P3) → user resolves → `qa/{id}/verified-facts.md` |
-| Apply | `zbrain:ingest --apply {id}` | Write verified facts to knowledge-tier files; trigger `zbrain:reindex`; write `applied/{id}/manifest.yaml` |
-| Check state | `zbrain:state` | Show all items and their current pipeline state with next-action guidance |
+| Learn | `zbrain:learn` | Store raw content as `sources/{id}/raw.md` + `source.yaml`; append to `_index.md` |
+| List | `zbrain:ingest list` | Show evidence items and next-action guidance |
+| Analyze | `zbrain:ingest analyze {id}` | Four structured passes → `analysis/{id}/` |
+| QA | `zbrain:ingest qa {id}` | User-resolved facts → `qa/{id}/verified-facts.md` |
+| Apply | `zbrain:ingest apply {id}` | Write verified facts to knowledge-tier files and reindex internally |
 
 ### Key Invariants
 
@@ -185,30 +183,16 @@ Only `qa_done → qa_in_progress` is a valid backward transition.
 
 ---
 
-## 7. Reflection Flow (`zbrain:reflect`)
-
-Used after completing a task, debugging session, or reading to extract what was learned and route it into the evidence pipeline.
-
-```
-1. Summarize what was just executed or read (1–3 sentences)
-2. Identify new facts, pattern variations, or corrections vs. existing workspace knowledge
-3. Classify outcome:
-   - New knowledge  → draft ingest prompt → offer zbrain:ingest
-   - Confirmation   → note confirmed; no action
-   - Contradiction  → flag conflict with citations from old + new source; never auto-update
-```
-
-**Invariant:** never apply updates directly — all new facts must go through `zbrain:ingest`.
-
----
-
 ## 8. CLI Commands Reference
 
 | Command | What it does |
 |---------|-------------|
 | `zbrain setup` | First-run: extract bundled assets into `~/.zbrain/`, write `config.yml` |
-| `zbrain init` | Create `.claude/zbrain.json` in the current project; inject `CLAUDE.md` rules non-destructively |
+| `zbrain init` | Register the current project in `~/.zbrain/projects.json`; inject runtime-specific rules non-destructively |
 | `zbrain workspace create <name>` | Scaffold a new workspace directory from template |
+| `zbrain learn` | Record raw source material into workspace evidence sources |
+| `zbrain ingest list/analyze/qa/apply` | Process learned evidence |
+| `zbrain ask <question>` | Retrieve ranked workspace context |
 | `zbrain update` | Re-extract assets from the current binary version into `~/.zbrain/` |
 
 ---
@@ -217,13 +201,9 @@ Used after completing a task, debugging session, or reading to extract what was 
 
 | Skill | Description |
 |-------|-------------|
+| `zbrain:learn` | Record raw source material into workspace evidence sources |
+| `zbrain:ingest` | List, analyze, QA, and apply learned evidence |
 | `zbrain:ask` | Retrieve ranked workspace context before answering a question |
-| `zbrain:ingest` | Drive existing material (file, URL, project) through the 4-stage evidence pipeline |
-| `zbrain:learn` | Web search + fetch primary sources as Markdown → create one evidence item per source via `zbrain:ingest` |
-| `zbrain:reflect` | Extract learnings from a completed session; routes to `zbrain:ingest` |
-| `zbrain:state` | Show all evidence items, current pipeline state, and next-action command per item |
-| `zbrain:workspace` | Inspect or switch the active workspace pointer for the current project |
-| `zbrain:reindex` | Rebuild the qmd BM25 index for the active workspace |
 
 ---
 
@@ -245,7 +225,7 @@ Used after completing a task, debugging session, or reading to extract what was 
 |------|-----------|
 | Agent follows personal knowledge, not hallucinations | axioms/ is highest priority; agent cannot bypass |
 | One person works across N domains without knowledge bleed | Workspace isolation + per-project active pointer |
-| Knowledge stays in sync with learning | `zbrain:reflect` after sessions; `zbrain:reindex` after apply |
+| Knowledge stays in sync with learning | `zbrain:learn` records sources; `zbrain:ingest` applies verified facts and reindexes internally |
 | Every wiki fact has a source | Evidence pipeline with immutable raw + citation requirement |
 | Context window efficiency | 3-stage retrieval pipeline, not full wiki dump |
 | Resume sessions mid-task | `current-task.md` persists ranked context for the session |

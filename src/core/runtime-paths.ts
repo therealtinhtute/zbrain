@@ -14,7 +14,9 @@ export interface RuntimePaths {
   runtimeDir: string;
   configFile: string;
   workspacesDir: string;
-  projectPointerFile: string;
+  projectsDir: string;
+  projectRegistryFile: string;
+  legacyProjectPointerFile: string;
 }
 
 export function resolveRuntimePaths(options: RuntimePathOptions = {}): RuntimePaths {
@@ -36,6 +38,8 @@ export function resolveRuntimePaths(options: RuntimePathOptions = {}): RuntimePa
     runtimeDir,
     configFile: join(runtimeDir, "config.yml"),
     workspacesDir: join(runtimeDir, "workspaces"),
-    projectPointerFile: join(cwd, ".claude", "zbrain.json"),
+    projectsDir: join(runtimeDir, "projects"),
+    projectRegistryFile: join(runtimeDir, "projects.json"),
+    legacyProjectPointerFile: join(cwd, ".claude", "zbrain.json"),
   };
 }

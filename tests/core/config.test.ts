@@ -2,8 +2,15 @@ import { describe, expect, test } from "bun:test";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { parseGlobalConfig, parseProjectPointer, readGlobalConfig, readProjectPointer } from "../../src/core/config";
-import { projectPointerSchema } from "../../src/schemas/config";
+import {
+  parseGlobalConfig,
+  parseProjectPointer,
+  parseProjectRegistry,
+  readGlobalConfig,
+  readProjectPointer,
+  readProjectRegistry,
+} from "../../src/core/config";
+import { projectBindingSchema, projectPointerSchema } from "../../src/schemas/config";
 
 describe("config parsing", () => {
   test("parses empty global config as defaults", () => {
@@ -16,19 +23,34 @@ describe("config parsing", () => {
     try {
       expect(readGlobalConfig(join(baseDir, "config.yml"))).toEqual({});
       expect(readProjectPointer(join(baseDir, "zbrain.json"))).toBeNull();
+      expect(readProjectRegistry(join(baseDir, "projects.json"))).toEqual({ projects: [] });
     } finally {
       rmSync(baseDir, { recursive: true, force: true });
     }
   });
 
-  test("parses persisted config and project pointer files", () => {
+  test("parses persisted config, project pointer, and registry files", () => {
     const baseDir = mkdtempSync(join(tmpdir(), "zbrain-config-"));
     const configFile = join(baseDir, "config.yml");
     const pointerFile = join(baseDir, "zbrain.json");
+    const registryFile = join(baseDir, "projects.json");
 
     try {
       writeFileSync(configFile, "default_workspace: programming\nruntime_version: 0.1.0\n");
       writeFileSync(pointerFile, JSON.stringify({ workspace: "finance" }));
+      writeFileSync(
+        registryFile,
+        JSON.stringify({
+          projects: [
+            {
+              project_root: "/tmp/project",
+              workspace: "finance",
+              context_file: "/tmp/.zbrain/projects/abc/current-task.md",
+              runtimes: ["claude", "codex"],
+            },
+          ],
+        }),
+      );
 
       expect(readGlobalConfig(configFile)).toEqual({
         default_workspace: "programming",
@@ -36,6 +58,8 @@ describe("config parsing", () => {
       });
       expect(readProjectPointer(pointerFile)).toEqual({ workspace: "finance" });
       expect(parseProjectPointer("{\"workspace\":\"health\"}")).toEqual({ workspace: "health" });
+      expect(readProjectRegistry(registryFile).projects[0]?.workspace).toBe("finance");
+      expect(parseProjectRegistry("{\"projects\":[]}")).toEqual({ projects: [] });
     } finally {
       rmSync(baseDir, { recursive: true, force: true });
     }
@@ -44,6 +68,7 @@ describe("config parsing", () => {
   test("rejects invalid config values", () => {
     expect(() => parseGlobalConfig("default_workspace: 42")).toThrow();
     expect(() => parseProjectPointer("{\"workspace\": \"\"}")).toThrow();
+    expect(() => parseProjectRegistry("{\"projects\":[{\"workspace\":\"x\"}]}")).toThrow();
   });
 });
 
@@ -92,5 +117,19 @@ describe("secondary_workspaces schema", () => {
         secondary_workspaces: [{ workspace: "research", keywords: [] }],
       }),
     ).toThrow();
+  });
+});
+
+describe("project registry schema", () => {
+  test("accepts runtime metadata and context file", () => {
+    const result = projectBindingSchema.parse({
+      project_root: "/tmp/project",
+      workspace: "research",
+      context_file: "/tmp/.zbrain/projects/abc/current-task.md",
+      runtimes: ["codex"],
+    });
+
+    expect(result.project_root).toBe("/tmp/project");
+    expect(result.runtimes).toEqual(["codex"]);
   });
 });

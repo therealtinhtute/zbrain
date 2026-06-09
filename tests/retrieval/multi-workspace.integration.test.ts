@@ -242,12 +242,14 @@ describe("V7 — primary returns 3, two secondaries → remaining 5 slots split"
 
 describe("V8 — evidence pipeline unaffected", () => {
   test("evidence-related source files do not import secondary workspace types", () => {
-    const { spawnSync } = require("node:child_process");
-    const result = spawnSync("grep", ["-r", "secondary_workspaces", "src/core/evidence-"], {
-      cwd: "/home/tinhpt/Lab/zbrain",
-      encoding: "utf8",
-    });
-    expect(result.stdout.trim()).toBe("");
+    const { readdirSync, readFileSync } = require("node:fs");
+    const { join } = require("node:path");
+    const evidenceFiles = readdirSync(join(process.cwd(), "src", "core"))
+      .filter((file: string) => file.startsWith("evidence-") && file.endsWith(".ts"));
+
+    for (const file of evidenceFiles) {
+      expect(readFileSync(join(process.cwd(), "src", "core", file), "utf8")).not.toContain("secondary_workspaces");
+    }
   });
 });
 

@@ -33,6 +33,8 @@ describe("resolveRuntimePaths", () => {
 
       const paths = resolveRuntimePaths({ homeDir, cwd });
       expect(paths.runtimeDir).toBe(join(homeDir, ".zbrain"));
+      expect(paths.projectRegistryFile).toBe(join(homeDir, ".zbrain", "projects.json"));
+      expect(paths.projectsDir).toBe(join(homeDir, ".zbrain", "projects"));
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

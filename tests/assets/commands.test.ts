@@ -9,14 +9,10 @@ const expectedSkills: Record<string, string> = {
   "zbrain-ask": "zbrain:ask",
   "zbrain-ingest": "zbrain:ingest",
   "zbrain-learn": "zbrain:learn",
-  "zbrain-reflect": "zbrain:reflect",
-  "zbrain-reindex": "zbrain:reindex",
-  "zbrain-state": "zbrain:state",
-  "zbrain-workspace": "zbrain:workspace",
 };
 
 describe("skill assets", () => {
-  test("ships all seven zbrain skill directories", () => {
+  test("ships only the three public zbrain skill directories", () => {
     const dirs = readdirSync(skillsRoot).sort();
     expect(dirs).toEqual(Object.keys(expectedSkills).sort());
   });
@@ -51,14 +47,9 @@ describe("skill assets", () => {
     }
   });
 
-  test("zbrain-ask documents current-task.md output path", () => {
+  test("zbrain-ask documents the central context_file output path", () => {
     const contents = readFileSync(join(skillsRoot, "zbrain-ask", "SKILL.md"), "utf8");
-    expect(contents.includes("current-task.md")).toBe(true);
-  });
-
-  test("zbrain-workspace documents zbrain.json pointer path", () => {
-    const contents = readFileSync(join(skillsRoot, "zbrain-workspace", "SKILL.md"), "utf8");
-    expect(contents.includes(".claude/zbrain.json")).toBe(true);
+    expect(contents.includes("context_file")).toBe(true);
   });
 
   test("zbrain-ingest has a references directory with pipeline.md", () => {
@@ -73,15 +64,8 @@ describe("skill assets", () => {
     expect(contents.includes("pipeline.md")).toBe(true);
   });
 
-  test("zbrain-learn has a references directory with fetch.md", () => {
-    const fetchRef = join(skillsRoot, "zbrain-learn", "references", "fetch.md");
-    const contents = readFileSync(fetchRef, "utf8");
-    expect(contents.includes("defuddle.md")).toBe(true);
-    expect(contents.includes("r.jina.ai")).toBe(true);
-  });
-
-  test("zbrain-learn SKILL.md references fetch.md", () => {
+  test("zbrain-learn documents evidence source creation", () => {
     const contents = readFileSync(join(skillsRoot, "zbrain-learn", "SKILL.md"), "utf8");
-    expect(contents.includes("fetch.md")).toBe(true);
+    expect(contents.includes("evidence/sources")).toBe(true);
   });
 });

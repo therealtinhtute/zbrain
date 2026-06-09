@@ -2,9 +2,11 @@ import { existsSync, readdirSync, readFileSync, rmSync, writeFileSync } from "no
 import { basename, dirname, join, resolve } from "node:path";
 import { spawnSync } from "node:child_process";
 import { extractBundledAssets, type AssetExtractionResult } from "../core/assets";
-import { readGlobalConfig, writeGlobalConfig, writeProjectPointer } from "../core/config";
+import { readGlobalConfig, upsertProjectBinding, writeGlobalConfig } from "../core/config";
+import { currentTaskFilePath } from "../core/current-task";
 import { createSymlinkOrCopy, ensureDir, pathInside, readTextFile, writeTextFile } from "../core/fs";
 import { resolveRuntimePaths, type RuntimePathOptions, type RuntimePaths } from "../core/runtime-paths";
+import { type RuntimeName } from "../schemas/config";
 
 export interface CommandContext {
   paths: RuntimePaths;
@@ -133,22 +135,29 @@ export interface InitSelection {
   injectTargets: string[];
 }
 
-export function appendClaudeRules(claudeFile: string, rulesContent: string): { updated: boolean } {
+export function appendIntegrationRules(
+  rulesFile: string,
+  rulesContent: string,
+  title: string,
+  legacyTitles: string[] = [],
+): { updated: boolean } {
   const section = rulesContent.trim();
-  const existing = existsSync(claudeFile) ? readTextFile(claudeFile) : "";
+  const existing = existsSync(rulesFile) ? readTextFile(rulesFile) : "";
   const legacySection = section.replaceAll("zbrain", "zwiki");
   let withoutLegacy = existing;
   while (withoutLegacy.includes(legacySection)) {
     withoutLegacy = withoutLegacy.replace(legacySection, "").trimEnd();
   }
 
-  withoutLegacy = withoutLegacy.replace(
-    /(?:^|\n)# zwiki Integration\n[\s\S]*?(?=\n# [^\n]+\n|\s*$)/g,
-    "",
-  ).trimEnd();
+  for (const legacyTitle of [...legacyTitles, "zwiki Integration"]) {
+    withoutLegacy = withoutLegacy.replace(
+      new RegExp(`(?:^|\\n)# ${legacyTitle.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\n[\\s\\S]*?(?=\\n# [^\\n]+\\n|\\s*$)`, "g"),
+      "",
+    ).trimEnd();
+  }
 
   withoutLegacy = withoutLegacy.replace(
-    /(?:^|\n)# zbrain Integration\n[\s\S]*?(?=\n# [^\n]+\n|\s*$)/g,
+    new RegExp(`(?:^|\\n)# ${title.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\n[\\s\\S]*?(?=\\n# [^\\n]+\\n|\\s*$)`, "g"),
     "",
   ).trimEnd();
 
@@ -157,14 +166,14 @@ export function appendClaudeRules(claudeFile: string, rulesContent: string): { u
       return { updated: false };
     }
 
-    writeFileSync(claudeFile, `${withoutLegacy}\n`, "utf8");
+    writeFileSync(rulesFile, `${withoutLegacy}\n`, "utf8");
     return { updated: true };
   }
 
   const nextContent = withoutLegacy.trim().length === 0
     ? `${section}\n`
     : `${withoutLegacy}\n\n${section}\n`;
-  writeFileSync(claudeFile, nextContent, "utf8");
+  writeFileSync(rulesFile, nextContent, "utf8");
   return { updated: true };
 }
 
@@ -196,29 +205,41 @@ export function initProject(
 ): { created: string[]; updated: string[] } {
   const created: string[] = [];
   const updated: string[] = [];
+  const runtimes = selectedRuntimes(selection.injectTargets);
+  upsertProjectBinding(paths.projectRegistryFile, {
+    project_root: paths.cwd,
+    workspace: selection.workspace,
+    context_file: currentTaskFilePath(paths),
+    runtimes,
+  });
+  created.push(paths.projectRegistryFile);
+
   const claudeDir = join(paths.cwd, ".claude");
-  ensureDir(claudeDir);
-
-  writeProjectPointer(join(claudeDir, "zbrain.json"), { workspace: selection.workspace });
-  created.push(join(claudeDir, "zbrain.json"));
-
   const legacyPointerFile = join(claudeDir, "zwiki.json");
   if (existsSync(legacyPointerFile)) {
     rmSync(legacyPointerFile, { force: true });
     updated.push(legacyPointerFile);
   }
 
+  const staleProjectPointerFile = paths.legacyProjectPointerFile;
+  if (existsSync(staleProjectPointerFile)) {
+    rmSync(staleProjectPointerFile, { force: true });
+    updated.push(staleProjectPointerFile);
+  }
+
   if (selection.injectTargets.includes("claude_rules")) {
+    ensureDir(claudeDir);
     const rulesPath = join(paths.runtimeDir, "engine", "claude-rules.md");
     const claudeFile = join(paths.cwd, "CLAUDE.md");
     const rulesContent = readTextFile(rulesPath).replaceAll("zwiki", "zbrain");
-    const result = appendClaudeRules(claudeFile, rulesContent);
+    const result = appendIntegrationRules(claudeFile, rulesContent, "zbrain Integration");
     if (result.updated) {
       updated.push(claudeFile);
     }
   }
 
   if (selection.injectTargets.includes("skills")) {
+    ensureDir(claudeDir);
     const skillsDir = join(claudeDir, "skills");
     created.push(...syncAssetGroup(join(paths.runtimeDir, "skills"), skillsDir));
     const staleCommandsDir = join(claudeDir, "commands", "zbrain");
@@ -239,11 +260,13 @@ export function initProject(
   }
 
   if (selection.injectTargets.includes("agents")) {
+    ensureDir(claudeDir);
     const agentsDir = join(claudeDir, "agents");
     created.push(...syncAssetGroup(join(paths.runtimeDir, "agents"), agentsDir));
   }
 
   if (selection.injectTargets.includes("mcp")) {
+    ensureDir(claudeDir);
     const settingsFile = join(claudeDir, "settings.local.json");
     const result = mergeSettingsFile(settingsFile);
     if (result.updated) {
@@ -251,7 +274,35 @@ export function initProject(
     }
   }
 
+  if (selection.injectTargets.includes("codex_rules")) {
+    const rulesPath = join(paths.runtimeDir, "engine", "codex-rules.md");
+    const agentsFile = join(paths.cwd, "AGENTS.md");
+    const result = appendIntegrationRules(
+      agentsFile,
+      readTextFile(rulesPath).replaceAll("zwiki", "zbrain"),
+      "zbrain Integration",
+      ["Codex zbrain Integration"],
+    );
+    if (result.updated) {
+      updated.push(agentsFile);
+    }
+  }
+
   return { created, updated };
+}
+
+function selectedRuntimes(injectTargets: string[]): RuntimeName[] {
+  const runtimes: RuntimeName[] = [];
+
+  if (injectTargets.some((target) => ["claude_rules", "skills", "agents", "mcp"].includes(target))) {
+    runtimes.push("claude");
+  }
+
+  if (injectTargets.includes("codex_rules")) {
+    runtimes.push("codex");
+  }
+
+  return runtimes;
 }
 
 export function assertRuntimeReady(paths: RuntimePaths): void {

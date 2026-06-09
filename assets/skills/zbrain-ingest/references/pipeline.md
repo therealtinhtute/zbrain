@@ -10,9 +10,9 @@ ingested → analyzed → qa_in_progress → qa_done → applied → archived
 
 Only `qa_done → qa_in_progress` is a valid backward transition.
 
-## Stage 1: Ingest
+## Stage 1: Learn
 
-1. Resolve active workspace from `<cwd>/.claude/zbrain.json` or `~/.zbrain/config.yml`.
+1. Resolve active workspace from `~/.zbrain/projects.json` by matching the current project root, or fallback to `~/.zbrain/config.yml`.
 2. Generate a short unique evidence ID: `YYYYMMDD-{slug}`.
 3. Create `evidence/sources/{id}/` directory.
 4. Write raw content as `raw.md` — **immutable after this step**.
@@ -52,7 +52,7 @@ Only `qa_done → qa_in_progress` is a valid backward transition.
    - Append the fact with citation.
    - Record the change in `evidence/applied/{id}/manifest.yaml`.
 3. Preserve `raw.md` and `source.yaml` as immutable throughout.
-4. Trigger `zbrain:reindex` to update the BM25 index for the workspace.
+4. Trigger internal reindexing to update the BM25 index for the workspace.
 5. Update `_index.md` state → `applied`.
 
 ## QA Gate Rules

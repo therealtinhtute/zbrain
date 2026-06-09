@@ -12,6 +12,7 @@ const initTargetOptions = [
   { value: "skills", label: "Agent skills", hint: ".claude/skills" },
   { value: "agents", label: "Subagents", hint: ".claude/agents" },
   { value: "mcp", label: "MCP config", hint: ".claude/settings.local.json" },
+  { value: "codex_rules", label: "AGENTS.md rules", hint: "Codex integration" },
 ] as const;
 
 export async function runInit(options: InitCommandOptions = {}): Promise<void> {
@@ -40,11 +41,16 @@ export async function runInit(options: InitCommandOptions = {}): Promise<void> {
   const spinner = ui.spinner();
   spinner.start("Integrating project");
   const result = initProject(context.paths, { workspace, injectTargets });
+  const runtimes = [
+    injectTargets.some((target) => ["claude_rules", "skills", "agents", "mcp"].includes(target)) ? "claude" : null,
+    injectTargets.includes("codex_rules") ? "codex" : null,
+  ].filter((value): value is string => value !== null);
   spinner.stop("Project integrated");
 
   ui.note(
     [
       `workspace: ${workspace}`,
+      `runtimes: ${runtimes.join(", ") || "registry-only"}`,
       `created: ${result.created.length}`,
       `updated: ${result.updated.length}`,
     ].join("\n"),
