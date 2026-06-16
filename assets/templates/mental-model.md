@@ -1,7 +1,10 @@
 ---
 title: "{{title}}"
+type: mental-model
 priority: P1
 source: "{{source}}"
+resource: "{{resource}}"
+tags: []
 created_at: "{{created_at}}"
 ---
 

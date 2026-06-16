@@ -47,13 +47,17 @@ Only `qa_done → qa_in_progress` is a valid backward transition.
 ## Stage 4: Apply
 
 1. Read `verified-facts.md` — verify all P0/P1 questions are resolved.
-2. For each verified fact:
+2. Read `source.yaml` — note the `origin` field; this is the canonical `resource` URL.
+3. For each verified fact:
    - Locate or create the target wiki file (`axioms/`, `mental-models/`, `projects/`, or `decisions/`).
+   - When creating a new wiki file, populate `resource:` from `source.yaml.origin`.
+   - When updating an existing file, add `resource:` to frontmatter if it is missing or empty.
    - Append the fact with citation.
    - Record the change in `evidence/applied/{id}/manifest.yaml`.
-3. Preserve `raw.md` and `source.yaml` as immutable throughout.
-4. Trigger internal reindexing to update the BM25 index for the workspace.
-5. Update `_index.md` state → `applied`.
+4. For each directory that received new or updated wiki files, create or update `index.md` listing all `.md` files in that directory (one entry per file, filename as a relative markdown link).
+5. Preserve `raw.md` and `source.yaml` as immutable throughout.
+6. Trigger internal reindexing to update the BM25 index for the workspace.
+7. Update `_index.md` state → `applied`.
 
 ## QA Gate Rules
 

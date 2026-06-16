@@ -26,6 +26,21 @@ describe("template assets", () => {
     }
   });
 
+  test("knowledge templates contain OKF-required fields", () => {
+    const knowledgeTemplates = ["axiom.md", "mental-model.md", "project.md"];
+
+    for (const file of knowledgeTemplates) {
+      const contents = readFileSync(join(process.cwd(), "assets", "templates", file), "utf8");
+      const frontmatter = extractFrontmatter(contents);
+      expect(frontmatter).not.toBeNull();
+
+      const parsed = YAML.load(frontmatter!) as Record<string, unknown>;
+      expect(parsed, `${file} missing 'type'`).toHaveProperty("type");
+      expect(parsed, `${file} missing 'resource'`).toHaveProperty("resource");
+      expect(parsed, `${file} missing 'tags'`).toHaveProperty("tags");
+    }
+  });
+
   test("yaml and json templates parse cleanly", () => {
     const yamlTemplate = readFileSync(
       join(process.cwd(), "assets", "templates", "evidence-source.yaml"),

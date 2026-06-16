@@ -1,8 +1,10 @@
 ---
 title: "{{title}}"
-priority: P2
 type: "{{type}}"
+priority: P2
 source: "{{source}}"
+resource: "{{resource}}"
+tags: []
 created_at: "{{created_at}}"
 ---
 

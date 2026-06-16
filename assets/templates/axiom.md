@@ -1,7 +1,10 @@
 ---
 title: "{{title}}"
+type: axiom
 priority: P0
 source: "{{source}}"
+resource: "{{resource}}"
+tags: []
 created_at: "{{created_at}}"
 ---
 

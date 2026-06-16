@@ -51,6 +51,16 @@ function readCheckpoint(filePath: string, evidenceId: string, nowIso: string): C
   return JSON.parse(readTextFile(filePath)) as CheckpointState;
 }
 
+function injectResourceIfMissing(content: string, resource: string): string {
+  const match = content.match(/^---\n([\s\S]*?)\n---\n/);
+  if (!match) return content;
+  const fm = YAML.load(match[1]) as Record<string, unknown>;
+  if (fm.resource && typeof fm.resource === "string" && fm.resource.trim()) return content;
+  fm.resource = resource;
+  const newFm = YAML.dump(fm, { noRefs: true }).trimEnd();
+  return content.replace(match[0], `---\n${newFm}\n---\n`);
+}
+
 export function applyEvidence(paths: RuntimePaths, options: ApplyEvidenceOptions): { applied: string[] } {
   const nowIso = options.nowIso ?? new Date().toISOString();
   const locations = evidenceLocations(paths, options.workspace, options.evidenceId);
@@ -74,7 +84,10 @@ export function applyEvidence(paths: RuntimePaths, options: ApplyEvidenceOptions
     }
 
     const target = assertWorkspaceTarget(locations.workspaceRoot, mutation.relativePath);
-    writeTextFile(target, mutation.content, { overwrite: true });
+    const content = target.endsWith(".md")
+      ? injectResourceIfMissing(mutation.content, sourceRecord.origin)
+      : mutation.content;
+    writeTextFile(target, content, { overwrite: true });
     checkpoint.completed_paths.push(mutation.relativePath);
     checkpoint.last_updated = nowIso;
     writeCheckpoint(locations.checkpointFile, checkpoint);
