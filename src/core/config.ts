@@ -1,9 +1,9 @@
 import { existsSync, readFileSync } from "node:fs";
 import { dirname } from "node:path";
+import type { Database } from "bun:sqlite";
 import YAML from "js-yaml";
 import {
   globalConfigSchema,
-  projectBindingSchema,
   projectPointerSchema,
   projectRegistrySchema,
   type GlobalConfig,
@@ -11,7 +11,9 @@ import {
   type ProjectPointer,
   type ProjectRegistry,
 } from "../schemas/config";
+// parseProjectPointer / parseGlobalConfig / parseProjectRegistry kept for migration script + tests
 import { ensureDir, writeTextFile } from "./fs";
+import { upsertProject, readProject, readProjectRegistry as dbReadProjectRegistry } from "./db-projects";
 
 export function parseGlobalConfig(contents: string): GlobalConfig {
   const parsed = contents.trim().length === 0 ? {} : YAML.load(contents);
@@ -44,14 +46,6 @@ export function readProjectPointer(pointerFile: string): ProjectPointer | null {
   return parseProjectPointer(readFileSync(pointerFile, "utf8"));
 }
 
-export function readProjectRegistry(registryFile: string): ProjectRegistry {
-  if (!existsSync(registryFile)) {
-    return { projects: [] };
-  }
-
-  return parseProjectRegistry(readFileSync(registryFile, "utf8"));
-}
-
 export function writeGlobalConfig(configFile: string, config: GlobalConfig): void {
   ensureDir(dirname(configFile));
   writeTextFile(configFile, YAML.dump(config, { noRefs: true }), { overwrite: true });
@@ -62,24 +56,15 @@ export function writeProjectPointer(pointerFile: string, pointer: ProjectPointer
   writeTextFile(pointerFile, `${JSON.stringify(pointer, null, 2)}\n`, { overwrite: true });
 }
 
-export function writeProjectRegistry(registryFile: string, registry: ProjectRegistry): void {
-  ensureDir(dirname(registryFile));
-  writeTextFile(registryFile, `${JSON.stringify(projectRegistrySchema.parse(registry), null, 2)}\n`, { overwrite: true });
+export function upsertProjectBinding(db: Database, binding: ProjectBinding): ProjectRegistry {
+  upsertProject(db, binding, new Date().toISOString());
+  return dbReadProjectRegistry(db);
 }
 
-export function upsertProjectBinding(registryFile: string, binding: ProjectBinding): ProjectRegistry {
-  const nextBinding = projectBindingSchema.parse(binding);
-  const registry = readProjectRegistry(registryFile);
-  const projects = registry.projects.filter((entry) => entry.project_root !== nextBinding.project_root);
-  projects.push(nextBinding);
-  projects.sort((a, b) => a.project_root.localeCompare(b.project_root));
-
-  const nextRegistry = { ...registry, projects };
-  writeProjectRegistry(registryFile, nextRegistry);
-  return nextRegistry;
+export function readProjectBinding(db: Database, projectRoot: string): ProjectBinding | null {
+  return readProject(db, projectRoot);
 }
 
-export function readProjectBinding(registryFile: string, projectRoot: string): ProjectBinding | null {
-  const registry = readProjectRegistry(registryFile);
-  return registry.projects.find((entry) => entry.project_root === projectRoot) ?? null;
+export function readProjectRegistry(db: Database): ProjectRegistry {
+  return dbReadProjectRegistry(db);
 }

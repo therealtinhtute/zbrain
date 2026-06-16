@@ -7,6 +7,7 @@ import { applyEvidence, type ApplyMutation } from "../core/evidence-apply";
 import { completeEvidenceQa } from "../core/evidence-qa";
 import { listEvidenceItems } from "../core/evidence-list";
 import { resolveActiveWorkspace } from "../core/workspace-resolver";
+import { openDb } from "../core/db";
 import type { RuntimePathOptions, RuntimePaths } from "../core/runtime-paths";
 import type { EvidenceQuestion } from "../core/evidence-state";
 
@@ -42,7 +43,8 @@ export async function runIngestList(options: BaseIngestOptions = {}): Promise<vo
   assertRuntimeReady(context.paths);
 
   const workspace = resolveWorkspaceName(context.paths, options.workspace);
-  const items = listEvidenceItems(context.paths, workspace);
+  const db = openDb(context.paths.runtimeDir);
+  const items = listEvidenceItems(db, workspace);
 
   ui.intro("zbrain ingest list");
   ui.note(
@@ -69,7 +71,8 @@ export async function runIngestAnalyze(evidenceId: string, options: BaseIngestOp
   ui.intro("zbrain ingest analyze");
   const spinner = ui.spinner();
   spinner.start("Analyzing evidence");
-  const files = analyzeEvidence(context.paths, { workspace, evidenceId, nowIso: options.nowIso });
+  const db = openDb(context.paths.runtimeDir);
+  const files = analyzeEvidence(db, context.paths, { workspace, evidenceId, nowIso: options.nowIso });
   spinner.stop("Evidence analyzed");
   ui.note([`workspace: ${workspace}`, `evidence_id: ${evidenceId}`, `files: ${files.length}`].join("\n"), "Analyze summary");
   ui.outro("Analysis complete.");
@@ -94,7 +97,8 @@ export async function runIngestQa(evidenceId: string, options: IngestQaOptions =
 
   ui.intro("zbrain ingest qa");
   const questions: EvidenceQuestion[] = [{ id: questionId, severity: "P0", status: "answered" }];
-  const result = completeEvidenceQa(context.paths, {
+  const db = openDb(context.paths.runtimeDir);
+  const result = completeEvidenceQa(db, context.paths, {
     workspace,
     evidenceId,
     nowIso: options.nowIso,
@@ -129,7 +133,8 @@ export async function runIngestApply(evidenceId: string, options: IngestApplyOpt
     content,
     citations: [{ questionId: "q-1", wikiPath: relativePath }],
   };
-  const result = applyEvidence(context.paths, {
+  const db = openDb(context.paths.runtimeDir);
+  const result = applyEvidence(db, context.paths, {
     workspace,
     evidenceId,
     nowIso: options.nowIso,

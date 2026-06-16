@@ -11,6 +11,9 @@ import { runAsk } from "../src/commands/ask";
 import { runIngestAnalyze, runIngestApply, runIngestList, runIngestQa } from "../src/commands/ingest";
 import { runLearn } from "../src/commands/learn";
 import type { CommandUi } from "../src/commands/ui";
+import { openDb } from "../src/core/db";
+import { readProject } from "../src/core/db-projects";
+import { readEvidence } from "../src/core/db-evidence";
 
 class FakeUi implements CommandUi {
   logs: string[] = [];
@@ -163,8 +166,10 @@ describe("phase 4 command integrations", () => {
 
       await runInit({ ui, pathOptions: { cwd: fixture.projectDir, homeDir: fixture.homeDir } });
 
-      expect(readFileSync(join(fixture.homeDir, ".zbrain", "projects.json"), "utf8")).toContain("\"workspace\": \"programming\"");
-      expect(readFileSync(join(fixture.homeDir, ".zbrain", "projects.json"), "utf8")).toContain(`"project_root": "${fixture.projectDir}"`);
+      const db1 = openDb(join(fixture.homeDir, ".zbrain"));
+      const binding1 = readProject(db1, fixture.projectDir);
+      expect(binding1?.workspace).toBe("programming");
+      expect(binding1?.project_root).toBe(fixture.projectDir);
       expect(readFileSync(join(fixture.projectDir, "CLAUDE.md"), "utf8")).toContain("# Existing");
       expect(readFileSync(join(fixture.projectDir, "CLAUDE.md"), "utf8")).toContain("# zbrain Integration");
       expect(existsSync(join(fixture.projectDir, ".claude", "skills", "zbrain-ask", "SKILL.md"))).toBe(true);
@@ -211,7 +216,8 @@ describe("phase 4 command integrations", () => {
       expect(existsSync(join(claudeDir, "agents", "legacy-agent.md"))).toBe(false);
       expect(readFileSync(join(fixture.projectDir, "CLAUDE.md"), "utf8")).toContain("# zbrain Integration");
       expect(readFileSync(join(fixture.projectDir, "CLAUDE.md"), "utf8")).not.toContain("# zwiki Integration");
-      expect(readFileSync(join(fixture.homeDir, ".zbrain", "projects.json"), "utf8")).toContain(`"project_root": "${fixture.projectDir}"`);
+      const db2 = openDb(join(fixture.homeDir, ".zbrain"));
+      expect(readProject(db2, fixture.projectDir)?.project_root).toBe(fixture.projectDir);
 
       const skillDir = join(claudeDir, "skills", "zbrain-ask");
       if (lstatSync(skillDir).isSymbolicLink()) {
@@ -239,10 +245,8 @@ describe("phase 4 command integrations", () => {
       writeFileSync(join(fixture.projectDir, "AGENTS.md"), "# Existing Codex Rules\n");
 
       await runInit({ ui, pathOptions: { cwd: fixture.projectDir, homeDir: fixture.homeDir } });
-      const projectRegistry = JSON.parse(readFileSync(join(fixture.homeDir, ".zbrain", "projects.json"), "utf8")) as {
-        projects: Array<{ project_root: string; runtimes?: string[] }>;
-      };
-      const projectEntry = projectRegistry.projects.find((entry) => entry.project_root === fixture.projectDir);
+      const db3 = openDb(join(fixture.homeDir, ".zbrain"));
+      const projectEntry = readProject(db3, fixture.projectDir);
 
       expect(readFileSync(join(fixture.projectDir, "AGENTS.md"), "utf8")).toContain("# Existing Codex Rules");
       expect(readFileSync(join(fixture.projectDir, "AGENTS.md"), "utf8")).toContain("# zbrain Integration");
@@ -277,9 +281,11 @@ describe("phase 4 command integrations", () => {
       });
 
       const evidenceRoot = join(fixture.homeDir, ".zbrain", "workspaces", "programming", "evidence");
-      const sourceFile = join(evidenceRoot, "sources", "2026-05-25-paste-runtime-note", "source.yaml");
-      expect(readFileSync(sourceFile, "utf8")).toContain("label: Runtime note");
-      expect(readFileSync(join(evidenceRoot, "_index.md"), "utf8")).toContain("2026-05-25-paste-runtime-note");
+      const rawFile = join(evidenceRoot, "sources", "2026-05-25-paste-runtime-note", "raw.md");
+      expect(existsSync(rawFile)).toBe(true);
+      const db4 = openDb(join(fixture.homeDir, ".zbrain"));
+      const evidenceRow = readEvidence(db4, "programming", "2026-05-25-paste-runtime-note");
+      expect(evidenceRow?.label).toBe("Runtime note");
       expect(ui.notes.join("\n")).toContain("next: zbrain ingest analyze 2026-05-25-paste-runtime-note");
     } finally {
       rmSync(fixture.root, { recursive: true, force: true });
@@ -437,7 +443,8 @@ describe("interactive mode", () => {
       });
       await runInteractive({ ui, pathOptions: { cwd: fixture.projectDir, homeDir: fixture.homeDir } });
 
-      expect(existsSync(join(fixture.homeDir, ".zbrain", "projects.json"))).toBe(true);
+      const db5 = openDb(join(fixture.homeDir, ".zbrain"));
+      expect(readProject(db5, fixture.projectDir)).not.toBeNull();
     } finally {
       rmSync(fixture.root, { recursive: true, force: true });
     }

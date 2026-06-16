@@ -4,6 +4,7 @@ import { Command } from "commander";
 import { assertRuntimeReady, createCommandContext } from "./helpers";
 import { clackUi, type CommandUi } from "./ui";
 import { ingestEvidence } from "../core/evidence-ingest";
+import { openDb } from "../core/db";
 import { resolveActiveWorkspace } from "../core/workspace-resolver";
 import type { RuntimePathOptions, RuntimePaths } from "../core/runtime-paths";
 
@@ -73,7 +74,8 @@ export async function runLearn(options: LearnCommandOptions = {}): Promise<void>
   ui.intro("zbrain learn");
   const spinner = ui.spinner();
   spinner.start("Recording source");
-  const result = ingestEvidence(context.paths, {
+  const db = openDb(context.paths.runtimeDir);
+  const result = ingestEvidence(db, context.paths, {
     workspace,
     sourceType,
     origin,

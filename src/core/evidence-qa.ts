@@ -1,12 +1,12 @@
+import type { Database } from "bun:sqlite";
 import { writeTextFile, readTextFile } from "./fs";
 import { type RuntimePaths } from "./runtime-paths";
 import {
   evidenceLocations,
-  parseSourceRecord,
-  updateEvidenceIndex,
   verifiedFactsMarkdown,
   type VerifiedFactRecord,
 } from "./evidence-store";
+import { readEvidence, updateEvidenceState } from "./db-evidence";
 import {
   assertCitationCoverage,
   assertValidEvidenceTransition,
@@ -32,12 +32,20 @@ function qaStateFromQuestions(questions: EvidenceQuestion[]): "qa_in_progress" |
   return "qa_done";
 }
 
-export function completeEvidenceQa(paths: RuntimePaths, options: CompleteEvidenceQaOptions): { state: string } {
+export function completeEvidenceQa(
+  db: Database,
+  paths: RuntimePaths,
+  options: CompleteEvidenceQaOptions,
+): { state: string } {
   const nowIso = options.nowIso ?? new Date().toISOString();
   const locations = evidenceLocations(paths, options.workspace, options.evidenceId);
-  const sourceRecord = parseSourceRecord(readTextFile(locations.sourceFile));
+  const row = readEvidence(db, options.workspace, options.evidenceId);
 
-  assertWorkspaceLock(sourceRecord.workspace_at_ingest, options.workspace);
+  if (!row) {
+    throw new Error(`Evidence not found: ${options.evidenceId} in workspace ${options.workspace}`);
+  }
+
+  assertWorkspaceLock(row.workspace_at_ingest, options.workspace);
   assertValidEvidenceTransition("analyzed", qaStateFromQuestions(options.questions));
   assertCitationCoverage(
     options.facts.map((fact) => ({ questionId: fact.questionId, wikiPath: fact.wikiPath })),
@@ -53,6 +61,6 @@ export function completeEvidenceQa(paths: RuntimePaths, options: CompleteEvidenc
   writeTextFile(locations.verifiedFactsFile, verifiedFactsMarkdown(options.facts), { overwrite: true });
 
   const state = qaStateFromQuestions(options.questions);
-  updateEvidenceIndex(locations.indexFile, options.evidenceId, state, nowIso);
+  updateEvidenceState(db, options.workspace, options.evidenceId, state, nowIso);
   return { state };
 }

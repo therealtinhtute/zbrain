@@ -8,7 +8,6 @@ import {
   parseProjectRegistry,
   readGlobalConfig,
   readProjectPointer,
-  readProjectRegistry,
 } from "../../src/core/config";
 import { projectBindingSchema, projectPointerSchema } from "../../src/schemas/config";
 
@@ -23,7 +22,6 @@ describe("config parsing", () => {
     try {
       expect(readGlobalConfig(join(baseDir, "config.yml"))).toEqual({});
       expect(readProjectPointer(join(baseDir, "zbrain.json"))).toBeNull();
-      expect(readProjectRegistry(join(baseDir, "projects.json"))).toEqual({ projects: [] });
     } finally {
       rmSync(baseDir, { recursive: true, force: true });
     }
@@ -58,7 +56,6 @@ describe("config parsing", () => {
       });
       expect(readProjectPointer(pointerFile)).toEqual({ workspace: "finance" });
       expect(parseProjectPointer("{\"workspace\":\"health\"}")).toEqual({ workspace: "health" });
-      expect(readProjectRegistry(registryFile).projects[0]?.workspace).toBe("finance");
       expect(parseProjectRegistry("{\"projects\":[]}")).toEqual({ projects: [] });
     } finally {
       rmSync(baseDir, { recursive: true, force: true });

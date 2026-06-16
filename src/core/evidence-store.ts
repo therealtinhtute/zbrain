@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { existsSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import YAML from "js-yaml";
-import { ensureDir, pathInside, readTextFile, writeTextFile } from "./fs";
+import { ensureDir, pathInside } from "./fs";
 import { type RuntimePaths } from "./runtime-paths";
 
 export interface EvidenceLocationSet {
@@ -125,76 +125,12 @@ export function buildSourceRecord(input: Omit<EvidenceSourceRecord, "raw_sha256"
   };
 }
 
-export function serializeSourceRecord(record: EvidenceSourceRecord): string {
-  return YAML.dump(record, { noRefs: true });
-}
-
-export function parseSourceRecord(contents: string): EvidenceSourceRecord {
-  return YAML.load(contents) as EvidenceSourceRecord;
-}
-
-export function verifySourceRecordIntegrity(record: EvidenceSourceRecord, rawContent: string): void {
-  const { source_sha256, ...withoutFingerprint } = record;
-  const expectedSourceSha = fingerprintSourceRecord(withoutFingerprint);
-  if (source_sha256 !== expectedSourceSha) {
-    throw new Error("Immutable source violation: source.yaml fingerprint mismatch");
-  }
-
-  if (record.raw_sha256 !== sha256(rawContent)) {
-    throw new Error("Immutable source violation: raw.md fingerprint mismatch");
-  }
-}
-
 export function ensureEvidenceDirectories(locations: EvidenceLocationSet): void {
   ensureDir(locations.sourceDir);
   ensureDir(locations.analysisDir);
   ensureDir(locations.qaDir);
   ensureDir(locations.appliedDir);
   ensureDir(locations.archiveDir);
-}
-
-export function initializeEvidenceIndex(indexFile: string): void {
-  if (existsSync(indexFile)) {
-    return;
-  }
-
-  writeTextFile(
-    indexFile,
-    [
-      "# Evidence Index",
-      "",
-      "| id | state | updated_at |",
-      "| --- | --- | --- |",
-      "",
-      "## State Legend",
-      "",
-      "- `ingested`",
-      "- `analyzed`",
-      "- `qa_in_progress`",
-      "- `qa_awaiting_external`",
-      "- `qa_done`",
-      "- `applied`",
-      "- `archived`",
-      "",
-    ].join("\n"),
-    { overwrite: true },
-  );
-}
-
-export function updateEvidenceIndex(indexFile: string, evidenceId: string, state: string, updatedAt: string): void {
-  initializeEvidenceIndex(indexFile);
-  const contents = readTextFile(indexFile);
-  const rowPattern = new RegExp(`\\| ${evidenceId.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")} \\| .* \\| .* \\|`);
-  const row = `| ${evidenceId} | ${state} | ${updatedAt} |`;
-
-  if (rowPattern.test(contents)) {
-    writeTextFile(indexFile, contents.replace(rowPattern, row), { overwrite: true });
-    return;
-  }
-
-  const marker = "| --- | --- | --- |";
-  const next = contents.replace(marker, `${marker}\n${row}`);
-  writeTextFile(indexFile, next, { overwrite: true });
 }
 
 export interface VerifiedFactRecord {

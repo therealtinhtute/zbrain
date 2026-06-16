@@ -9,10 +9,11 @@ const expectedSkills: Record<string, string> = {
   "zbrain-ask": "zbrain:ask",
   "zbrain-ingest": "zbrain:ingest",
   "zbrain-learn": "zbrain:learn",
+  "zbrain-research": "zbrain:research",
 };
 
 describe("skill assets", () => {
-  test("ships only the three public zbrain skill directories", () => {
+  test("ships only the four public zbrain skill directories", () => {
     const dirs = readdirSync(skillsRoot).sort();
     expect(dirs).toEqual(Object.keys(expectedSkills).sort());
   });

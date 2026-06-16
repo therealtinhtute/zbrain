@@ -12,6 +12,8 @@ import { applyEvidence } from "../../src/core/evidence-apply";
 import { completeEvidenceQa } from "../../src/core/evidence-qa";
 import { retrieveWorkspaceContext } from "../../src/core/retrieval";
 import { resolveRuntimePaths } from "../../src/core/runtime-paths";
+import { openDb } from "../../src/core/db";
+import { readProject } from "../../src/core/db-projects";
 
 class FakeUi implements CommandUi {
   confirms: boolean[] = [];
@@ -73,12 +75,13 @@ describe("release acceptance path", () => {
         nowIso: "2026-05-25T03:10:00.000Z",
       });
       const evidenceId = "2026-05-25-paste-acceptance-note";
-      analyzeEvidence(paths, {
+      const db = openDb(paths.runtimeDir);
+      analyzeEvidence(db, paths, {
         workspace: "programming",
         evidenceId,
         nowIso: "2026-05-25T03:11:00.000Z",
       });
-      completeEvidenceQa(paths, {
+      completeEvidenceQa(db, paths, {
         workspace: "programming",
         evidenceId,
         nowIso: "2026-05-25T03:12:00.000Z",
@@ -92,7 +95,7 @@ describe("release acceptance path", () => {
         ],
       });
 
-      applyEvidence(paths, {
+      applyEvidence(db, paths, {
         workspace: "programming",
         evidenceId,
         nowIso: "2026-05-25T03:13:00.000Z",
@@ -124,7 +127,7 @@ describe("release acceptance path", () => {
         },
       );
 
-      expect(readFileSync(join(homeDir, ".zbrain", "projects.json"), "utf8")).toContain("\"workspace\": \"programming\"");
+      expect(readProject(db, projectDir)?.workspace).toBe("programming");
       expect(readFileSync(join(paths.workspacesDir, "programming", "axioms", "reversible-changes.md"), "utf8")).toContain("Reversible Changes");
       expect(retrieval.markdown).toContain("Prefer small reversible changes");
       expect(readFileSync(retrieval.filePath, "utf8")).toContain("Workspace: programming");

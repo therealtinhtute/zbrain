@@ -1,4 +1,5 @@
 import { existsSync } from "node:fs";
+import type { Database } from "bun:sqlite";
 import YAML from "js-yaml";
 import { validateQAGate, assertWorkspaceLock, assertCitationCoverage, type EvidenceQuestion } from "./evidence-state";
 import { readTextFile, writeTextFile } from "./fs";
@@ -6,10 +7,8 @@ import { type RuntimePaths } from "./runtime-paths";
 import {
   assertWorkspaceTarget,
   evidenceLocations,
-  parseSourceRecord,
-  updateEvidenceIndex,
-  verifySourceRecordIntegrity,
 } from "./evidence-store";
+import { readEvidence, verifyEvidenceIntegrity, updateEvidenceState } from "./db-evidence";
 
 export interface ApplyMutation {
   relativePath: string;
@@ -61,14 +60,22 @@ function injectResourceIfMissing(content: string, resource: string): string {
   return content.replace(match[0], `---\n${newFm}\n---\n`);
 }
 
-export function applyEvidence(paths: RuntimePaths, options: ApplyEvidenceOptions): { applied: string[] } {
+export function applyEvidence(
+  db: Database,
+  paths: RuntimePaths,
+  options: ApplyEvidenceOptions,
+): { applied: string[] } {
   const nowIso = options.nowIso ?? new Date().toISOString();
   const locations = evidenceLocations(paths, options.workspace, options.evidenceId);
   const rawContent = readTextFile(locations.rawFile);
-  const sourceRecord = parseSourceRecord(readTextFile(locations.sourceFile));
+  const row = readEvidence(db, options.workspace, options.evidenceId);
 
-  verifySourceRecordIntegrity(sourceRecord, rawContent);
-  assertWorkspaceLock(sourceRecord.workspace_at_ingest, options.workspace);
+  if (!row) {
+    throw new Error(`Evidence not found: ${options.evidenceId} in workspace ${options.workspace}`);
+  }
+
+  verifyEvidenceIntegrity(db, options.workspace, options.evidenceId, rawContent);
+  assertWorkspaceLock(row.workspace_at_ingest, options.workspace);
   validateQAGate(options.questions);
   assertCitationCoverage(options.mutations.flatMap((mutation) => mutation.citations));
 
@@ -85,7 +92,7 @@ export function applyEvidence(paths: RuntimePaths, options: ApplyEvidenceOptions
 
     const target = assertWorkspaceTarget(locations.workspaceRoot, mutation.relativePath);
     const content = target.endsWith(".md")
-      ? injectResourceIfMissing(mutation.content, sourceRecord.origin)
+      ? injectResourceIfMissing(mutation.content, row.origin)
       : mutation.content;
     writeTextFile(target, content, { overwrite: true });
     checkpoint.completed_paths.push(mutation.relativePath);
@@ -112,7 +119,7 @@ export function applyEvidence(paths: RuntimePaths, options: ApplyEvidenceOptions
     mutations: options.mutations.map((mutation) => mutation.relativePath),
   };
   writeTextFile(locations.manifestFile, YAML.dump(manifest, { noRefs: true }), { overwrite: true });
-  updateEvidenceIndex(locations.indexFile, options.evidenceId, "applied", nowIso);
+  updateEvidenceState(db, options.workspace, options.evidenceId, "applied", nowIso);
   options.reindex?.(options.workspace);
 
   return { applied: checkpoint.completed_paths };

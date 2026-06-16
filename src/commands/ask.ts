@@ -2,6 +2,7 @@ import { Command } from "commander";
 import { assertRuntimeReady, createCommandContext } from "./helpers";
 import { clackUi, type CommandUi } from "./ui";
 import { readProjectBinding } from "../core/config";
+import { openDb } from "../core/db";
 import { retrieveMultiWorkspaceContext, retrieveWorkspaceContext, type RetrievalAdapter } from "../core/retrieval";
 import { resolveActiveWorkspace } from "../core/workspace-resolver";
 import type { RuntimePathOptions } from "../core/runtime-paths";
@@ -20,7 +21,8 @@ export async function runAsk(query: string, options: AskCommandOptions = {}): Pr
   assertRuntimeReady(context.paths);
 
   const active = options.workspace ?? resolveActiveWorkspace(context.paths).name;
-  const projectBinding = readProjectBinding(context.paths.projectRegistryFile, context.paths.cwd);
+  const db = openDb(context.paths.runtimeDir);
+  const projectBinding = readProjectBinding(db, context.paths.cwd);
   const secondaries = options.workspace ? [] : projectBinding?.secondary_workspaces ?? [];
   const limit = typeof options.limit === "string" ? Number(options.limit) : options.limit;
 

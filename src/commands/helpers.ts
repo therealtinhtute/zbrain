@@ -1,6 +1,7 @@
 import { existsSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { basename, dirname, join, resolve } from "node:path";
 import { spawnSync } from "node:child_process";
+import type { Database } from "bun:sqlite";
 import { extractBundledAssets, type AssetExtractionResult } from "../core/assets";
 import { readGlobalConfig, upsertProjectBinding, writeGlobalConfig } from "../core/config";
 import { currentTaskFilePath } from "../core/current-task";
@@ -200,13 +201,14 @@ function syncAssetGroup(sourceDir: string, destinationDir: string): string[] {
 }
 
 export function initProject(
+  db: Database,
   paths: RuntimePaths,
   selection: InitSelection,
 ): { created: string[]; updated: string[] } {
   const created: string[] = [];
   const updated: string[] = [];
   const runtimes = selectedRuntimes(selection.injectTargets);
-  upsertProjectBinding(paths.projectRegistryFile, {
+  upsertProjectBinding(db, {
     project_root: paths.cwd,
     workspace: selection.workspace,
     context_file: currentTaskFilePath(paths),

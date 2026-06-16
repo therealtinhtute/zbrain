@@ -1,16 +1,26 @@
+import type { Database } from "bun:sqlite";
 import { readTextFile, writeTextFile } from "./fs";
 import { type RuntimePaths } from "./runtime-paths";
-import { evidenceLocations, parseSourceRecord, updateEvidenceIndex, verifySourceRecordIntegrity } from "./evidence-store";
+import { evidenceLocations } from "./evidence-store";
+import { readEvidence, verifyEvidenceIntegrity, updateEvidenceState } from "./db-evidence";
 import { assertWorkspaceLock, assertValidEvidenceTransition } from "./evidence-state";
 
-export function analyzeEvidence(paths: RuntimePaths, options: { workspace: string; evidenceId: string; nowIso?: string }): string[] {
+export function analyzeEvidence(
+  db: Database,
+  paths: RuntimePaths,
+  options: { workspace: string; evidenceId: string; nowIso?: string },
+): string[] {
   const nowIso = options.nowIso ?? new Date().toISOString();
   const locations = evidenceLocations(paths, options.workspace, options.evidenceId);
   const rawContent = readTextFile(locations.rawFile);
-  const sourceRecord = parseSourceRecord(readTextFile(locations.sourceFile));
+  const row = readEvidence(db, options.workspace, options.evidenceId);
 
-  verifySourceRecordIntegrity(sourceRecord, rawContent);
-  assertWorkspaceLock(sourceRecord.workspace_at_ingest, options.workspace);
+  if (!row) {
+    throw new Error(`Evidence not found: ${options.evidenceId} in workspace ${options.workspace}`);
+  }
+
+  verifyEvidenceIntegrity(db, options.workspace, options.evidenceId, rawContent);
+  assertWorkspaceLock(row.workspace_at_ingest, options.workspace);
   assertValidEvidenceTransition("ingested", "analyzed");
 
   const preview = rawContent.split("\n").slice(0, 5).join("\n");
@@ -28,6 +38,6 @@ export function analyzeEvidence(paths: RuntimePaths, options: { workspace: strin
     written.push(filePath);
   }
 
-  updateEvidenceIndex(locations.indexFile, options.evidenceId, "analyzed", nowIso);
+  updateEvidenceState(db, options.workspace, options.evidenceId, "analyzed", nowIso);
   return written;
 }

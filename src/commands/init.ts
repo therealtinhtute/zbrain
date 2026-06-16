@@ -1,4 +1,5 @@
 import { assertRuntimeReady, createCommandContext, initProject, listWorkspaceNames, updateRuntime } from "./helpers";
+import { openDb } from "../core/db";
 import { clackUi, type CommandUi } from "./ui";
 import type { RuntimePathOptions } from "../core/runtime-paths";
 
@@ -40,7 +41,8 @@ export async function runInit(options: InitCommandOptions = {}): Promise<void> {
 
   const spinner = ui.spinner();
   spinner.start("Integrating project");
-  const result = initProject(context.paths, { workspace, injectTargets });
+  const db = openDb(context.paths.runtimeDir);
+  const result = initProject(db, context.paths, { workspace, injectTargets });
   const runtimes = [
     injectTargets.some((target) => ["claude_rules", "skills", "agents", "mcp"].includes(target)) ? "claude" : null,
     injectTargets.includes("codex_rules") ? "codex" : null,

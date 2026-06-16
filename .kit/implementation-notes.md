@@ -1,3 +1,74 @@
+# Implementation Notes: SQLite Migration (p8 + p9-core)
+
+**Spec:** `.kit/planning/SPEC-sqlite.md`
+**Phases:** p8-sqlite-core-db, p9-sqlite-session-memory (partial)
+**Result:** 131/131 tests pass, 0 type errors
+
+---
+
+## Decisions Not in the Spec
+
+### 1. `resolveActiveWorkspace` calls `initDb`, not `openDb`
+
+The spec said "open the DB and query projects." `openDb` just opens the file without creating the schema. Any caller that hadn't run `zbrain setup` first got a hard crash: `SQLiteError: no such table: projects`.
+
+Fixed by using `initDb` in `workspace-resolver.ts`. Since `initDb` uses `CREATE TABLE IF NOT EXISTS` everywhere, calling it multiple times is free. The version guard (`user_version > SCHEMA_VERSION → throw`) is also desirable here — fail loudly if the CLI is older than the DB.
+
+**Tradeoff**: slight "auto-migrate" behavior on first use; intentional.
+
+---
+
+### 2. `source_sha256` hardcodes `state: "ingested"` during verification
+
+`source_sha256` is computed at ingest time over a struct that includes `state: "ingested"`. After state transitions, the DB row's `state` column changes but `source_sha256` is fixed.
+
+`verifyEvidenceIntegrity` reconstructs the original record by hardcoding `state: "ingested"` regardless of the current row state. This matches how the hash was originally computed and ensures integrity checks don't break after transitions.
+
+---
+
+### 3. `projects.json` is no longer written
+
+The old code wrote `~/.zbrain/projects.json` on every `zbrain init`. The new `upsertProjectBinding` writes to the DB only. Any external tooling that read that file needs to use the DB instead.
+
+Six test files had assertions against `projects.json` that all needed to be updated to use `readProject(db, path)`.
+
+---
+
+### 4. `source.yaml` is no longer written on ingest
+
+`ingestEvidence` now writes only `raw.md`. All metadata goes to the DB. The `_index.md` in `evidence/` is still scaffolded by `createWorkspaceScaffold` but never updated by the pipeline.
+
+Tests that read `source.yaml` or `_index.md` were updated to use `readEvidence(db, workspace, id)` or check `raw.md`.
+
+---
+
+### 5. DB parameter threading — one exception
+
+Most core functions receive `db: Database` as their first parameter. `resolveActiveWorkspace` opens the DB internally because it's called from dozens of places and always has access to `paths.runtimeDir`. Requiring callers to pass a DB would ripple through every command.
+
+---
+
+## Tests Changed Beyond the Planned Scope
+
+| File | What changed |
+|------|-------------|
+| `tests/core/config.test.ts` | Removed `readProjectRegistry` (now DB-based; already tested in `db-projects.test.ts`) |
+| `tests/core/workspace-resolver.test.ts` | Test 1 uses DB insertion instead of writing `projects.json`; all tests work because `initDb` is called by the resolver |
+| `tests/evidence/evidence-pipeline.test.ts` | Full rewrite: `initDb` in fixture, `db` param to all calls, replaced `source.yaml`/`_index.md` assertions with DB queries |
+| `tests/release/acceptance.test.ts` | `db` param to evidence functions, `projects.json` check replaced with DB query |
+| `tests/commands.integration.test.ts` | All `projects.json` reads → `readProject(db, path)`, `source.yaml` check → `raw.md` + DB row check |
+| `tests/assets/commands.test.ts` | Added `zbrain-research` to expected skills (was added in a prior commit, test was never updated) |
+
+---
+
+## What Still Needs to Happen
+
+1. **Migration script** (`scripts/migrate-to-db.ts`): reads existing `projects.json` + `source.yaml` files → seeds the DB. Not yet written.
+2. **Binary smoke test**: `bun run build && ZBRAIN_HOME=/tmp/zbrain-smoke ./dist/zbrain setup && ls /tmp/zbrain-smoke/zbrain.db`
+3. **Phase p9 (session memory)**: `db-sessions.ts` with `upsertSession`, `insertQuery`, `listRecentQueries`; wire into `ask.ts` to persist query history.
+
+---
+
 # Implementation Notes: Multi-Workspace Context Loading
 
 **Spec:** `.kit/planning/multi-workspace-context.md`

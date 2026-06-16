@@ -4,6 +4,8 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { resolveActiveWorkspace, WorkspaceResolutionError } from "../../src/core/workspace-resolver";
 import { resolveRuntimePaths } from "../../src/core/runtime-paths";
+import { initDb } from "../../src/core/db";
+import { upsertProject } from "../../src/core/db-projects";
 
 function createRuntimeFixture() {
   const rootDir = join(tmpdir(), `zbrain-resolver-${Date.now()}-${Math.random()}`);
@@ -26,18 +28,13 @@ describe("resolveActiveWorkspace", () => {
       mkdirSync(join(fixture.runtimeDir, "workspaces", "programming"));
       mkdirSync(join(fixture.runtimeDir, "workspaces", "finance"));
       writeFileSync(join(fixture.runtimeDir, "config.yml"), "default_workspace: programming\n");
-      writeFileSync(
-        join(fixture.runtimeDir, "projects.json"),
-        JSON.stringify({
-          projects: [
-            {
-              project_root: fixture.projectDir,
-              workspace: "finance",
-              context_file: join(fixture.runtimeDir, "projects", "abc", "current-task.md"),
-            },
-          ],
-        }),
-      );
+      const db = initDb(fixture.runtimeDir);
+      upsertProject(db, {
+        project_root: fixture.projectDir,
+        workspace: "finance",
+        context_file: join(fixture.runtimeDir, "projects", "abc", "current-task.md"),
+        runtimes: [],
+      }, "2026-01-01T00:00:00.000Z");
 
       const resolved = resolveActiveWorkspace(
         resolveRuntimePaths({ cwd: fixture.projectDir, runtimeDir: fixture.runtimeDir }),

@@ -1,7 +1,5 @@
-import { existsSync } from "node:fs";
-import { evidenceLocations, parseSourceRecord } from "./evidence-store";
-import { readTextFile } from "./fs";
-import { type RuntimePaths } from "./runtime-paths";
+import type { Database } from "bun:sqlite";
+import { listEvidence } from "./db-evidence";
 
 export interface EvidenceListItem {
   id: string;
@@ -22,35 +20,14 @@ const nextCommandByState: Record<string, (id: string) => string | null> = {
   archived: () => null,
 };
 
-export function listEvidenceItems(paths: RuntimePaths, workspace: string): EvidenceListItem[] {
-  const locations = evidenceLocations(paths, workspace, "seed");
-  if (!existsSync(locations.indexFile)) {
-    return [];
-  }
-
-  const rows = readTextFile(locations.indexFile)
-    .split("\n")
-    .map((line) => line.match(/^\| ([^|]+) \| ([^|]+) \| ([^|]+) \|$/))
-    .filter((match): match is RegExpMatchArray => match !== null)
-    .map((match) => ({
-      id: match[1]!.trim(),
-      state: match[2]!.trim(),
-      updatedAt: match[3]!.trim(),
-    }))
-    .filter((row) => row.id !== "id" && row.id !== "---" && row.id !== "seed");
-
-  return rows.flatMap((row) => {
-    const itemLocations = evidenceLocations(paths, workspace, row.id);
-    if (!existsSync(itemLocations.sourceFile)) {
-      return [];
-    }
-
-    const sourceRecord = parseSourceRecord(readTextFile(itemLocations.sourceFile));
-    return [{
-      ...row,
-      label: sourceRecord.label ?? null,
-      sourceType: sourceRecord.type ?? null,
-      nextCommand: nextCommandByState[row.state]?.(row.id) ?? null,
-    }];
-  });
+export function listEvidenceItems(db: Database, workspace: string): EvidenceListItem[] {
+  const rows = listEvidence(db, workspace);
+  return rows.map((row) => ({
+    id: row.id,
+    state: row.state,
+    updatedAt: row.state_updated_at,
+    label: row.label,
+    sourceType: row.source_type,
+    nextCommand: nextCommandByState[row.state]?.(row.id) ?? null,
+  }));
 }

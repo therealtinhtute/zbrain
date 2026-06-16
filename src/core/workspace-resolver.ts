@@ -1,6 +1,7 @@
 import { existsSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { readGlobalConfig, readProjectBinding, readProjectPointer } from "./config";
+import { initDb } from "./db";
 import { type RuntimePaths } from "./runtime-paths";
 
 export type WorkspaceResolutionSource = "project_registry" | "legacy_project_pointer" | "global_config" | "single_workspace_auto";
@@ -41,7 +42,8 @@ function assertWorkspaceExists(workspacesDir: string, workspaceName: string, sou
 }
 
 export function resolveActiveWorkspace(paths: RuntimePaths): ResolvedWorkspace {
-  const projectBinding = readProjectBinding(paths.projectRegistryFile, paths.cwd);
+  const db = initDb(paths.runtimeDir);
+  const projectBinding = readProjectBinding(db, paths.cwd);
 
   if (projectBinding) {
     return assertWorkspaceExists(paths.workspacesDir, projectBinding.workspace, "project_registry");

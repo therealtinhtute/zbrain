@@ -7,6 +7,8 @@ import { analyzeEvidence } from "../../src/core/evidence-analyze";
 import { ingestEvidence } from "../../src/core/evidence-ingest";
 import { completeEvidenceQa } from "../../src/core/evidence-qa";
 import { resolveRuntimePaths } from "../../src/core/runtime-paths";
+import { initDb } from "../../src/core/db";
+import { readEvidence } from "../../src/core/db-evidence";
 
 function createWorkspaceFixture() {
   const root = mkdtempSync(join(tmpdir(), "zbrain-evidence-"));
@@ -17,7 +19,8 @@ function createWorkspaceFixture() {
   mkdirSync(join(workspaceRoot, "projects"), { recursive: true });
   mkdirSync(join(workspaceRoot, "decisions"), { recursive: true });
   mkdirSync(join(workspaceRoot, "evidence"), { recursive: true });
-  return { root, paths: resolveRuntimePaths({ cwd: root, runtimeDir }) };
+  const db = initDb(runtimeDir);
+  return { root, paths: resolveRuntimePaths({ cwd: root, runtimeDir }), db };
 }
 
 describe("evidence pipeline", () => {
@@ -25,7 +28,7 @@ describe("evidence pipeline", () => {
     const fixture = createWorkspaceFixture();
 
     try {
-      const ingested = ingestEvidence(fixture.paths, {
+      const ingested = ingestEvidence(fixture.db, fixture.paths, {
         workspace: "programming",
         sourceType: "paste",
         origin: "inline",
@@ -35,10 +38,9 @@ describe("evidence pipeline", () => {
       });
 
       expect(existsSync(ingested.rawFile)).toBe(true);
-      expect(readFileSync(ingested.sourceFile, "utf8")).toContain("workspace_at_ingest: programming");
-      expect(
-        readFileSync(join(fixture.paths.workspacesDir, "programming", "evidence", "_index.md"), "utf8"),
-      ).toContain("| 2026-05-25-paste-solid-note | ingested | 2026-05-25T02:00:00.000Z |");
+      const row = readEvidence(fixture.db, "programming", ingested.evidenceId);
+      expect(row?.workspace_at_ingest).toBe("programming");
+      expect(row?.state).toBe("ingested");
     } finally {
       rmSync(fixture.root, { recursive: true, force: true });
     }
@@ -48,7 +50,7 @@ describe("evidence pipeline", () => {
     const fixture = createWorkspaceFixture();
 
     try {
-      const ingested = ingestEvidence(fixture.paths, {
+      const ingested = ingestEvidence(fixture.db, fixture.paths, {
         workspace: "programming",
         sourceType: "paste",
         origin: "inline",
@@ -57,12 +59,12 @@ describe("evidence pipeline", () => {
         nowIso: "2026-05-25T02:00:00.000Z",
       });
 
-      const analysisFiles = analyzeEvidence(fixture.paths, {
+      const analysisFiles = analyzeEvidence(fixture.db, fixture.paths, {
         workspace: "programming",
         evidenceId: ingested.evidenceId,
         nowIso: "2026-05-25T02:05:00.000Z",
       });
-      const qa = completeEvidenceQa(fixture.paths, {
+      const qa = completeEvidenceQa(fixture.db, fixture.paths, {
         workspace: "programming",
         evidenceId: ingested.evidenceId,
         nowIso: "2026-05-25T02:10:00.000Z",
@@ -94,7 +96,7 @@ describe("evidence pipeline", () => {
     const reindexed: string[] = [];
 
     try {
-      const ingested = ingestEvidence(fixture.paths, {
+      const ingested = ingestEvidence(fixture.db, fixture.paths, {
         workspace: "programming",
         sourceType: "paste",
         origin: "inline",
@@ -102,12 +104,12 @@ describe("evidence pipeline", () => {
         rawContent: "Checkpoint every mutation.",
         nowIso: "2026-05-25T02:00:00.000Z",
       });
-      analyzeEvidence(fixture.paths, {
+      analyzeEvidence(fixture.db, fixture.paths, {
         workspace: "programming",
         evidenceId: ingested.evidenceId,
         nowIso: "2026-05-25T02:05:00.000Z",
       });
-      completeEvidenceQa(fixture.paths, {
+      completeEvidenceQa(fixture.db, fixture.paths, {
         workspace: "programming",
         evidenceId: ingested.evidenceId,
         nowIso: "2026-05-25T02:10:00.000Z",
@@ -116,7 +118,7 @@ describe("evidence pipeline", () => {
       });
 
       expect(() =>
-        applyEvidence(fixture.paths, {
+        applyEvidence(fixture.db, fixture.paths, {
           workspace: "programming",
           evidenceId: ingested.evidenceId,
           nowIso: "2026-05-25T02:15:00.000Z",
@@ -137,7 +139,7 @@ describe("evidence pipeline", () => {
         }),
       ).toThrow("Simulated apply interruption");
 
-      const resumed = applyEvidence(fixture.paths, {
+      const resumed = applyEvidence(fixture.db, fixture.paths, {
         workspace: "programming",
         evidenceId: ingested.evidenceId,
         nowIso: "2026-05-25T02:20:00.000Z",
@@ -169,7 +171,7 @@ describe("evidence pipeline", () => {
     const fixture = createWorkspaceFixture();
 
     try {
-      const ingested = ingestEvidence(fixture.paths, {
+      const ingested = ingestEvidence(fixture.db, fixture.paths, {
         workspace: "programming",
         sourceType: "paste",
         origin: "inline",
@@ -177,14 +179,14 @@ describe("evidence pipeline", () => {
         rawContent: "Never bypass QA.",
         nowIso: "2026-05-25T02:00:00.000Z",
       });
-      analyzeEvidence(fixture.paths, {
+      analyzeEvidence(fixture.db, fixture.paths, {
         workspace: "programming",
         evidenceId: ingested.evidenceId,
         nowIso: "2026-05-25T02:05:00.000Z",
       });
 
       expect(() =>
-        applyEvidence(fixture.paths, {
+        applyEvidence(fixture.db, fixture.paths, {
           workspace: "programming",
           evidenceId: ingested.evidenceId,
           questions: [{ id: "q-1", severity: "P0", status: "awaiting_external" }],
@@ -199,7 +201,7 @@ describe("evidence pipeline", () => {
       ).toThrow();
 
       expect(() =>
-        applyEvidence(fixture.paths, {
+        applyEvidence(fixture.db, fixture.paths, {
           workspace: "finance",
           evidenceId: ingested.evidenceId,
           questions: [{ id: "q-1", severity: "P0", status: "answered" }],
