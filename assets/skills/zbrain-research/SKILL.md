@@ -2,7 +2,6 @@
 name: zbrain:research
 description: Search the web for a topic, fetch top sources, and record each as an evidence item in the active workspace. Use before zbrain:ingest to populate evidence from the internet or docs.
 argument-hint: "[topic]"
-disable-model-invocation: true
 version: "1.2.0"
 ---
 

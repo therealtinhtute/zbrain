@@ -1,7 +1,6 @@
 ---
 name: zbrain:ingest
 description: Process learned evidence through list, analyze, qa, and apply. Use after zbrain:learn has created an evidence source.
-disable-model-invocation: true
 version: "2.0.0"
 ---
 

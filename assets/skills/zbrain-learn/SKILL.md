@@ -1,7 +1,6 @@
 ---
 name: zbrain:learn
 description: Receive new learning material and record it as an immutable evidence source in the active workspace.
-disable-model-invocation: true
 version: "4.0.0"
 ---
 
