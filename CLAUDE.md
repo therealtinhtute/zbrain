@@ -11,6 +11,13 @@ Runtime root: `~/.zbrain/`
 
 ---
 
+## Prerequisites
+
+`qmd` is required for the retrieval pipeline (`zbrain ask`). Install once:
+```bash
+npm i -g @tobilu/qmd
+```
+
 ## Commands
 
 ```bash
@@ -37,6 +44,13 @@ bun run src/index.ts ingest list
 bun run src/index.ts ask "question"
 ```
 
+Binary smoke test (isolated from `~/.zbrain`):
+```bash
+ZBRAIN_HOME=/tmp/zbrain-smoke ./dist/zbrain setup
+```
+
+`ZBRAIN_HOME` overrides the default `~/.zbrain` runtime directory everywhere — useful for test isolation and smoke runs.
+
 ## Architecture
 
 ### Three Layers
@@ -49,11 +63,19 @@ dist/zbrain (binary)          ← bun build --compile
 <project>/.claude/ (project)  ← optional Claude-specific skills/agents/settings
 ```
 
-**CLI layer** (`src/commands/`) handles interactive setup and project integration. All CLI commands use `@clack/prompts` for UX (intro/outro, spinners, select, notes) — no raw `console.log`.
+**CLI layer** (`src/commands/`) handles interactive setup and project integration. All CLI commands use `@clack/prompts` for UX (intro/outro, spinners, select, notes) — no raw `console.log`. Running `zbrain` with no arguments and a TTY launches an interactive menu (`src/commands/interactive.ts`) rather than the Commander program.
 
 **Core layer** (`src/core/`) is pure logic: no I/O side effects in functions that don't explicitly take a `paths: RuntimePaths` parameter. All filesystem operations flow through `RuntimePaths` so tests can redirect to temp directories.
 
 **Asset layer** (`assets/`) is the source of truth for all runtime content: skills, agents, engine rules, templates, starter workspaces. The script `scripts/generate-bundled-assets.mjs` walks `assets/` and embeds everything as a TypeScript literal into `src/generated/bundled-assets.ts`. **Regenerate after any change to `assets/`** — the generated file is committed.
+
+Asset subdirectories:
+- `assets/engine/` — core engine rules injected into Claude's context
+- `assets/skills/` — bundled Claude Code skills (e.g. `zbrain:learn`, `zbrain:ingest`, `zbrain:ask`)
+- `assets/agents/` — agent definitions
+- `assets/templates/` — workspace scaffolding templates
+- `assets/commands/` — flat markdown files for runtime command skill definitions (frontmatter `name: zbrain:*`)
+- `assets/workspaces/` — starter workspace seed files
 
 ### Workspace and Project Pointer
 
@@ -92,6 +114,7 @@ Evidence files live in `~/.zbrain/workspaces/{workspace}/evidence/`. The `eviden
 - **Framework**: `bun:test` (`describe`/`test`/`expect`). No `vitest` at runtime despite it being listed in devDeps.
 - **Filesystem tests**: use `mkdtempSync` + `rmSync` in `finally` blocks — never mock the filesystem.
 - **Retrieval adapter injection**: `retrieveWorkspaceContext` and `retrieveMultiWorkspaceContext` accept an optional `RetrievalAdapter` argument, so tests inject a fake `searchWorkspace()` without needing `qmd` installed.
+- **CommandUi injection**: all command functions accept an optional `ui: CommandUi` (`src/commands/ui.ts`) so tests pass a stub UI without triggering interactive prompts.
 - **Test layout mirrors `src/`**: `tests/core/` ↔ `src/core/`, `tests/retrieval/` ↔ retrieval modules.
 
 ### Key Schema Types
@@ -102,3 +125,56 @@ Defined in `src/schemas/config.ts` with Zod:
 - `GlobalConfig` — `~/.zbrain/config.yml` shape
 
 Both schemas use `.passthrough()` — unknown fields survive parsing rather than throwing.
+
+## zbrain Integration
+
+zbrain is a workspace-isolated knowledge retrieval layer. Skills live in `.claude/skills/zbrain-*`.
+Runtime root: `~/.zbrain/`. Project registry: `~/.zbrain/projects.json`.
+
+### Workspace Resolution
+
+1. Read `~/.zbrain/projects.json`.
+2. Find the entry whose `project_root` matches the current project root.
+3. Use that entry's `workspace` and `context_file`.
+4. Fallback: `~/.zbrain/config.yml` → `default_workspace`.
+5. If neither resolves, stop and report — never guess a workspace.
+
+### Skill Triggers
+
+| When you need to… | Use |
+|--------------------|-----|
+| Answer domain questions (architecture, decisions, patterns) | `zbrain:ask` |
+| Record a file, URL content, pasted text, or observation | `zbrain:learn` |
+| List, analyze, QA, or apply evidence | `zbrain:ingest` |
+
+**Before answering any question about domain knowledge, project decisions, or architectural patterns — invoke `zbrain:ask` first. Never answer from memory.**
+
+### Retrieval Tier Priority
+
+`axioms/` (P0) → `mental-models/` (P1) → `projects/` (P2) → `decisions/` (P3)
+
+Higher-tier results rank first regardless of BM25 score.
+
+### Evidence Pipeline
+
+Each piece of external material moves through three public verbs:
+
+```
+learn → ingest → ask
+```
+
+Use `zbrain:ingest list` to see which stage each item is in and what command runs next.
+**Never advance to apply if any P0 or P1 question is unresolved.**
+
+### Secondary Workspaces (optional)
+
+Each project registry entry supports a `secondary_workspaces` array for cross-workspace context.
+Each entry has `workspace`, `keywords`, and optional `limit`.
+Secondary results fill remaining slots after primary results.
+
+### Invariants
+
+- **Cite all retrieved context.** Never answer domain questions from memory.
+- **One workspace per query.** Never cross workspace boundaries in a single retrieval.
+- **Evidence is immutable after ingest.** Never edit `raw.md` or `source.yaml`.
+- **Apply gate.** Block apply if any P0 or P1 QA question is `awaiting_external`.
