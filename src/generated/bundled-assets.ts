@@ -115,13 +115,5 @@ export const bundledAssets: BundledAssetRecord[] = [
   {
     "relativePath": "templates/workspace.md",
     "contents": "---\nname: \"{{workspace_name}}\"\ncreated_at: \"{{created_at}}\"\n---\n\n# Workspace\n\n## Purpose\n\nDescribe the domain boundary and what this workspace is allowed to contain.\n\n## Operating Rules\n\n- This workspace is isolated from every other workspace.\n- Retrieval, evidence, and apply operations must stay inside this workspace.\n- Facts added here must cite the originating evidence or source.\n"
-  },
-  {
-    "relativePath": "workspaces/README.md",
-    "contents": "# Starter Workspaces\n\nThis directory holds bundled starter workspace scaffolds that `zbrain setup` can extract into `~/.zbrain/workspaces/`.\n\nIncluded starters:\n\n- research\n"
-  },
-  {
-    "relativePath": "workspaces/research/workspace.md",
-    "contents": "---\nname: research\ncreated_at: \"{{created_at}}\"\n---\n\n# Research Workspace\n\nUse this workspace for web-sourced learning, evidence accumulation, and topic deep-dives. Each piece of knowledge must trace back to a fetched source.\n"
   }
 ];
