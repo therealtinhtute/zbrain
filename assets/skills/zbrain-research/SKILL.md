@@ -67,7 +67,7 @@ Step 5/6  Learn       {evid-id-1}  {evid-id-2}
 Step 6/6  Report
 
 Evidence created: {n} · Workspace: {workspace}
-Next: zbrain:ingest analyze {first-evid-id}
+Next: zbrain:ingest {first-evid-id}
 ```
 
 ### Step 0 — Provider Check

@@ -32,7 +32,7 @@ zbrain:learn --type web --origin https://example.com --label "BM25 notes"
 2. Normalize source metadata: `source_type`, `origin`, and `label`.
 3. Create one evidence item under `~/.zbrain/workspaces/{workspace}/evidence/sources/{id}/`.
 4. Update `evidence/_index.md` with state `ingested`.
-5. Report the evidence ID and next command: `zbrain:ingest analyze {id}`.
+5. Report the evidence ID and next command: `zbrain:ingest {id}`.
 
 ## Invariants
 

@@ -1,7 +1,7 @@
 ---
 name: zbrain:ingest
-description: Process learned evidence through list, analyze, qa, and apply. Use after zbrain:learn has created an evidence source.
-version: "2.0.0"
+description: Process learned evidence through review and apply. Use after zbrain:learn has created an evidence source.
+version: "3.0.0"
 ---
 
 <role>
@@ -10,7 +10,7 @@ Act as an evidence pipeline driver. Move existing evidence from raw source to ve
 
 <security>
 - Never modify raw.md or source.yaml after learn creates them
-- Never apply facts that have unresolved P0 or P1 QA questions
+- Never apply facts with unresolved P0 or P1 QA questions
 - Never mix evidence across workspaces
 - Never expose source content from one workspace to another
 </security>
@@ -23,11 +23,10 @@ Run the stage matching the argument:
 | Argument | Stage | Action |
 |----------|-------|--------|
 | `list` | status | Show evidence items and next actions |
-| `analyze {id}` | analyze | Generate structured notes and questions |
-| `qa {id}` | qa | Resolve questions and build `verified-facts.md` |
-| `apply {id}` | apply | Update workspace knowledge and reindex internally |
+| `{id}` | review | Read raw.md, extract facts interactively, write verified-facts.md |
+| `apply {id}` | apply | Write facts into workspace wiki files and reindex |
 
-See `references/pipeline.md` for detailed per-stage flows, state machine, and QA gate rules.
+See `references/pipeline.md` for detailed per-stage flows, state machine, and gate rules.
 
 ## Cross-Stage Invariants
 
@@ -40,5 +39,5 @@ See `references/pipeline.md` for detailed per-stage flows, state machine, and QA
 
 <references>
 Load as needed from `{baseDir}/references/`:
-- `pipeline.md` - per-stage flows, state machine, QA gate rules
+- `pipeline.md` - per-stage flows, state machine, gate rules
 </references>

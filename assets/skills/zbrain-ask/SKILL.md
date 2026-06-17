@@ -37,7 +37,7 @@ Act as a workspace-scoped knowledge retrieval agent. Retrieve ranked context for
    - P3 `decisions/` — logged decisions
 4. Fetch full bodies for the top-ranked documents.
 5. Write ranked context and citation paths into the registry entry's `context_file`.
-6. If results are empty or insufficient: record the knowledge gap and stop. Do not answer from memory.
+6. If results are empty or insufficient: record the knowledge gap and stop. Do not answer from memory. Output: `→ Next: zbrain:learn` or `zbrain:research "{topic}"` to add material on this topic.
 
 ## Invariants
 
