@@ -7,9 +7,8 @@ import { runSetup } from "../../src/commands/setup";
 import { runWorkspaceCreate } from "../../src/commands/workspace";
 import { runLearn } from "../../src/commands/learn";
 import type { CommandUi } from "../../src/commands/ui";
-import { analyzeEvidence } from "../../src/core/evidence-analyze";
 import { applyEvidence } from "../../src/core/evidence-apply";
-import { completeEvidenceQa } from "../../src/core/evidence-qa";
+import { reviewEvidence } from "../../src/core/evidence-review";
 import { retrieveWorkspaceContext } from "../../src/core/retrieval";
 import { resolveRuntimePaths } from "../../src/core/runtime-paths";
 import { openDb } from "../../src/core/db";
@@ -76,16 +75,10 @@ describe("release acceptance path", () => {
       });
       const evidenceId = "2026-05-25-paste-acceptance-note";
       const db = openDb(paths.runtimeDir);
-      analyzeEvidence(db, paths, {
+      reviewEvidence(db, paths, {
         workspace: "programming",
         evidenceId,
         nowIso: "2026-05-25T03:11:00.000Z",
-      });
-      completeEvidenceQa(db, paths, {
-        workspace: "programming",
-        evidenceId,
-        nowIso: "2026-05-25T03:12:00.000Z",
-        questions: [{ id: "q-1", severity: "P0", status: "answered" }],
         facts: [
           {
             statement: "Prefer small reversible changes when editing production systems.",

@@ -3,9 +3,8 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:f
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { applyEvidence } from "../../src/core/evidence-apply";
-import { analyzeEvidence } from "../../src/core/evidence-analyze";
+import { reviewEvidence } from "../../src/core/evidence-review";
 import { ingestEvidence } from "../../src/core/evidence-ingest";
-import { completeEvidenceQa } from "../../src/core/evidence-qa";
 import { resolveRuntimePaths } from "../../src/core/runtime-paths";
 import { initDb } from "../../src/core/db";
 import { readEvidence } from "../../src/core/db-evidence";
@@ -46,7 +45,7 @@ describe("evidence pipeline", () => {
     }
   });
 
-  test("analyze and qa create deterministic artifacts and qa state", () => {
+  test("review writes verified-facts.md and transitions to reviewed", () => {
     const fixture = createWorkspaceFixture();
 
     try {
@@ -59,19 +58,10 @@ describe("evidence pipeline", () => {
         nowIso: "2026-05-25T02:00:00.000Z",
       });
 
-      const analysisFiles = analyzeEvidence(fixture.db, fixture.paths, {
+      reviewEvidence(fixture.db, fixture.paths, {
         workspace: "programming",
         evidenceId: ingested.evidenceId,
         nowIso: "2026-05-25T02:05:00.000Z",
-      });
-      const qa = completeEvidenceQa(fixture.db, fixture.paths, {
-        workspace: "programming",
-        evidenceId: ingested.evidenceId,
-        nowIso: "2026-05-25T02:10:00.000Z",
-        questions: [
-          { id: "q-1", severity: "P0", status: "answered" },
-          { id: "q-2", severity: "P2", status: "answered" },
-        ],
         facts: [
           {
             statement: "Prefer small reversible changes.",
@@ -81,8 +71,8 @@ describe("evidence pipeline", () => {
         ],
       });
 
-      expect(analysisFiles).toHaveLength(4);
-      expect(qa.state).toBe("qa_done");
+      const row = readEvidence(fixture.db, "programming", ingested.evidenceId);
+      expect(row?.state).toBe("reviewed");
       expect(
         readFileSync(join(fixture.paths.workspacesDir, "programming", "evidence", "qa", ingested.evidenceId, "verified-facts.md"), "utf8"),
       ).toContain("question_id: q-1");
@@ -104,16 +94,11 @@ describe("evidence pipeline", () => {
         rawContent: "Checkpoint every mutation.",
         nowIso: "2026-05-25T02:00:00.000Z",
       });
-      analyzeEvidence(fixture.db, fixture.paths, {
+
+      reviewEvidence(fixture.db, fixture.paths, {
         workspace: "programming",
         evidenceId: ingested.evidenceId,
         nowIso: "2026-05-25T02:05:00.000Z",
-      });
-      completeEvidenceQa(fixture.db, fixture.paths, {
-        workspace: "programming",
-        evidenceId: ingested.evidenceId,
-        nowIso: "2026-05-25T02:10:00.000Z",
-        questions: [{ id: "q-1", severity: "P0", status: "answered" }],
         facts: [{ statement: "Checkpoint every mutation.", questionId: "q-1", wikiPath: "axioms/checkpoints.md" }],
       });
 
@@ -121,7 +106,7 @@ describe("evidence pipeline", () => {
         applyEvidence(fixture.db, fixture.paths, {
           workspace: "programming",
           evidenceId: ingested.evidenceId,
-          nowIso: "2026-05-25T02:15:00.000Z",
+          nowIso: "2026-05-25T02:10:00.000Z",
           questions: [{ id: "q-1", severity: "P0", status: "answered" }],
           mutations: [
             {
@@ -142,7 +127,7 @@ describe("evidence pipeline", () => {
       const resumed = applyEvidence(fixture.db, fixture.paths, {
         workspace: "programming",
         evidenceId: ingested.evidenceId,
-        nowIso: "2026-05-25T02:20:00.000Z",
+        nowIso: "2026-05-25T02:15:00.000Z",
         questions: [{ id: "q-1", severity: "P0", status: "answered" }],
         mutations: [
           {
@@ -179,10 +164,12 @@ describe("evidence pipeline", () => {
         rawContent: "Never bypass QA.",
         nowIso: "2026-05-25T02:00:00.000Z",
       });
-      analyzeEvidence(fixture.db, fixture.paths, {
+
+      reviewEvidence(fixture.db, fixture.paths, {
         workspace: "programming",
         evidenceId: ingested.evidenceId,
         nowIso: "2026-05-25T02:05:00.000Z",
+        facts: [{ statement: "Never bypass QA.", questionId: "q-1", wikiPath: "axioms/guard.md" }],
       });
 
       expect(() =>

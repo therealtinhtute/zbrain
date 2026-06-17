@@ -8,7 +8,7 @@ import { runUpdate } from "../src/commands/update";
 import { runWorkspaceCreate } from "../src/commands/workspace";
 import { runInteractive } from "../src/commands/interactive";
 import { runAsk } from "../src/commands/ask";
-import { runIngestAnalyze, runIngestApply, runIngestList, runIngestQa } from "../src/commands/ingest";
+import { runIngestApply, runIngestList, runIngestReview } from "../src/commands/ingest";
 import { runLearn } from "../src/commands/learn";
 import type { CommandUi } from "../src/commands/ui";
 import { openDb } from "../src/core/db";
@@ -286,13 +286,13 @@ describe("phase 4 command integrations", () => {
       const db4 = openDb(join(fixture.homeDir, ".zbrain"));
       const evidenceRow = readEvidence(db4, "programming", "2026-05-25-paste-runtime-note");
       expect(evidenceRow?.label).toBe("Runtime note");
-      expect(ui.notes.join("\n")).toContain("next: zbrain ingest analyze 2026-05-25-paste-runtime-note");
+      expect(ui.notes.join("\n")).toContain("next: zbrain ingest review 2026-05-25-paste-runtime-note");
     } finally {
       rmSync(fixture.root, { recursive: true, force: true });
     }
   });
 
-  test("ingest list, analyze, qa, and apply process learned evidence", async () => {
+  test("ingest list, review, and apply process learned evidence", async () => {
     const fixture = makeFixture();
 
     try {
@@ -314,19 +314,13 @@ describe("phase 4 command integrations", () => {
       const evidenceId = "2026-05-25-paste-runtime-note";
       const listUi = new FakeUi();
       await runIngestList({ ui: listUi, pathOptions: { cwd: fixture.projectDir, homeDir: fixture.homeDir }, workspace: "programming" });
-      await runIngestAnalyze(evidenceId, {
-        ui: new FakeUi(),
-        pathOptions: { cwd: fixture.projectDir, homeDir: fixture.homeDir },
-        workspace: "programming",
-        nowIso: "2026-05-25T02:01:00.000Z",
-      });
-      await runIngestQa(evidenceId, {
+      await runIngestReview(evidenceId, {
         ui: new FakeUi(),
         pathOptions: { cwd: fixture.projectDir, homeDir: fixture.homeDir },
         workspace: "programming",
         fact: "Prefer reversible changes.",
         wikiPath: "axioms/reversible-changes.md",
-        nowIso: "2026-05-25T02:02:00.000Z",
+        nowIso: "2026-05-25T02:01:00.000Z",
       });
       await runIngestApply(evidenceId, {
         ui: new FakeUi(),
@@ -334,10 +328,10 @@ describe("phase 4 command integrations", () => {
         workspace: "programming",
         path: "axioms/reversible-changes.md",
         content: "# Reversible Changes\n\nPrefer reversible changes.\n",
-        nowIso: "2026-05-25T02:03:00.000Z",
+        nowIso: "2026-05-25T02:02:00.000Z",
       });
 
-      expect(listUi.notes.join("\n")).toContain("zbrain ingest analyze");
+      expect(listUi.notes.join("\n")).toContain("zbrain ingest review");
       expect(readFileSync(join(fixture.homeDir, ".zbrain", "workspaces", "programming", "axioms", "reversible-changes.md"), "utf8")).toContain("Prefer reversible changes.");
     } finally {
       rmSync(fixture.root, { recursive: true, force: true });

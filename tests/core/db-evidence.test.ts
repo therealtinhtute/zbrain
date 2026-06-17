@@ -124,9 +124,9 @@ describe("updateEvidenceState", () => {
     try {
       const record = makeRecord();
       insertEvidence(db, record, NOW);
-      updateEvidenceState(db, "research", record.id, "analyzed", NOW);
+      updateEvidenceState(db, "research", record.id, "reviewed", NOW);
       const row = readEvidence(db, "research", record.id);
-      expect(row?.state).toBe("analyzed");
+      expect(row?.state).toBe("reviewed");
     } finally {
       teardown(dir, db);
     }
@@ -149,7 +149,7 @@ describe("updateEvidenceState", () => {
     const { dir, db } = setup();
     try {
       expect(() =>
-        updateEvidenceState(db, "research", "nonexistent", "analyzed", NOW),
+        updateEvidenceState(db, "research", "nonexistent", "reviewed", NOW),
       ).toThrow("Evidence not found");
     } finally {
       teardown(dir, db);
@@ -164,7 +164,7 @@ describe("verifyEvidenceIntegrity", () => {
       const record = makeRecord();
       insertEvidence(db, record, NOW);
       // Advance state — fingerprint must still pass (computed against ingested state)
-      updateEvidenceState(db, "research", record.id, "analyzed", NOW);
+      updateEvidenceState(db, "research", record.id, "reviewed", NOW);
       expect(() =>
         verifyEvidenceIntegrity(db, "research", record.id, RAW_CONTENT),
       ).not.toThrow();

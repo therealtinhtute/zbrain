@@ -20,6 +20,6 @@ describe("createProgram", () => {
     const program = createProgram();
     const ingest = program.commands.find((command) => command.name() === "ingest");
 
-    expect(ingest?.commands.map((command) => command.name())).toEqual(["list", "analyze", "qa", "apply"]);
+    expect(ingest?.commands.map((command) => command.name())).toEqual(["list", "review", "apply"]);
   });
 });

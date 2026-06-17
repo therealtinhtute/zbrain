@@ -9,8 +9,8 @@ import {
 
 describe("evidence state guards", () => {
   test("allows valid evidence transitions", () => {
-    expect(() => assertValidEvidenceTransition("ingested", "analyzed")).not.toThrow();
-    expect(() => assertValidEvidenceTransition("qa_done", "applied")).not.toThrow();
+    expect(() => assertValidEvidenceTransition("ingested", "reviewed")).not.toThrow();
+    expect(() => assertValidEvidenceTransition("reviewed", "applied")).not.toThrow();
   });
 
   test("rejects invalid evidence transitions", () => {

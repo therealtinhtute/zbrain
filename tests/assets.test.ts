@@ -14,6 +14,7 @@ describe("bundled asset tree", () => {
       "engine",
       "skills",
       "templates",
+      "workspaces",
     ]);
   });
 
