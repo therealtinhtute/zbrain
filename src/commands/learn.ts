@@ -90,7 +90,7 @@ export async function runLearn(options: LearnCommandOptions = {}): Promise<void>
       `workspace: ${workspace}`,
       `evidence_id: ${result.evidenceId}`,
       `source: ${result.rawFile}`,
-      `next: zbrain ingest analyze ${result.evidenceId}`,
+      `next: zbrain ingest review ${result.evidenceId}`,
     ].join("\n"),
     "Learn summary",
   );

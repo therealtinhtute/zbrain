@@ -2,14 +2,12 @@ import { readFileSync } from "node:fs";
 import { Command } from "commander";
 import { assertRuntimeReady, createCommandContext } from "./helpers";
 import { clackUi, type CommandUi } from "./ui";
-import { analyzeEvidence } from "../core/evidence-analyze";
+import { reviewEvidence } from "../core/evidence-review";
 import { applyEvidence, type ApplyMutation } from "../core/evidence-apply";
-import { completeEvidenceQa } from "../core/evidence-qa";
 import { listEvidenceItems } from "../core/evidence-list";
 import { resolveActiveWorkspace } from "../core/workspace-resolver";
 import { openDb } from "../core/db";
 import type { RuntimePathOptions, RuntimePaths } from "../core/runtime-paths";
-import type { EvidenceQuestion } from "../core/evidence-state";
 
 interface BaseIngestOptions {
   workspace?: string;
@@ -18,7 +16,7 @@ interface BaseIngestOptions {
   nowIso?: string;
 }
 
-export interface IngestQaOptions extends BaseIngestOptions {
+export interface IngestReviewOptions extends BaseIngestOptions {
   fact?: string;
   questionId?: string;
   wikiPath?: string;
@@ -62,27 +60,12 @@ export async function runIngestList(options: BaseIngestOptions = {}): Promise<vo
   ui.outro("Evidence listed.");
 }
 
-export async function runIngestAnalyze(evidenceId: string, options: BaseIngestOptions = {}): Promise<void> {
+export async function runIngestReview(evidenceId: string, options: IngestReviewOptions = {}): Promise<void> {
   const ui = options.ui ?? clackUi;
   const context = createCommandContext(options.pathOptions);
   assertRuntimeReady(context.paths);
   const workspace = resolveWorkspaceName(context.paths, options.workspace);
 
-  ui.intro("zbrain ingest analyze");
-  const spinner = ui.spinner();
-  spinner.start("Analyzing evidence");
-  const db = openDb(context.paths.runtimeDir);
-  const files = analyzeEvidence(db, context.paths, { workspace, evidenceId, nowIso: options.nowIso });
-  spinner.stop("Evidence analyzed");
-  ui.note([`workspace: ${workspace}`, `evidence_id: ${evidenceId}`, `files: ${files.length}`].join("\n"), "Analyze summary");
-  ui.outro("Analysis complete.");
-}
-
-export async function runIngestQa(evidenceId: string, options: IngestQaOptions = {}): Promise<void> {
-  const ui = options.ui ?? clackUi;
-  const context = createCommandContext(options.pathOptions);
-  assertRuntimeReady(context.paths);
-  const workspace = resolveWorkspaceName(context.paths, options.workspace);
   const fact = options.fact ?? await ui.text({
     message: "Verified fact",
     placeholder: "Fact verified from this evidence",
@@ -95,18 +78,16 @@ export async function runIngestQa(evidenceId: string, options: IngestQaOptions =
     validate: (value) => value?.trim() ? undefined : "Target wiki path is required.",
   });
 
-  ui.intro("zbrain ingest qa");
-  const questions: EvidenceQuestion[] = [{ id: questionId, severity: "P0", status: "answered" }];
+  ui.intro("zbrain ingest review");
   const db = openDb(context.paths.runtimeDir);
-  const result = completeEvidenceQa(db, context.paths, {
+  reviewEvidence(db, context.paths, {
     workspace,
     evidenceId,
     nowIso: options.nowIso,
-    questions,
     facts: [{ statement: fact, questionId, wikiPath }],
   });
-  ui.note([`workspace: ${workspace}`, `evidence_id: ${evidenceId}`, `state: ${result.state}`].join("\n"), "QA summary");
-  ui.outro("QA recorded.");
+  ui.note([`workspace: ${workspace}`, `evidence_id: ${evidenceId}`, `state: reviewed`].join("\n"), "Review summary");
+  ui.outro("Review recorded.");
 }
 
 export async function runIngestApply(evidenceId: string, options: IngestApplyOptions = {}): Promise<void> {
@@ -148,7 +129,7 @@ export async function runIngestApply(evidenceId: string, options: IngestApplyOpt
 export function registerIngestCommands(program: Command): void {
   const ingest = program
     .command("ingest")
-    .description("Process learned evidence through analyze, qa, apply, and list");
+    .description("Process learned evidence through review, apply, and list");
 
   ingest
     .command("list")
@@ -157,21 +138,14 @@ export function registerIngestCommands(program: Command): void {
     .action((options: BaseIngestOptions) => runIngestList(options));
 
   ingest
-    .command("analyze")
+    .command("review")
     .argument("<id>", "evidence id")
-    .description("Analyze an ingested evidence source")
-    .option("--workspace <name>", "target workspace")
-    .action((id: string, options: BaseIngestOptions) => runIngestAnalyze(id, options));
-
-  ingest
-    .command("qa")
-    .argument("<id>", "evidence id")
-    .description("Record verified facts for analyzed evidence")
+    .description("Extract and record verified facts from an ingested evidence source")
     .option("--workspace <name>", "target workspace")
     .option("--fact <fact>", "verified fact")
     .option("--question-id <id>", "question id", "q-1")
     .option("--wiki-path <path>", "target wiki path for the fact")
-    .action((id: string, options: IngestQaOptions) => runIngestQa(id, options));
+    .action((id: string, options: IngestReviewOptions) => runIngestReview(id, options));
 
   ingest
     .command("apply")

@@ -1,9 +1,6 @@
 export const evidenceStates = [
   "ingested",
-  "analyzed",
-  "qa_in_progress",
-  "qa_awaiting_external",
-  "qa_done",
+  "reviewed",
   "applied",
   "archived",
 ] as const;
@@ -29,11 +26,8 @@ export interface SourceSnapshot {
 }
 
 const transitionMap: Record<EvidenceState, EvidenceState[]> = {
-  ingested: ["analyzed"],
-  analyzed: ["qa_in_progress", "qa_awaiting_external", "qa_done"],
-  qa_in_progress: ["qa_awaiting_external", "qa_done"],
-  qa_awaiting_external: ["qa_in_progress", "qa_done"],
-  qa_done: ["applied"],
+  ingested: ["reviewed"],
+  reviewed: ["applied"],
   applied: ["archived"],
   archived: [],
 };

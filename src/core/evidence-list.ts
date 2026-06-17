@@ -11,11 +11,8 @@ export interface EvidenceListItem {
 }
 
 const nextCommandByState: Record<string, (id: string) => string | null> = {
-  ingested: (id) => `zbrain ingest analyze ${id}`,
-  analyzed: (id) => `zbrain ingest qa ${id}`,
-  qa_in_progress: (id) => `zbrain ingest qa ${id}`,
-  qa_awaiting_external: (id) => `zbrain ingest qa ${id}`,
-  qa_done: (id) => `zbrain ingest apply ${id}`,
+  ingested: (id) => `zbrain ingest review ${id}`,
+  reviewed: (id) => `zbrain ingest apply ${id}`,
   applied: () => null,
   archived: () => null,
 };
