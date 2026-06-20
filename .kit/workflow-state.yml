@@ -1,10 +1,10 @@
-current_phase: p8-sqlite-core-db
-entry_phase: p8-sqlite-core-db
-spec: .kit/planning/SPEC-sqlite.md
-roadmap: .kit/planning/ROADMAP-sqlite.md
-active_context: .kit/planning/phases/p8-sqlite-core-db/p8-sqlite-core-db-CONTEXT.md
-active_plan: .kit/planning/phases/p8-sqlite-core-db/p8-sqlite-core-db-PLAN.md
-latest_cook_run: none
-latest_check_report: none
+current_phase: ar5-schema-index
+entry_phase: ar0-green-baseline
+spec: .kit/planning/SPEC-audit-remediation.md
+roadmap: .kit/planning/ROADMAP-audit-remediation.md
+active_context: .kit/planning/phases/ar5-schema-index/ar5-schema-index-CONTEXT.md
+active_plan: .kit/planning/phases/ar5-schema-index/ar5-schema-index-PLAN.md
+latest_cook_run: .kit/runs/cook/20260620-1700-audit-remediation-sweep.md
+latest_check_report: .kit/reports/check/20260620-1700-audit-remediation-sweep.md
 handoff: .kit/HANDOFF.md
-last_updated: 2026-06-16 00:00
+last_updated: 2026-06-20 17:00
