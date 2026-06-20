@@ -92,7 +92,6 @@ describe("release acceptance path", () => {
         workspace: "programming",
         evidenceId,
         nowIso: "2026-05-25T03:13:00.000Z",
-        questions: [{ id: "q-1", severity: "P0", status: "answered" }],
         mutations: [
           {
             relativePath: "axioms/reversible-changes.md",

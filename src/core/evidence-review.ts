@@ -1,15 +1,26 @@
 import type { Database } from "bun:sqlite";
 import { readTextFile, writeTextFile } from "./fs";
 import { type RuntimePaths } from "./runtime-paths";
-import { evidenceLocations, verifiedFactsMarkdown, type VerifiedFactRecord } from "./evidence-store";
+import { evidenceLocations, qaAnswersMarkdown, verifiedFactsMarkdown, type VerifiedFactRecord } from "./evidence-store";
 import { readEvidence, verifyEvidenceIntegrity, updateEvidenceState } from "./db-evidence";
-import { assertCitationCoverage, assertValidEvidenceTransition, assertWorkspaceLock } from "./evidence-state";
+import { assertCitationCoverage, assertValidEvidenceTransition, assertWorkspaceLock, type EvidenceQuestion } from "./evidence-state";
 
 export interface ReviewEvidenceOptions {
   workspace: string;
   evidenceId: string;
   facts: VerifiedFactRecord[];
+  questions?: EvidenceQuestion[];
   nowIso?: string;
+}
+
+function answeredQuestionsFromFacts(facts: VerifiedFactRecord[]): EvidenceQuestion[] {
+  const byId = new Map<string, EvidenceQuestion>();
+  for (const fact of facts) {
+    if (!byId.has(fact.questionId)) {
+      byId.set(fact.questionId, { id: fact.questionId, severity: "P0", status: "answered" });
+    }
+  }
+  return [...byId.values()];
 }
 
 export function reviewEvidence(
@@ -33,6 +44,8 @@ export function reviewEvidence(
     options.facts.map((fact) => ({ questionId: fact.questionId, wikiPath: fact.wikiPath })),
   );
 
+  const questions = options.questions ?? answeredQuestionsFromFacts(options.facts);
   writeTextFile(locations.verifiedFactsFile, verifiedFactsMarkdown(options.facts), { overwrite: true });
+  writeTextFile(locations.qaAnswersFile, qaAnswersMarkdown(questions), { overwrite: true });
   updateEvidenceState(db, options.workspace, options.evidenceId, "reviewed", nowIso);
 }

@@ -1,12 +1,13 @@
 import { existsSync } from "node:fs";
 import type { Database } from "bun:sqlite";
 import YAML from "js-yaml";
-import { validateQAGate, assertWorkspaceLock, assertCitationCoverage, type EvidenceQuestion } from "./evidence-state";
+import { validateQAGate, assertWorkspaceLock, assertCitationCoverage } from "./evidence-state";
 import { readTextFile, writeTextFile } from "./fs";
 import { type RuntimePaths } from "./runtime-paths";
 import {
   assertWorkspaceTarget,
   evidenceLocations,
+  parseQaAnswers,
 } from "./evidence-store";
 import { readEvidence, verifyEvidenceIntegrity, updateEvidenceState } from "./db-evidence";
 
@@ -19,7 +20,6 @@ export interface ApplyMutation {
 export interface ApplyEvidenceOptions {
   workspace: string;
   evidenceId: string;
-  questions: EvidenceQuestion[];
   mutations: ApplyMutation[];
   nowIso?: string;
   reindex?: (workspace: string) => void;
@@ -76,7 +76,10 @@ export function applyEvidence(
 
   verifyEvidenceIntegrity(db, options.workspace, options.evidenceId, rawContent);
   assertWorkspaceLock(row.workspace_at_ingest, options.workspace);
-  validateQAGate(options.questions);
+  const reviewedQuestions = existsSync(locations.qaAnswersFile)
+    ? parseQaAnswers(readTextFile(locations.qaAnswersFile))
+    : [];
+  validateQAGate(reviewedQuestions);
   assertCitationCoverage(options.mutations.flatMap((mutation) => mutation.citations));
 
   const checkpoint = readCheckpoint(locations.checkpointFile, options.evidenceId, nowIso);

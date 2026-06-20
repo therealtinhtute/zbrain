@@ -395,6 +395,56 @@ describe("phase 4 command integrations", () => {
     }
   });
 
+  test("review records QA status that the apply gate enforces end-to-end (ISSUE-003)", async () => {
+    const fixture = makeFixture();
+
+    try {
+      await runSetup({ ui: new FakeUi(), pathOptions: { cwd: fixture.projectDir, homeDir: fixture.homeDir } });
+      await runWorkspaceCreate("programming", {
+        ui: new FakeUi({ confirms: [true] }),
+        pathOptions: { cwd: fixture.projectDir, homeDir: fixture.homeDir },
+        nowIso: "2026-05-25T01:00:00.000Z",
+      });
+      await runLearn({
+        ui: new FakeUi(),
+        pathOptions: { cwd: fixture.projectDir, homeDir: fixture.homeDir },
+        workspace: "programming",
+        label: "Gate note",
+        rawContent: "Needs external confirmation.",
+        nowIso: "2026-05-25T02:00:00.000Z",
+      });
+
+      const evidenceId = "2026-05-25-paste-gate-note";
+      // Record an unresolved P0 — no answered fact required for a blocking status.
+      await runIngestReview(evidenceId, {
+        ui: new FakeUi(),
+        pathOptions: { cwd: fixture.projectDir, homeDir: fixture.homeDir },
+        workspace: "programming",
+        severity: "P0",
+        status: "awaiting_external",
+        nowIso: "2026-05-25T02:01:00.000Z",
+      });
+
+      // Apply must read the persisted answer and block — the loop is no longer self-certified.
+      await expect(
+        runIngestApply(evidenceId, {
+          ui: new FakeUi(),
+          pathOptions: { cwd: fixture.projectDir, homeDir: fixture.homeDir },
+          workspace: "programming",
+          path: "axioms/gate.md",
+          content: "# Gate\n",
+          nowIso: "2026-05-25T02:02:00.000Z",
+        }),
+      ).rejects.toThrow("QA gate blocked");
+
+      expect(
+        existsSync(join(fixture.homeDir, ".zbrain", "workspaces", "programming", "axioms", "gate.md")),
+      ).toBe(false);
+    } finally {
+      rmSync(fixture.root, { recursive: true, force: true });
+    }
+  });
+
   test("ask writes current task context for the active workspace", async () => {
     const fixture = makeFixture();
     const ui = new FakeUi();

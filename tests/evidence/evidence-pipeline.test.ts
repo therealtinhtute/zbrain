@@ -107,7 +107,6 @@ describe("evidence pipeline", () => {
           workspace: "programming",
           evidenceId: ingested.evidenceId,
           nowIso: "2026-05-25T02:10:00.000Z",
-          questions: [{ id: "q-1", severity: "P0", status: "answered" }],
           mutations: [
             {
               relativePath: "axioms/checkpoints.md",
@@ -128,7 +127,6 @@ describe("evidence pipeline", () => {
         workspace: "programming",
         evidenceId: ingested.evidenceId,
         nowIso: "2026-05-25T02:15:00.000Z",
-        questions: [{ id: "q-1", severity: "P0", status: "answered" }],
         mutations: [
           {
             relativePath: "axioms/checkpoints.md",
@@ -165,18 +163,20 @@ describe("evidence pipeline", () => {
         nowIso: "2026-05-25T02:00:00.000Z",
       });
 
+      // Review persists a blocking P0 (awaiting_external); the gate must read it from
+      // disk at apply time — no caller can fabricate an "answered" override anymore.
       reviewEvidence(fixture.db, fixture.paths, {
         workspace: "programming",
         evidenceId: ingested.evidenceId,
         nowIso: "2026-05-25T02:05:00.000Z",
         facts: [{ statement: "Never bypass QA.", questionId: "q-1", wikiPath: "axioms/guard.md" }],
+        questions: [{ id: "q-1", severity: "P0", status: "awaiting_external" }],
       });
 
       expect(() =>
         applyEvidence(fixture.db, fixture.paths, {
           workspace: "programming",
           evidenceId: ingested.evidenceId,
-          questions: [{ id: "q-1", severity: "P0", status: "awaiting_external" }],
           mutations: [
             {
               relativePath: "axioms/guard.md",
@@ -185,13 +185,12 @@ describe("evidence pipeline", () => {
             },
           ],
         }),
-      ).toThrow();
+      ).toThrow("QA gate blocked");
 
       expect(() =>
         applyEvidence(fixture.db, fixture.paths, {
           workspace: "finance",
           evidenceId: ingested.evidenceId,
-          questions: [{ id: "q-1", severity: "P0", status: "answered" }],
           mutations: [
             {
               relativePath: "axioms/guard.md",

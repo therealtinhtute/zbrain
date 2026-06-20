@@ -4,6 +4,13 @@ import { join } from "node:path";
 import YAML from "js-yaml";
 import { ensureDir, pathInside } from "./fs";
 import { type RuntimePaths } from "./runtime-paths";
+import {
+  questionSeverities,
+  questionStatuses,
+  type EvidenceQuestion,
+  type QuestionSeverity,
+  type QuestionStatus,
+} from "./evidence-state";
 
 export interface EvidenceLocationSet {
   workspaceRoot: string;
@@ -148,6 +155,35 @@ export function verifiedFactsMarkdown(facts: VerifiedFactRecord[]): string {
   }
   lines.push("");
   return lines.join("\n");
+}
+
+export function qaAnswersMarkdown(questions: EvidenceQuestion[]): string {
+  const lines = [
+    "# Evidence QA Answers",
+    "",
+    "| question_id | severity | status |",
+    "| --- | --- | --- |",
+  ];
+  for (const question of questions) {
+    lines.push(`| ${question.id} | ${question.severity} | ${question.status} |`);
+  }
+  lines.push("");
+  return lines.join("\n");
+}
+
+export function parseQaAnswers(markdown: string): EvidenceQuestion[] {
+  const questions: EvidenceQuestion[] = [];
+  for (const line of markdown.split("\n")) {
+    const trimmed = line.trim();
+    if (!trimmed.startsWith("|")) continue;
+    const cells = trimmed.split("|").slice(1, -1).map((cell) => cell.trim());
+    if (cells.length < 3) continue;
+    const [id, severity, status] = cells;
+    if (!questionSeverities.includes(severity as QuestionSeverity)) continue;
+    if (!questionStatuses.includes(status as QuestionStatus)) continue;
+    questions.push({ id, severity: severity as QuestionSeverity, status: status as QuestionStatus });
+  }
+  return questions;
 }
 
 export function assertWorkspaceTarget(workspaceRoot: string, relativePath: string): string {
