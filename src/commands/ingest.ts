@@ -4,8 +4,16 @@ import { assertRuntimeReady, createCommandContext } from "./helpers";
 import { clackUi, type CommandUi } from "./ui";
 import { reviewEvidence } from "../core/evidence-review";
 import { applyEvidence, type ApplyMutation } from "../core/evidence-apply";
+import type { VerifiedFactRecord } from "../core/evidence-store";
+import { QmdAdapter, type QmdRunner } from "../core/qmd-adapter";
 import { listEvidenceItems } from "../core/evidence-list";
 import { resolveActiveWorkspace } from "../core/workspace-resolver";
+import {
+  questionSeverities,
+  questionStatuses,
+  type QuestionSeverity,
+  type QuestionStatus,
+} from "../core/evidence-state";
 import { openDb } from "../core/db";
 import type { RuntimePathOptions, RuntimePaths } from "../core/runtime-paths";
 
@@ -20,12 +28,15 @@ export interface IngestReviewOptions extends BaseIngestOptions {
   fact?: string;
   questionId?: string;
   wikiPath?: string;
+  severity?: QuestionSeverity;
+  status?: QuestionStatus;
 }
 
 export interface IngestApplyOptions extends BaseIngestOptions {
   path?: string;
   content?: string;
   contentFile?: string;
+  qmdRunner?: QmdRunner;
 }
 
 function resolveWorkspaceName(paths: RuntimePaths, workspace?: string): string {
@@ -66,17 +77,32 @@ export async function runIngestReview(evidenceId: string, options: IngestReviewO
   assertRuntimeReady(context.paths);
   const workspace = resolveWorkspaceName(context.paths, options.workspace);
 
-  const fact = options.fact ?? await ui.text({
-    message: "Verified fact",
-    placeholder: "Fact verified from this evidence",
-    validate: (value) => value?.trim() ? undefined : "Verified fact is required.",
-  });
+  const severity = options.severity ?? "P0";
+  const status = options.status ?? "answered";
+  if (!questionSeverities.includes(severity)) {
+    throw new Error(`Invalid question severity: ${severity} (expected one of ${questionSeverities.join(", ")})`);
+  }
+  if (!questionStatuses.includes(status)) {
+    throw new Error(`Invalid question status: ${status} (expected one of ${questionStatuses.join(", ")})`);
+  }
   const questionId = options.questionId ?? "q-1";
-  const wikiPath = options.wikiPath ?? await ui.text({
-    message: "Target wiki path",
-    placeholder: "projects/example.md",
-    validate: (value) => value?.trim() ? undefined : "Target wiki path is required.",
-  });
+
+  // A verified fact is only required when the question is actually answered.
+  // Blocking statuses (awaiting_external/deferred/open) record the question with no fact.
+  const facts: VerifiedFactRecord[] = [];
+  if (status === "answered") {
+    const fact = options.fact ?? await ui.text({
+      message: "Verified fact",
+      placeholder: "Fact verified from this evidence",
+      validate: (value) => value?.trim() ? undefined : "Verified fact is required.",
+    });
+    const wikiPath = options.wikiPath ?? await ui.text({
+      message: "Target wiki path",
+      placeholder: "projects/example.md",
+      validate: (value) => value?.trim() ? undefined : "Target wiki path is required.",
+    });
+    facts.push({ statement: fact, questionId, wikiPath });
+  }
 
   ui.intro("zbrain ingest review");
   const db = openDb(context.paths.runtimeDir);
@@ -84,9 +110,10 @@ export async function runIngestReview(evidenceId: string, options: IngestReviewO
     workspace,
     evidenceId,
     nowIso: options.nowIso,
-    facts: [{ statement: fact, questionId, wikiPath }],
+    facts,
+    questions: [{ id: questionId, severity, status }],
   });
-  ui.note([`workspace: ${workspace}`, `evidence_id: ${evidenceId}`, `state: reviewed`].join("\n"), "Review summary");
+  ui.note([`workspace: ${workspace}`, `evidence_id: ${evidenceId}`, `state: reviewed`, `${questionId}: ${severity}/${status}`].join("\n"), "Review summary");
   ui.outro("Review recorded.");
 }
 
@@ -115,12 +142,19 @@ export async function runIngestApply(evidenceId: string, options: IngestApplyOpt
     citations: [{ questionId: "q-1", wikiPath: relativePath }],
   };
   const db = openDb(context.paths.runtimeDir);
+  const qmd = new QmdAdapter(context.paths, options.qmdRunner);
   const result = applyEvidence(db, context.paths, {
     workspace,
     evidenceId,
     nowIso: options.nowIso,
-    questions: [{ id: "q-1", severity: "P0", status: "answered" }],
     mutations: [mutation],
+    reindex: (targetWorkspace) => {
+      try {
+        qmd.indexWorkspace({ workspace: targetWorkspace });
+      } catch (error) {
+        ui.note(`qmd reindex skipped: ${(error as Error).message}`, "Warning");
+      }
+    },
   });
   ui.note([`workspace: ${workspace}`, `evidence_id: ${evidenceId}`, `applied: ${result.applied.length}`].join("\n"), "Apply summary");
   ui.outro("Evidence applied.");
@@ -145,6 +179,8 @@ export function registerIngestCommands(program: Command): void {
     .option("--fact <fact>", "verified fact")
     .option("--question-id <id>", "question id", "q-1")
     .option("--wiki-path <path>", "target wiki path for the fact")
+    .option("--severity <severity>", "question severity (P0-P3)", "P0")
+    .option("--status <status>", "question status (open|answered|awaiting_external|deferred)", "answered")
     .action((id: string, options: IngestReviewOptions) => runIngestReview(id, options));
 
   ingest

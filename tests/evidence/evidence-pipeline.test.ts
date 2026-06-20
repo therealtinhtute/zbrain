@@ -107,7 +107,6 @@ describe("evidence pipeline", () => {
           workspace: "programming",
           evidenceId: ingested.evidenceId,
           nowIso: "2026-05-25T02:10:00.000Z",
-          questions: [{ id: "q-1", severity: "P0", status: "answered" }],
           mutations: [
             {
               relativePath: "axioms/checkpoints.md",
@@ -128,7 +127,6 @@ describe("evidence pipeline", () => {
         workspace: "programming",
         evidenceId: ingested.evidenceId,
         nowIso: "2026-05-25T02:15:00.000Z",
-        questions: [{ id: "q-1", severity: "P0", status: "answered" }],
         mutations: [
           {
             relativePath: "axioms/checkpoints.md",
@@ -165,18 +163,20 @@ describe("evidence pipeline", () => {
         nowIso: "2026-05-25T02:00:00.000Z",
       });
 
+      // Review persists a blocking P0 (awaiting_external); the gate must read it from
+      // disk at apply time — no caller can fabricate an "answered" override anymore.
       reviewEvidence(fixture.db, fixture.paths, {
         workspace: "programming",
         evidenceId: ingested.evidenceId,
         nowIso: "2026-05-25T02:05:00.000Z",
         facts: [{ statement: "Never bypass QA.", questionId: "q-1", wikiPath: "axioms/guard.md" }],
+        questions: [{ id: "q-1", severity: "P0", status: "awaiting_external" }],
       });
 
       expect(() =>
         applyEvidence(fixture.db, fixture.paths, {
           workspace: "programming",
           evidenceId: ingested.evidenceId,
-          questions: [{ id: "q-1", severity: "P0", status: "awaiting_external" }],
           mutations: [
             {
               relativePath: "axioms/guard.md",
@@ -185,13 +185,12 @@ describe("evidence pipeline", () => {
             },
           ],
         }),
-      ).toThrow();
+      ).toThrow("QA gate blocked");
 
       expect(() =>
         applyEvidence(fixture.db, fixture.paths, {
           workspace: "finance",
           evidenceId: ingested.evidenceId,
-          questions: [{ id: "q-1", severity: "P0", status: "answered" }],
           mutations: [
             {
               relativePath: "axioms/guard.md",
@@ -201,6 +200,84 @@ describe("evidence pipeline", () => {
           ],
         }),
       ).toThrow();
+    } finally {
+      rmSync(fixture.root, { recursive: true, force: true });
+    }
+  });
+
+  test("re-review of a reviewed item is rejected before clobbering verified facts (ISSUE-006)", () => {
+    const fixture = createWorkspaceFixture();
+
+    try {
+      const ingested = ingestEvidence(fixture.db, fixture.paths, {
+        workspace: "programming",
+        sourceType: "paste",
+        origin: "inline",
+        label: "Reentry note",
+        rawContent: "Review runs once.",
+        nowIso: "2026-05-25T02:00:00.000Z",
+      });
+
+      reviewEvidence(fixture.db, fixture.paths, {
+        workspace: "programming",
+        evidenceId: ingested.evidenceId,
+        nowIso: "2026-05-25T02:05:00.000Z",
+        facts: [{ statement: "First fact.", questionId: "q-1", wikiPath: "axioms/reentry.md" }],
+      });
+
+      // State is now "reviewed"; the state machine forbids reviewed -> reviewed.
+      // The guard must fire BEFORE verified-facts.md is overwritten.
+      expect(() =>
+        reviewEvidence(fixture.db, fixture.paths, {
+          workspace: "programming",
+          evidenceId: ingested.evidenceId,
+          nowIso: "2026-05-25T02:06:00.000Z",
+          facts: [{ statement: "Second fact.", questionId: "q-1", wikiPath: "axioms/reentry.md" }],
+        }),
+      ).toThrow("Invalid evidence transition");
+
+      const verified = readFileSync(
+        join(fixture.paths.workspacesDir, "programming", "evidence", "qa", ingested.evidenceId, "verified-facts.md"),
+        "utf8",
+      );
+      expect(verified).toContain("First fact.");
+      expect(verified).not.toContain("Second fact.");
+    } finally {
+      rmSync(fixture.root, { recursive: true, force: true });
+    }
+  });
+
+  test("apply rejects evidence that was never reviewed without writing wiki files (ISSUE-006)", () => {
+    const fixture = createWorkspaceFixture();
+
+    try {
+      const ingested = ingestEvidence(fixture.db, fixture.paths, {
+        workspace: "programming",
+        sourceType: "paste",
+        origin: "inline",
+        label: "Unreviewed note",
+        rawContent: "Apply must follow review.",
+        nowIso: "2026-05-25T02:00:00.000Z",
+      });
+
+      // No review — state is still "ingested"; apply must refuse before any write.
+      expect(() =>
+        applyEvidence(fixture.db, fixture.paths, {
+          workspace: "programming",
+          evidenceId: ingested.evidenceId,
+          mutations: [
+            {
+              relativePath: "axioms/unreviewed.md",
+              content: "# Unreviewed\n",
+              citations: [{ questionId: "q-1", wikiPath: "axioms/unreviewed.md" }],
+            },
+          ],
+        }),
+      ).toThrow("Invalid evidence transition");
+
+      expect(
+        existsSync(join(fixture.paths.workspacesDir, "programming", "axioms", "unreviewed.md")),
+      ).toBe(false);
     } finally {
       rmSync(fixture.root, { recursive: true, force: true });
     }

@@ -32,6 +32,7 @@ export function classifyByTier(path: string): RetrievalTier {
 }
 
 export function rankRetrievalResults(results: QmdSearchResult[], limit = 8): RankedRetrievalResult[] {
+  const safeLimit = Number.isInteger(limit) && limit > 0 ? limit : 8;
   return results
     .map((result, index) => ({
       ...result,
@@ -46,6 +47,6 @@ export function rankRetrievalResults(results: QmdSearchResult[], limit = 8): Ran
 
       return left._index - right._index;
     })
-    .slice(0, limit)
+    .slice(0, safeLimit)
     .map(({ _index, ...result }) => result);
 }

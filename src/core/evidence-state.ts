@@ -6,8 +6,12 @@ export const evidenceStates = [
 ] as const;
 
 export type EvidenceState = (typeof evidenceStates)[number];
-export type QuestionSeverity = "P0" | "P1" | "P2" | "P3";
-export type QuestionStatus = "open" | "answered" | "awaiting_external" | "deferred";
+
+export const questionSeverities = ["P0", "P1", "P2", "P3"] as const;
+export const questionStatuses = ["open", "answered", "awaiting_external", "deferred"] as const;
+
+export type QuestionSeverity = (typeof questionSeverities)[number];
+export type QuestionStatus = (typeof questionStatuses)[number];
 
 export interface EvidenceQuestion {
   id: string;

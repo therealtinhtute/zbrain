@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { join } from "node:path";
+import { join, basename } from "node:path";
 import { type RuntimePaths } from "./runtime-paths";
 
 export interface QmdSearchResult {
@@ -74,6 +74,12 @@ export function workspaceCollectionName(workspace: string): string {
   const trimmed = workspace.trim();
   if (trimmed.length === 0) {
     throw new Error("Workspace collection name cannot be empty");
+  }
+
+  // Reject path separators / traversal so a workspace name can never escape
+  // workspacesDir or address an arbitrary qmd collection (isolation invariant).
+  if (trimmed !== basename(trimmed) || /[\/\\]|\.\./.test(trimmed)) {
+    throw new Error(`Illegal workspace name: ${workspace}`);
   }
 
   return trimmed;
