@@ -7,6 +7,10 @@ const secondaries: SecondaryWorkspaceEntry[] = [
   { workspace: "research", keywords: ["paper", "study", "research"], limit: 2 },
 ];
 
+const authSecondaries: SecondaryWorkspaceEntry[] = [
+  { workspace: "auth-service", keywords: ["auth"], limit: 2 },
+];
+
 describe("extractWorkspaceTags", () => {
   test("extracts single tag and removes it from query", () => {
     const result = extractWorkspaceTags("how does @research work");
@@ -83,6 +87,16 @@ describe("matchKeywordWorkspaces", () => {
     const result = matchKeywordWorkspaces("file-storage", []);
     expect(result).toEqual([]);
   });
+
+  test("does not match a keyword that is only a substring (ISSUE-023)", () => {
+    const result = matchKeywordWorkspaces("who is the author of this", authSecondaries);
+    expect(result).toEqual([]);
+  });
+
+  test("still matches a keyword on a word boundary", () => {
+    const result = matchKeywordWorkspaces("how does auth work", authSecondaries);
+    expect(result).toContain("auth-service");
+  });
 });
 
 describe("parseQuery", () => {
@@ -115,5 +129,17 @@ describe("parseQuery", () => {
     const result = parseQuery("@research query with no keywords", []);
     expect(result.cleanQuery).toBe("query with no keywords");
     expect(result.secondaryWorkspaces).toEqual(["research"]);
+  });
+
+  test("exposes explicit @tags separately from keyword matches (ISSUE-009)", () => {
+    const result = parseQuery("file-storage pattern @research", secondaries);
+    expect(result.tags).toEqual(["research"]);
+    expect(result.secondaryWorkspaces).toContain("framework-core");
+  });
+
+  test("tags is empty when only keywords match", () => {
+    const result = parseQuery("file-storage pattern", secondaries);
+    expect(result.tags).toEqual([]);
+    expect(result.secondaryWorkspaces).toEqual(["framework-core"]);
   });
 });

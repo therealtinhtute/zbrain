@@ -7,7 +7,7 @@ import { applyEvidence, type ApplyMutation } from "../core/evidence-apply";
 import type { VerifiedFactRecord } from "../core/evidence-store";
 import { QmdAdapter, type QmdRunner } from "../core/qmd-adapter";
 import { listEvidenceItems } from "../core/evidence-list";
-import { resolveActiveWorkspace } from "../core/workspace-resolver";
+import { resolveWorkspaceName } from "../core/workspace-resolver";
 import {
   questionSeverities,
   questionStatuses,
@@ -15,7 +15,7 @@ import {
   type QuestionStatus,
 } from "../core/evidence-state";
 import { openDb } from "../core/db";
-import type { RuntimePathOptions, RuntimePaths } from "../core/runtime-paths";
+import type { RuntimePathOptions } from "../core/runtime-paths";
 
 interface BaseIngestOptions {
   workspace?: string;
@@ -37,13 +37,6 @@ export interface IngestApplyOptions extends BaseIngestOptions {
   content?: string;
   contentFile?: string;
   qmdRunner?: QmdRunner;
-}
-
-function resolveWorkspaceName(paths: RuntimePaths, workspace?: string): string {
-  if (workspace) {
-    return workspace;
-  }
-  return resolveActiveWorkspace(paths).name;
 }
 
 export async function runIngestList(options: BaseIngestOptions = {}): Promise<void> {

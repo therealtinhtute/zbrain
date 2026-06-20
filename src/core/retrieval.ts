@@ -24,11 +24,12 @@ export interface MultiWorkspaceRetrievalOptions {
   secondaries: SecondaryWorkspaceEntry[];
   workspacesDir: string;
   limit?: number;
+  nowIso?: string;
 }
 
 export function retrieveWorkspaceContext(
   paths: RuntimePaths,
-  options: { workspace: string; query: string; limit?: number },
+  options: { workspace: string; query: string; limit?: number; nowIso?: string },
   adapter: RetrievalAdapter = new QmdAdapter(paths),
 ): RetrievalContext {
   const rawResults = adapter.searchWorkspace(options);
@@ -37,6 +38,7 @@ export function retrieveWorkspaceContext(
     query: options.query,
     workspace: options.workspace,
     results: ranked,
+    nowIso: options.nowIso,
   });
   const filePath = writeCurrentTask(paths, markdown);
 
@@ -54,8 +56,9 @@ export function retrieveMultiWorkspaceContext(
 ): RetrievalContext {
   const totalLimit = options.limit ?? 8;
 
-  const { cleanQuery, secondaryWorkspaces: secondaryNames } = parseQuery(options.query, options.secondaries);
+  const { cleanQuery, secondaryWorkspaces: secondaryNames, tags } = parseQuery(options.query, options.secondaries);
   const { resolved, warnings } = resolveSecondaryWorkspaces(options.workspacesDir, secondaryNames);
+  const taggedSet = new Set(tags);
 
   for (const warning of warnings) {
     console.warn(`[zbrain] ${warning}`);
@@ -77,21 +80,36 @@ export function retrieveMultiWorkspaceContext(
 
   const allResults: RankedRetrievalResult[] = [...primaryRanked];
   let remaining = totalLimit - primaryRanked.length;
-  let remainingSecondaries = resolved.length;
 
-  for (const name of resolved) {
-    if (remaining <= 0) break;
+  for (let i = 0; i < resolved.length; i += 1) {
+    const name = resolved[i];
+    const remainingSecondaries = resolved.length - i;
+    const isTagged = taggedSet.has(name);
+
+    // Keyword-only secondaries yield when the primary saturated the limit;
+    // explicit @tag secondaries always keep a floor of one slot.
+    if (remaining <= 0 && !isTagged) continue;
 
     const entryLimit = limitMap.get(name) ?? DEFAULT_SECONDARY_LIMIT;
-    const slots = Math.min(entryLimit, Math.floor(remaining / remainingSecondaries) || 1);
+    let slots = Math.min(entryLimit, remaining, Math.ceil(remaining / remainingSecondaries));
+    if (isTagged) slots = Math.max(slots, 1);
+    if (slots <= 0) continue;
 
     const secondaryRaw = adapter.searchWorkspace({ workspace: name, query: cleanQuery, limit: slots });
     const secondaryRanked = rankRetrievalResults(secondaryRaw, slots).map((r) => ({ ...r, workspace: name }));
 
     allResults.push(...secondaryRanked);
     remaining -= secondaryRanked.length;
-    remainingSecondaries -= 1;
   }
+
+  // Dedup merged results by workspace:path (primary rows key under the primary workspace).
+  const seenKeys = new Set<string>();
+  const dedupedResults = allResults.filter((result) => {
+    const key = `${result.workspace ?? options.primaryWorkspace}:${result.path}`;
+    if (seenKeys.has(key)) return false;
+    seenKeys.add(key);
+    return true;
+  });
 
   const resolvedSecondaries = resolved.length > 0 ? resolved : undefined;
 
@@ -99,9 +117,10 @@ export function retrieveMultiWorkspaceContext(
     query: options.query,
     workspace: options.primaryWorkspace,
     secondaryWorkspaces: resolvedSecondaries,
-    results: allResults,
+    results: dedupedResults,
+    nowIso: options.nowIso,
   });
   const filePath = writeCurrentTask(paths, markdown);
 
-  return { results: allResults, markdown, filePath };
+  return { results: dedupedResults, markdown, filePath };
 }

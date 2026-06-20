@@ -27,4 +27,30 @@ describe("retrieval ranking", () => {
       "/ws/programming/decisions/p3-a.md",
     ]);
   });
+
+  test("orders within a tier by BM25 score descending (ISSUE-008)", () => {
+    const ranked = rankRetrievalResults([
+      { path: "/ws/programming/axioms/low.md", score: 2, snippet: "low" },
+      { path: "/ws/programming/axioms/high.md", score: 9, snippet: "high" },
+      { path: "/ws/programming/axioms/mid.md", score: 5, snippet: "mid" },
+    ]);
+
+    expect(ranked.map((entry) => entry.path)).toEqual([
+      "/ws/programming/axioms/high.md",
+      "/ws/programming/axioms/mid.md",
+      "/ws/programming/axioms/low.md",
+    ]);
+  });
+
+  test("keeps qmd order for equal scores within a tier", () => {
+    const ranked = rankRetrievalResults([
+      { path: "/ws/programming/axioms/first.md", score: 5, snippet: "a" },
+      { path: "/ws/programming/axioms/second.md", score: 5, snippet: "b" },
+    ]);
+
+    expect(ranked.map((entry) => entry.path)).toEqual([
+      "/ws/programming/axioms/first.md",
+      "/ws/programming/axioms/second.md",
+    ]);
+  });
 });

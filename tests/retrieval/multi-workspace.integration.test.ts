@@ -253,6 +253,62 @@ describe("V8 — evidence pipeline unaffected", () => {
   });
 });
 
+describe("V10 — saturated primary + @tag secondary still gets a slot (ISSUE-009)", () => {
+  test("explicit @tag workspace returns rows even when the primary fills the limit", () => {
+    const { paths, workspacesDir, cleanup } = makeEnv(["ttdvkh", "research"]);
+    const called: string[] = [];
+    const primaryResults = Array.from({ length: 8 }, (_, i) => ({
+      path: `/ws/ttdvkh/axioms/a${i}.md`,
+      score: 10 - i,
+      snippet: `s${i}`,
+      body: `b${i}`,
+    }));
+    try {
+      const context = retrieveMultiWorkspaceContext(
+        paths,
+        { primaryWorkspace: "ttdvkh", query: "architecture @research", secondaries: [], workspacesDir, limit: 8 },
+        {
+          searchWorkspace: ({ workspace }) => {
+            called.push(workspace);
+            return workspace === "ttdvkh"
+              ? primaryResults
+              : [{ path: "/ws/research/axioms/r.md", score: 2, snippet: "s", body: "b" }];
+          },
+        },
+      );
+      expect(called).toContain("research");
+      const researchResults = context.results.filter((r) => r.workspace === "research");
+      expect(researchResults.length).toBeGreaterThanOrEqual(1);
+    } finally {
+      cleanup();
+    }
+  });
+});
+
+describe("V11 — merged results dedup by workspace:path (ISSUE-009)", () => {
+  test("a duplicate workspace:path collapses to a single row", () => {
+    const { paths, workspacesDir, cleanup } = makeEnv(["ttdvkh"]);
+    try {
+      const context = retrieveMultiWorkspaceContext(
+        paths,
+        { primaryWorkspace: "ttdvkh", query: "architecture", secondaries: [], workspacesDir, limit: 8 },
+        {
+          searchWorkspace: () => [
+            { path: "/ws/ttdvkh/axioms/dup.md", score: 5, snippet: "s1", body: "b1" },
+            { path: "/ws/ttdvkh/axioms/dup.md", score: 3, snippet: "s2", body: "b2" },
+            { path: "/ws/ttdvkh/projects/uniq.md", score: 4, snippet: "s3", body: "b3" },
+          ],
+        },
+      );
+      const dupCount = context.results.filter((r) => r.path === "/ws/ttdvkh/axioms/dup.md").length;
+      expect(dupCount).toBe(1);
+      expect(context.results.filter((r) => r.path === "/ws/ttdvkh/projects/uniq.md")).toHaveLength(1);
+    } finally {
+      cleanup();
+    }
+  });
+});
+
 describe("V9 — project without secondary_workspaces behaves as before", () => {
   test("pointer without secondary_workspaces field works identically to today", () => {
     const { paths, workspacesDir, cleanup } = makeEnv(["programming"]);

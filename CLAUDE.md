@@ -100,12 +100,12 @@ Retrieval ranking is tier-first: `axioms/` (P0) > `mental-models/` (P1) > `proje
 
 ### Evidence Pipeline
 
-State machine: `ingested → analyzed → qa_in_progress → qa_done → applied → archived`
+State machine: `ingested → reviewed → applied → archived`
 
 Invariants enforced in code:
 - `zbrain learn` creates `sources/{id}/raw.md` and `source.yaml`; they are immutable afterward (SHA-256 checked on every access).
 - `source.yaml#workspace_at_ingest` must match the active workspace at every state transition.
-- Apply stage (`qa_done → applied`) blocks if any P0/P1 question is `awaiting_external`.
+- Apply stage (`reviewed → applied`) blocks if any P0/P1 question is `awaiting_external` or `deferred`.
 
 Evidence files live in `~/.zbrain/workspaces/{workspace}/evidence/`. The `evidence-store.ts` module handles all path construction, ID generation, and index updates. State validation is in `evidence-state.ts`.
 

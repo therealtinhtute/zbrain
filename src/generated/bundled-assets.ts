@@ -82,7 +82,7 @@ export const bundledAssets: BundledAssetRecord[] = [
   },
   {
     "relativePath": "templates/evidence-index.md",
-    "contents": "# Evidence Index\n\n| id | state | updated_at |\n| --- | --- | --- |\n| {{evidence_id}} | ingested | {{updated_at}} |\n\n## State Legend\n\n- `ingested`\n- `analyzed`\n- `qa_in_progress`\n- `qa_awaiting_external`\n- `qa_done`\n- `applied`\n- `archived`\n"
+    "contents": "# Evidence Index\n\n| id | state | updated_at |\n| --- | --- | --- |\n| {{evidence_id}} | ingested | {{updated_at}} |\n\n## State Legend\n\n- `ingested`\n- `reviewed`\n- `applied`\n- `archived`\n"
   },
   {
     "relativePath": "templates/evidence-manifest.yaml",
@@ -115,5 +115,9 @@ export const bundledAssets: BundledAssetRecord[] = [
   {
     "relativePath": "templates/workspace.md",
     "contents": "---\nname: \"{{workspace_name}}\"\ncreated_at: \"{{created_at}}\"\n---\n\n# Workspace\n\n## Purpose\n\nDescribe the domain boundary and what this workspace is allowed to contain.\n\n## Operating Rules\n\n- This workspace is isolated from every other workspace.\n- Retrieval, evidence, and apply operations must stay inside this workspace.\n- Facts added here must cite the originating evidence or source.\n"
+  },
+  {
+    "relativePath": "workspaces/.gitkeep",
+    "contents": ""
   }
 ];
