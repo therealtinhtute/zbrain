@@ -38,22 +38,44 @@ function writeCheckpoint(filePath: string, checkpoint: CheckpointState): void {
 }
 
 function readCheckpoint(filePath: string, evidenceId: string, nowIso: string): CheckpointState {
+  const fresh: CheckpointState = {
+    evidence_id: evidenceId,
+    status: "not_started",
+    completed_paths: [],
+    last_updated: nowIso,
+  };
+
   if (!existsSync(filePath)) {
-    return {
-      evidence_id: evidenceId,
-      status: "not_started",
-      completed_paths: [],
-      last_updated: nowIso,
-    };
+    return fresh;
   }
 
-  return JSON.parse(readTextFile(filePath)) as CheckpointState;
+  // A corrupt or truncated checkpoint resumes as a fresh apply instead of throwing.
+  try {
+    const parsed = JSON.parse(readTextFile(filePath)) as CheckpointState;
+    if (!Array.isArray(parsed.completed_paths)) {
+      return fresh;
+    }
+    return parsed;
+  } catch {
+    return fresh;
+  }
 }
 
 function injectResourceIfMissing(content: string, resource: string): string {
   const match = content.match(/^---\n([\s\S]*?)\n---\n/);
   if (!match) return content;
-  const fm = YAML.load(match[1]) as Record<string, unknown>;
+
+  // Malformed front-matter (parse error, scalar, or list) passes through unchanged
+  // rather than aborting the apply.
+  let parsed: unknown;
+  try {
+    parsed = YAML.load(match[1]);
+  } catch {
+    return content;
+  }
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return content;
+
+  const fm = parsed as Record<string, unknown>;
   if (fm.resource && typeof fm.resource === "string" && fm.resource.trim()) return content;
   fm.resource = resource;
   const newFm = YAML.dump(fm, { noRefs: true }).trimEnd();

@@ -26,7 +26,7 @@ export function normalizeFsPath(input: string): string {
 
 export function pathInside(parent: string, child: string): boolean {
   const relativePath = relative(normalizeFsPath(parent), normalizeFsPath(child));
-  return relativePath === "" || (!relativePath.startsWith("..") && !relativePath.startsWith("../"));
+  return relativePath === "" || !relativePath.startsWith("..");
 }
 
 export function writeTextFile(filePath: string, contents: string, options: WriteTextOptions = {}): void {

@@ -17,6 +17,7 @@ export interface CurrentTaskInput {
   workspace: string;
   secondaryWorkspaces?: string[];
   results: RankedRetrievalResult[];
+  nowIso?: string;
 }
 
 function groupByTier(results: RankedRetrievalResult[]): Map<RetrievalTier, RankedRetrievalResult[]> {
@@ -32,7 +33,7 @@ function groupByTier(results: RankedRetrievalResult[]): Map<RetrievalTier, Ranke
   return grouped;
 }
 
-export function generateCurrentTaskMarkdown({ query, workspace, secondaryWorkspaces, results }: CurrentTaskInput): string {
+export function generateCurrentTaskMarkdown({ query, workspace, secondaryWorkspaces, results, nowIso }: CurrentTaskInput): string {
   const grouped = groupByTier(results);
   const hasMultiWorkspace = results.some((r) => r.workspace !== undefined);
   const cell = (value: string) => value.replace(/\n/g, " ").replace(/\|/g, "\\|");
@@ -40,7 +41,7 @@ export function generateCurrentTaskMarkdown({ query, workspace, secondaryWorkspa
   const lines: string[] = [
     `# Wiki Context - ${query}`,
     "",
-    `Generated: ${new Date().toISOString()}`,
+    `Generated: ${nowIso ?? new Date().toISOString()}`,
     `Workspace: ${workspace}`,
   ];
 

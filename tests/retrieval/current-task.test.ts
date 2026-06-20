@@ -62,6 +62,21 @@ describe("current-task generation", () => {
     expect(markdown).toContain("### [framework-core] /ws/framework-core/projects/starter.md (P2)");
   });
 
+  test("is deterministic given the same nowIso (ISSUE-018)", () => {
+    const input = {
+      query: "solid design",
+      workspace: "programming",
+      nowIso: "2026-06-20T17:00:00.000Z",
+      results: [{ path: "/ws/programming/axioms/solid.md", score: 5, snippet: "solid", tier: "P0" as const }],
+    };
+
+    const first = generateCurrentTaskMarkdown(input);
+    const second = generateCurrentTaskMarkdown(input);
+
+    expect(first).toBe(second);
+    expect(first).toContain("Generated: 2026-06-20T17:00:00.000Z");
+  });
+
   test("writes current-task.md into the central runtime project state directory", () => {
     const root = mkdtempSync(join(tmpdir(), "zbrain-current-task-"));
 

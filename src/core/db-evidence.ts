@@ -19,6 +19,11 @@ export interface DbEvidenceRow {
 }
 
 export function insertEvidence(db: Database, record: EvidenceSourceRecord, nowIso: string): void {
+  // `workspace` (part of the PK) and `workspace_at_ingest` are equal by construction:
+  // both are set from the active workspace at ingest time. They are kept as separate
+  // columns on purpose — the PK enforces per-workspace uniqueness, while
+  // `workspace_at_ingest` feeds the immutable source integrity hash (source_sha256).
+  // Dropping either would break a guarantee, so neither is removed.
   db.prepare(`
     INSERT INTO evidence_sources
       (id, workspace, source_type, origin, label, workspace_at_ingest, ingested_at, state, raw_filename, raw_sha256, source_sha256, state_updated_at)
@@ -45,6 +50,13 @@ export function readEvidence(db: Database, workspace: string, id: string): DbEvi
       .prepare("SELECT * FROM evidence_sources WHERE id = ? AND workspace = ?")
       .get(id, workspace) as DbEvidenceRow | null) ?? null
   );
+}
+
+export function findEvidenceIdByRawSha(db: Database, workspace: string, rawSha: string): string | null {
+  const row = db
+    .prepare("SELECT id FROM evidence_sources WHERE workspace = ? AND raw_sha256 = ? LIMIT 1")
+    .get(workspace, rawSha) as { id: string } | null;
+  return row?.id ?? null;
 }
 
 export function listEvidenceIds(db: Database, workspace: string): string[] {

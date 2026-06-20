@@ -1,12 +1,12 @@
-import { existsSync, readFileSync } from "node:fs";
-import { basename, join } from "node:path";
+import { readFileSync } from "node:fs";
+import { basename } from "node:path";
 import { Command } from "commander";
 import { assertRuntimeReady, createCommandContext } from "./helpers";
 import { clackUi, type CommandUi } from "./ui";
 import { ingestEvidence } from "../core/evidence-ingest";
 import { openDb } from "../core/db";
-import { resolveActiveWorkspace } from "../core/workspace-resolver";
-import type { RuntimePathOptions, RuntimePaths } from "../core/runtime-paths";
+import { resolveWorkspaceName } from "../core/workspace-resolver";
+import type { RuntimePathOptions } from "../core/runtime-paths";
 
 export interface LearnCommandOptions {
   workspace?: string;
@@ -26,18 +26,6 @@ async function readStdin(): Promise<string> {
     contents += chunk;
   }
   return contents;
-}
-
-function resolveWorkspaceName(paths: RuntimePaths, workspace?: string): string {
-  if (!workspace) {
-    return resolveActiveWorkspace(paths).name;
-  }
-
-  if (!existsSync(join(paths.workspacesDir, workspace))) {
-    throw new Error(`Workspace "${workspace}" does not exist.`);
-  }
-
-  return workspace;
 }
 
 async function resolveRawContent(ui: CommandUi, options: LearnCommandOptions): Promise<string> {

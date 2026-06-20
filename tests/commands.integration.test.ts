@@ -478,6 +478,69 @@ describe("phase 4 command integrations", () => {
       rmSync(fixture.root, { recursive: true, force: true });
     }
   });
+
+  test("ask with non-numeric --limit falls back to the default of 8 (ISSUE-022)", async () => {
+    const fixture = makeFixture();
+    const ui = new FakeUi();
+    let seenLimit: number | undefined;
+
+    try {
+      await runSetup({ ui: new FakeUi(), pathOptions: { cwd: fixture.projectDir, homeDir: fixture.homeDir } });
+      await runWorkspaceCreate("programming", {
+        ui: new FakeUi({ confirms: [true] }),
+        pathOptions: { cwd: fixture.projectDir, homeDir: fixture.homeDir },
+        nowIso: "2026-05-25T01:00:00.000Z",
+      });
+      await runInit({
+        ui: new FakeUi({ selects: ["programming"], multiselects: [[]] }),
+        pathOptions: { cwd: fixture.projectDir, homeDir: fixture.homeDir },
+      });
+
+      await runAsk("solid design", {
+        ui,
+        limit: "abc",
+        pathOptions: { cwd: fixture.projectDir, homeDir: fixture.homeDir },
+        adapter: {
+          searchWorkspace: ({ limit }) => {
+            seenLimit = limit;
+            return Array.from({ length: 10 }, (_, i) => ({
+              path: `/ws/programming/axioms/a${i}.md`,
+              score: 10 - i,
+              snippet: `s${i}`,
+            }));
+          },
+        },
+      });
+
+      expect(seenLimit).toBe(8);
+      expect(ui.notes.join("\n")).toContain("results: 8");
+    } finally {
+      rmSync(fixture.root, { recursive: true, force: true });
+    }
+  });
+
+  test("ingest review with a non-existent --workspace errors like learn (ISSUE-013)", async () => {
+    const fixture = makeFixture();
+
+    try {
+      await runSetup({ ui: new FakeUi(), pathOptions: { cwd: fixture.projectDir, homeDir: fixture.homeDir } });
+      await runWorkspaceCreate("programming", {
+        ui: new FakeUi({ confirms: [true] }),
+        pathOptions: { cwd: fixture.projectDir, homeDir: fixture.homeDir },
+        nowIso: "2026-05-25T01:00:00.000Z",
+      });
+
+      await expect(
+        runIngestReview("any-id", {
+          ui: new FakeUi(),
+          pathOptions: { cwd: fixture.projectDir, homeDir: fixture.homeDir },
+          workspace: "nope",
+        }),
+      ).rejects.toThrow('Workspace "nope" does not exist.');
+    } finally {
+      rmSync(fixture.root, { recursive: true, force: true });
+    }
+  });
 });
 
 describe("interactive mode", () => {

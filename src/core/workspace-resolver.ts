@@ -41,6 +41,18 @@ function assertWorkspaceExists(workspacesDir: string, workspaceName: string, sou
   };
 }
 
+export function resolveWorkspaceName(paths: RuntimePaths, workspace?: string): string {
+  if (!workspace) {
+    return resolveActiveWorkspace(paths).name;
+  }
+
+  if (!existsSync(join(paths.workspacesDir, workspace))) {
+    throw new Error(`Workspace "${workspace}" does not exist.`);
+  }
+
+  return workspace;
+}
+
 export function resolveActiveWorkspace(paths: RuntimePaths): ResolvedWorkspace {
   const db = initDb(paths.runtimeDir);
   const projectBinding = readProjectBinding(db, paths.cwd);

@@ -34,7 +34,8 @@ export async function runAsk(query: string, options: AskCommandOptions = {}): Pr
   const db = openDb(context.paths.runtimeDir);
   const projectBinding = readProjectBinding(db, context.paths.cwd);
   const secondaries = options.workspace ? [] : projectBinding?.secondary_workspaces ?? [];
-  const limit = typeof options.limit === "string" ? Number(options.limit) : options.limit;
+  const parsedLimit = typeof options.limit === "string" ? Number(options.limit) : options.limit;
+  const limit = typeof parsedLimit === "number" && Number.isInteger(parsedLimit) && parsedLimit > 0 ? parsedLimit : 8;
 
   ui.intro("zbrain ask");
   const spinner = ui.spinner();

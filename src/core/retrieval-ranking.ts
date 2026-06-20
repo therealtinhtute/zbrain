@@ -45,6 +45,10 @@ export function rankRetrievalResults(results: QmdSearchResult[], limit = 8): Ran
         return tierDiff;
       }
 
+      if (left.score !== right.score) {
+        return right.score - left.score;
+      }
+
       return left._index - right._index;
     })
     .slice(0, safeLimit)

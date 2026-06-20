@@ -7,9 +7,6 @@
 ## State Legend
 
 - `ingested`
-- `analyzed`
-- `qa_in_progress`
-- `qa_awaiting_external`
-- `qa_done`
+- `reviewed`
 - `applied`
 - `archived`
