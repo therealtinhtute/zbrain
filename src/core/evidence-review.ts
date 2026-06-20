@@ -3,7 +3,7 @@ import { readTextFile, writeTextFile } from "./fs";
 import { type RuntimePaths } from "./runtime-paths";
 import { evidenceLocations, qaAnswersMarkdown, verifiedFactsMarkdown, type VerifiedFactRecord } from "./evidence-store";
 import { readEvidence, verifyEvidenceIntegrity, updateEvidenceState } from "./db-evidence";
-import { assertCitationCoverage, assertValidEvidenceTransition, assertWorkspaceLock, type EvidenceQuestion } from "./evidence-state";
+import { assertCitationCoverage, assertValidEvidenceTransition, assertWorkspaceLock, type EvidenceQuestion, type EvidenceState } from "./evidence-state";
 
 export interface ReviewEvidenceOptions {
   workspace: string;
@@ -39,7 +39,7 @@ export function reviewEvidence(
 
   verifyEvidenceIntegrity(db, options.workspace, options.evidenceId, rawContent);
   assertWorkspaceLock(row.workspace_at_ingest, options.workspace);
-  assertValidEvidenceTransition("ingested", "reviewed");
+  assertValidEvidenceTransition(row.state as EvidenceState, "reviewed");
   assertCitationCoverage(
     options.facts.map((fact) => ({ questionId: fact.questionId, wikiPath: fact.wikiPath })),
   );

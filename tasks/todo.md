@@ -1,4 +1,33 @@
-# ISSUE-003 — Make the QA gate real (de-self-certify apply)
+# ISSUE-006 — Validate real state before evidence writes (DONE, uncommitted)
+
+## STATUS: DONE — typecheck clean; 134 pass / 1 pre-existing fail. Both new tests proven as real regressions (fail without the guards). See `tasks/implementation-notes.md`.
+
+## Problem
+`evidence-review.ts:42` hardcodes `assertValidEvidenceTransition("ingested","reviewed")`
+instead of the row's real state. Re-reviewing an `applied` item passes this assert,
+overwrites `verified-facts.md` + `answers.md`, then `updateEvidenceState` throws too late.
+`applyEvidence` has the identical write-before-check pattern (writes wiki files, then
+`updateEvidenceState("applied")` throws).
+
+## Fix (review + symmetric apply guard)
+1. `evidence-review.ts` — replace the literal with `assertValidEvidenceTransition(row.state as EvidenceState, "reviewed")` (before any write). Import `EvidenceState`.
+2. `evidence-apply.ts` — add early `assertValidEvidenceTransition(row.state as EvidenceState, "applied")` among existing asserts (before mutations). Import the fn + `EvidenceState`.
+
+## Tests (tests/evidence/evidence-pipeline.test.ts)
+- review A → re-review B throws AND `verified-facts.md` still has A (not clobbered).
+- ingest → apply without review throws AND wiki file never written.
+- regression-safe: "apply resumes after interruption" still passes (state stays `reviewed` on the interrupted attempt → guard allows `reviewed→applied`).
+
+## Verify
+`bun run typecheck` + `bun test` → expect 134 pass / 1 pre-existing fail.
+
+## Notes
+- Double-check is intentional: early guard protects the file writes; `updateEvidenceState` re-check protects the DB. Safe in single-threaded CLI.
+- `row.state` cast is safe — rows only written via `insert("ingested")` + validated transitions.
+
+---
+
+# ISSUE-003 — Make the QA gate real (de-self-certify apply) — DONE, committed c11ff4d
 
 ## Problem
 `runIngestApply` (`src/commands/ingest.ts:125`) hardcodes

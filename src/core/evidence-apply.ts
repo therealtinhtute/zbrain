@@ -1,7 +1,7 @@
 import { existsSync } from "node:fs";
 import type { Database } from "bun:sqlite";
 import YAML from "js-yaml";
-import { validateQAGate, assertWorkspaceLock, assertCitationCoverage } from "./evidence-state";
+import { validateQAGate, assertValidEvidenceTransition, assertWorkspaceLock, assertCitationCoverage, type EvidenceState } from "./evidence-state";
 import { readTextFile, writeTextFile } from "./fs";
 import { type RuntimePaths } from "./runtime-paths";
 import {
@@ -76,6 +76,7 @@ export function applyEvidence(
 
   verifyEvidenceIntegrity(db, options.workspace, options.evidenceId, rawContent);
   assertWorkspaceLock(row.workspace_at_ingest, options.workspace);
+  assertValidEvidenceTransition(row.state as EvidenceState, "applied");
   const reviewedQuestions = existsSync(locations.qaAnswersFile)
     ? parseQaAnswers(readTextFile(locations.qaAnswersFile))
     : [];
