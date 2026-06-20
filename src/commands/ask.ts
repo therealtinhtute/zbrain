@@ -1,3 +1,5 @@
+import { existsSync } from "node:fs";
+import { join } from "node:path";
 import { Command } from "commander";
 import { assertRuntimeReady, createCommandContext } from "./helpers";
 import { clackUi, type CommandUi } from "./ui";
@@ -20,7 +22,15 @@ export async function runAsk(query: string, options: AskCommandOptions = {}): Pr
   const context = createCommandContext(options.pathOptions);
   assertRuntimeReady(context.paths);
 
-  const active = options.workspace ?? resolveActiveWorkspace(context.paths).name;
+  let active: string;
+  if (options.workspace) {
+    if (!existsSync(join(context.paths.workspacesDir, options.workspace))) {
+      throw new Error(`Workspace "${options.workspace}" does not exist.`);
+    }
+    active = options.workspace;
+  } else {
+    active = resolveActiveWorkspace(context.paths).name;
+  }
   const db = openDb(context.paths.runtimeDir);
   const projectBinding = readProjectBinding(db, context.paths.cwd);
   const secondaries = options.workspace ? [] : projectBinding?.secondary_workspaces ?? [];

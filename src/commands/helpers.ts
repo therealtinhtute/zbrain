@@ -208,12 +208,19 @@ export function initProject(
   const created: string[] = [];
   const updated: string[] = [];
   const runtimes = selectedRuntimes(selection.injectTargets);
-  upsertProjectBinding(db, {
+  const registry = upsertProjectBinding(db, {
     project_root: paths.cwd,
     workspace: selection.workspace,
     context_file: currentTaskFilePath(paths),
     runtimes,
   });
+  // Mirror the SQLite registry to the projects.json file that every skill /
+  // engine rule instructs the agent to read (otherwise step 1 hits a missing file).
+  writeTextFile(
+    paths.projectRegistryFile,
+    `${JSON.stringify(registry, null, 2)}\n`,
+    { overwrite: true },
+  );
   created.push(paths.projectRegistryFile);
 
   const claudeDir = join(paths.cwd, ".claude");

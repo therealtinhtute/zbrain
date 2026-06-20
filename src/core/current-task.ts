@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { renameSync } from "node:fs";
 import { ensureDir, writeTextFile } from "./fs";
 import { join } from "node:path";
 import { type RuntimePaths } from "./runtime-paths";
@@ -34,6 +35,7 @@ function groupByTier(results: RankedRetrievalResult[]): Map<RetrievalTier, Ranke
 export function generateCurrentTaskMarkdown({ query, workspace, secondaryWorkspaces, results }: CurrentTaskInput): string {
   const grouped = groupByTier(results);
   const hasMultiWorkspace = results.some((r) => r.workspace !== undefined);
+  const cell = (value: string) => value.replace(/\n/g, " ").replace(/\|/g, "\\|");
 
   const lines: string[] = [
     `# Wiki Context - ${query}`,
@@ -60,13 +62,13 @@ export function generateCurrentTaskMarkdown({ query, workspace, secondaryWorkspa
       lines.push("| --- | --- | --- | --- |");
       for (const entry of entries) {
         const ws = entry.workspace ?? workspace;
-        lines.push(`| ${entry.score} | ${ws} | ${entry.path} | ${entry.snippet.replace(/\n/g, " ")} |`);
+        lines.push(`| ${entry.score} | ${ws} | ${cell(entry.path)} | ${cell(entry.snippet)} |`);
       }
     } else {
       lines.push("| Score | File | Preview |");
       lines.push("| --- | --- | --- |");
       for (const entry of entries) {
-        lines.push(`| ${entry.score} | ${entry.path} | ${entry.snippet.replace(/\n/g, " ")} |`);
+        lines.push(`| ${entry.score} | ${cell(entry.path)} | ${cell(entry.snippet)} |`);
       }
     }
     lines.push("");
@@ -109,7 +111,11 @@ export function currentTaskFilePath(paths: RuntimePaths): string {
 export function writeCurrentTask(paths: RuntimePaths, markdown: string): string {
   const filePath = currentTaskFilePath(paths);
   ensureDir(join(paths.projectsDir, projectRuntimeKey(paths.cwd)));
-  writeTextFile(filePath, markdown, { overwrite: true });
+  // Write to a temp sibling then rename — atomic on the same filesystem, so a
+  // crash mid-write never leaves the agent a truncated context_file.
+  const tempFile = `${filePath}.tmp`;
+  writeTextFile(tempFile, markdown, { overwrite: true });
+  renameSync(tempFile, filePath);
   return filePath;
 }
 

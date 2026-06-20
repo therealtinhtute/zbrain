@@ -4,6 +4,7 @@ import { assertRuntimeReady, createCommandContext } from "./helpers";
 import { clackUi, type CommandUi } from "./ui";
 import { reviewEvidence } from "../core/evidence-review";
 import { applyEvidence, type ApplyMutation } from "../core/evidence-apply";
+import { QmdAdapter, type QmdRunner } from "../core/qmd-adapter";
 import { listEvidenceItems } from "../core/evidence-list";
 import { resolveActiveWorkspace } from "../core/workspace-resolver";
 import { openDb } from "../core/db";
@@ -26,6 +27,7 @@ export interface IngestApplyOptions extends BaseIngestOptions {
   path?: string;
   content?: string;
   contentFile?: string;
+  qmdRunner?: QmdRunner;
 }
 
 function resolveWorkspaceName(paths: RuntimePaths, workspace?: string): string {
@@ -115,12 +117,20 @@ export async function runIngestApply(evidenceId: string, options: IngestApplyOpt
     citations: [{ questionId: "q-1", wikiPath: relativePath }],
   };
   const db = openDb(context.paths.runtimeDir);
+  const qmd = new QmdAdapter(context.paths, options.qmdRunner);
   const result = applyEvidence(db, context.paths, {
     workspace,
     evidenceId,
     nowIso: options.nowIso,
     questions: [{ id: "q-1", severity: "P0", status: "answered" }],
     mutations: [mutation],
+    reindex: (targetWorkspace) => {
+      try {
+        qmd.indexWorkspace({ workspace: targetWorkspace });
+      } catch (error) {
+        ui.note(`qmd reindex skipped: ${(error as Error).message}`, "Warning");
+      }
+    },
   });
   ui.note([`workspace: ${workspace}`, `evidence_id: ${evidenceId}`, `applied: ${result.applied.length}`].join("\n"), "Apply summary");
   ui.outro("Evidence applied.");
