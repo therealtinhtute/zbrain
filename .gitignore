@@ -18,8 +18,12 @@ zbrain-win-x64.exe
 workspaces/
 .cache/
 
-# Kit reports (local session artifacts)
-.kit/reports/
+# Session scratch (local planning artifacts — never in repo)
+.kit/
+plans/
+*.cook.md
+HANDOFF.md
+workflow-state.yml
 
 # Env
 .env
