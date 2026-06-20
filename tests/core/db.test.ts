@@ -52,6 +52,20 @@ describe("initDb", () => {
     }
   });
 
+  test("creates the idx_evidence_ws secondary index (ISSUE-017)", () => {
+    const dir = makeTempDir();
+    try {
+      const db = initDb(dir);
+      const rows = db
+        .prepare("SELECT name FROM sqlite_master WHERE type='index' AND tbl_name='evidence_sources'")
+        .all() as Array<{ name: string }>;
+      db.close();
+      expect(rows.map((r) => r.name)).toContain("idx_evidence_ws");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   test("sets schema version to 1", () => {
     const dir = makeTempDir();
     try {

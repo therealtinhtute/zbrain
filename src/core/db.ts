@@ -72,6 +72,8 @@ function initSchema(db: Database): void {
       retrieved_count  INTEGER NOT NULL DEFAULT 0,
       queried_at       TEXT NOT NULL
     );
+
+    CREATE INDEX IF NOT EXISTS idx_evidence_ws ON evidence_sources(workspace, ingested_at);
   `);
 
   if (currentVersion === 0) {
