@@ -21,17 +21,9 @@ npm i -g @tobilu/qmd
 ## Commands
 
 ```bash
-bun test                          # run full test suite
-bun test tests/core/config.test.ts  # run a single test file
-bun test --watch                  # watch mode
 bun run typecheck                 # TypeScript type check (no emit)
 bun run build                     # generate assets + compile binary → dist/zbrain
 bun run generate:assets           # regenerate src/generated/bundled-assets.ts only
-```
-
-Run a single named test with `--test-name-pattern`:
-```bash
-bun test tests/retrieval/ --test-name-pattern "keyword trigger"
 ```
 
 The binary is a single Bun-compiled executable. Run it directly during development:
@@ -108,14 +100,6 @@ Invariants enforced in code:
 - Apply stage (`reviewed → applied`) blocks if any P0/P1 question is `awaiting_external` or `deferred`.
 
 Evidence files live in `~/.zbrain/workspaces/{workspace}/evidence/`. The `evidence-store.ts` module handles all path construction, ID generation, and index updates. State validation is in `evidence-state.ts`.
-
-### Testing Patterns
-
-- **Framework**: `bun:test` (`describe`/`test`/`expect`). No `vitest` at runtime despite it being listed in devDeps.
-- **Filesystem tests**: use `mkdtempSync` + `rmSync` in `finally` blocks — never mock the filesystem.
-- **Retrieval adapter injection**: `retrieveWorkspaceContext` and `retrieveMultiWorkspaceContext` accept an optional `RetrievalAdapter` argument, so tests inject a fake `searchWorkspace()` without needing `qmd` installed.
-- **CommandUi injection**: all command functions accept an optional `ui: CommandUi` (`src/commands/ui.ts`) so tests pass a stub UI without triggering interactive prompts.
-- **Test layout mirrors `src/`**: `tests/core/` ↔ `src/core/`, `tests/retrieval/` ↔ retrieval modules.
 
 ### Key Schema Types
 

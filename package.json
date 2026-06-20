@@ -7,8 +7,7 @@
   "scripts": {
     "generate:assets": "node scripts/generate-bundled-assets.mjs",
     "build": "bun run build.ts",
-    "test": "bun test --run",
-    "typecheck": "bunx tsc --noEmit"
+"typecheck": "bunx tsc --noEmit"
   },
   "dependencies": {
     "@clack/prompts": "latest",
