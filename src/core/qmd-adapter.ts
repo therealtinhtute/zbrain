@@ -1,6 +1,6 @@
 import { spawnSync } from "node:child_process";
 import { join, basename } from "node:path";
-import { type RuntimePaths } from "./runtime-paths";
+import { type RuntimePaths, wikiRoot } from "./runtime-paths";
 
 export interface QmdSearchResult {
   path: string;
@@ -120,10 +120,12 @@ export class QmdAdapter {
 
   indexWorkspace({ workspace }: IndexWorkspaceOptions): void {
     const collection = workspaceCollectionName(workspace);
-    const workspacePath = workspaceCollectionPath(this.paths, workspace);
+    // C1 fix: index only the `wiki/` subtree. `evidence/` and `.trash/` are
+    // structurally unindexable. See SPEC §7 AD-2.
+    const wikiPath = wikiRoot(this.paths, workspace);
     const result = this.runner([
       "index",
-      workspacePath,
+      wikiPath,
       "--collection",
       collection,
     ]);

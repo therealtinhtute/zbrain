@@ -67,22 +67,35 @@ zbrain = ENGINE (shared runtime) + N WORKSPACES (isolated personal domains)
 | `zbrain:ingest` | `/zbrain:ingest list|analyze|qa|apply` | Process learned evidence into workspace knowledge |
 | `zbrain:ask` | `/zbrain:ask "question"` | 3-stage retrieval → `current-task.md` |
 
-### 3.4 Workspace Structure
+### 3.4 Workspace Structure (V2 layout)
+
+The V2 layout splits the searchable wiki from the raw evidence by construction.
+Only `wiki/` is indexed for retrieval; `evidence/` and `.trash/` are structurally
+unindexable. This is the C1 fix (closes the evidence-gate-bypass poisoning vector).
 
 ```
 ~/.zbrain/workspaces/{name}/
 ├── workspace.md           ← identity: domain, purpose, operating rules
-├── axioms/                ← P0: core facts that other knowledge must not contradict
-├── mental-models/         ← P1: reusable frameworks and thinking patterns
-├── projects/              ← P2: book notes, course notes, experiments
-├── decisions/             ← P3: logged personal decisions with reasoning
-└── evidence/
-    ├── _index.md          ← state tracker for all evidence items
-    ├── sources/{id}/      ← immutable raw data (raw.md + source.yaml)
-    ├── analysis/{id}/     ← structured analysis output (analysis.md)
-    ├── qa/{id}/           ← Q&A batches + verified-facts.md
-    └── applied/{id}/      ← manifest + checkpoint of applied changes
+├── wiki/                  ◄── THE ONLY INDEXED TREE
+│   ├── axioms/                ← P0: core facts that other knowledge must not contradict
+│   ├── mental-models/         ← P1: reusable frameworks and thinking patterns
+│   ├── projects/              ← P2: book notes, course notes, experiments
+│   └── decisions/             ← P3: logged personal decisions with reasoning
+├── agents/                ← workspace-scoped agent subagent definitions
+├── evidence/              ◄── NEVER INDEXED (quarantine)
+│   ├── _index.md              ← state tracker for all evidence items
+│   ├── sources/{id}/          ← immutable raw data (raw.md + source.yaml)
+│   ├── analysis/{id}/         ← structured analysis output (analysis.md)
+│   ├── qa/{id}/               ← Q&A batches + verified-facts.md
+│   └── applied/{id}/          ← manifest + checkpoint of applied changes
+├── .trash/                ◄── forgotten notes (recoverable via restore)
+└── .zbrain-layout-version ← marker file; "2" = V2 layout, missing/anything-else = V1
 ```
+
+**Layout version invariant:** every workspace on disk carries a
+`.zbrain-layout-version` file containing the integer `2`. Missing marker (or any
+other value) implies V1, which triggers an auto-migration on next CLI boot:
+tier content is moved from `<ws>/<tier>/` to `<ws>/wiki/<tier>/`, idempotently.
 
 ### 3.5 Active Workspace Resolution
 

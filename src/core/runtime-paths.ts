@@ -1,6 +1,7 @@
 import { existsSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
+import { WikiTiers, type WikiTier } from "./workspace-layout";
 
 export interface RuntimePathOptions {
   cwd?: string;
@@ -43,3 +44,22 @@ export function resolveRuntimePaths(options: RuntimePathOptions = {}): RuntimePa
     legacyProjectPointerFile: join(cwd, ".claude", "zbrain.json"),
   };
 }
+
+// Workspace-scoped path helpers (V2 layout).
+// `wiki/` is the only tree indexed for retrieval. `evidence/` and `.trash/`
+// are structurally unindexable. See SPEC §7 AD-2.
+
+export function workspaceRoot(paths: RuntimePaths, workspace: string): string {
+  return join(paths.workspacesDir, workspace);
+}
+
+export function wikiRoot(paths: RuntimePaths, workspace: string): string {
+  return join(workspaceRoot(paths, workspace), "wiki");
+}
+
+export function wikiTierPath(paths: RuntimePaths, workspace: string, tier: WikiTier): string {
+  return join(wikiRoot(paths, workspace), tier);
+}
+
+export { WikiTiers };
+export type { WikiTier };
