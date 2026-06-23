@@ -107,6 +107,18 @@ function initSchema(db: Database): void {
     );
 
     CREATE INDEX IF NOT EXISTS idx_evidence_ws ON evidence_sources(workspace, ingested_at);
+
+    -- V2: per-(workspace, path) advisory write leases with TTL.
+    CREATE TABLE IF NOT EXISTS leases (
+      workspace   TEXT NOT NULL,
+      path        TEXT NOT NULL,
+      holder      TEXT NOT NULL,
+      acquired_at TEXT NOT NULL,
+      expires_at  TEXT NOT NULL,
+      PRIMARY KEY (workspace, path)
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_leases_expires ON leases(expires_at);
   `);
 
   // V2: drop unused `queries` table (added speculatively in V1; not consumed).
