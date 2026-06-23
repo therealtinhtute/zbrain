@@ -27,7 +27,15 @@ export async function runMcpServe(): Promise<void> {
   });
 }
 
+export async function runMcpToolsList(): Promise<void> {
+  // Lazy import to avoid circular dependency (server.ts imports the same adapter).
+  const { McpServer } = await import("../mcp/server");
+  const tools = (McpServer as any).TOOLS ?? require("../mcp/server").McpServer.TOOLS;
+  console.log(JSON.stringify({ tools }, null, 2));
+}
+
 export function registerMcpCommand(program: Command): void {
   const mcp = program.command("mcp").description("MCP server (Model Context Protocol)");
   mcp.command("serve").description("Start MCP server on stdio").action(runMcpServe);
+  mcp.command("tools").description("List available MCP tools (debug)").action(runMcpToolsList);
 }
