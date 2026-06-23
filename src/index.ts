@@ -10,6 +10,7 @@ import { registerLearnCommand } from "./commands/learn";
 import { registerIngestCommands } from "./commands/ingest";
 import { registerAskCommand } from "./commands/ask";
 import { registerReindexCommand } from "./commands/reindex";
+import { registerNoteCommand } from "./commands/note";
 
 export function createProgram(): Command {
   const program = new Command();
@@ -34,6 +35,7 @@ export function createProgram(): Command {
   registerIngestCommands(program);
   registerAskCommand(program);
   registerReindexCommand(program);
+  registerNoteCommand(program);
 
   program
     .command("update")
