@@ -12,6 +12,7 @@ import { registerAskCommand } from "./commands/ask";
 import { registerReindexCommand } from "./commands/reindex";
 import { registerNoteCommand } from "./commands/note";
 import { registerLeaseCommand } from "./commands/lease";
+import { registerDoctorCommand } from "./commands/doctor";
 
 export function createProgram(): Command {
   const program = new Command();
@@ -38,6 +39,7 @@ export function createProgram(): Command {
   registerReindexCommand(program);
   registerNoteCommand(program);
   registerLeaseCommand(program);
+  registerDoctorCommand(program);
 
   program
     .command("update")
