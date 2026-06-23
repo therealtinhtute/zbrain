@@ -9,6 +9,7 @@ import { runInteractive } from "./commands/interactive";
 import { registerLearnCommand } from "./commands/learn";
 import { registerIngestCommands } from "./commands/ingest";
 import { registerAskCommand } from "./commands/ask";
+import { registerReindexCommand } from "./commands/reindex";
 
 export function createProgram(): Command {
   const program = new Command();
@@ -32,6 +33,7 @@ export function createProgram(): Command {
   registerLearnCommand(program);
   registerIngestCommands(program);
   registerAskCommand(program);
+  registerReindexCommand(program);
 
   program
     .command("update")

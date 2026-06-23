@@ -2,7 +2,7 @@ import { Database } from "bun:sqlite";
 import { join } from "node:path";
 import { ensureDir } from "./fs";
 
-export const SCHEMA_VERSION = 1;
+export const SCHEMA_VERSION = 2;
 
 export function openDb(runtimeDir: string): Database {
   ensureDir(runtimeDir);
@@ -63,20 +63,62 @@ function initSchema(db: Database): void {
       last_activity_at  TEXT NOT NULL
     );
 
-    CREATE TABLE IF NOT EXISTS queries (
-      id               INTEGER PRIMARY KEY AUTOINCREMENT,
-      session_id       TEXT NOT NULL REFERENCES sessions(id),
-      query_text       TEXT NOT NULL,
-      workspace        TEXT NOT NULL,
-      context_file     TEXT NOT NULL,
-      retrieved_count  INTEGER NOT NULL DEFAULT 0,
-      queried_at       TEXT NOT NULL
+    -- V2: notes (the durable memory unit). Files are truth; this table is a
+    -- derived cache rebuildable via indexer.rebuild(workspace).
+    CREATE TABLE IF NOT EXISTS notes (
+      id            TEXT NOT NULL,
+      workspace     TEXT NOT NULL,
+      path          TEXT NOT NULL,
+      tier          TEXT NOT NULL,
+      status        TEXT NOT NULL,
+      title         TEXT,
+      content_sha   TEXT NOT NULL,
+      created_at    TEXT NOT NULL,
+      updated_at    TEXT NOT NULL,
+      review_by     TEXT,
+      PRIMARY KEY (id, workspace),
+      UNIQUE (workspace, path)
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_notes_ws_status ON notes(workspace, status);
+
+    CREATE VIRTUAL TABLE IF NOT EXISTS note_fts USING fts5(
+      title, body
+    );
+
+    CREATE TABLE IF NOT EXISTS note_fts_map (
+      rowid    INTEGER PRIMARY KEY,
+      note_id  TEXT NOT NULL,
+      workspace TEXT NOT NULL,
+      UNIQUE (workspace, note_id)
+    );
+
+    CREATE TABLE IF NOT EXISTS links (
+      from_id   TEXT NOT NULL,
+      workspace TEXT NOT NULL,
+      type      TEXT NOT NULL,
+      to_id     TEXT NOT NULL,
+      PRIMARY KEY (from_id, workspace, type, to_id)
+    );
+
+    CREATE TABLE IF NOT EXISTS schema_meta (
+      key    TEXT PRIMARY KEY,
+      value  TEXT NOT NULL
     );
 
     CREATE INDEX IF NOT EXISTS idx_evidence_ws ON evidence_sources(workspace, ingested_at);
   `);
 
+  // V2: drop unused `queries` table (added speculatively in V1; not consumed).
+  // The CREATE TABLE statement above is omitted, but if a V1 DB already has
+  // the table, drop it on upgrade.
+  if (currentVersion < 2) {
+    db.exec("DROP TABLE IF EXISTS queries");
+  }
+
   if (currentVersion === 0) {
+    db.exec(`PRAGMA user_version = ${SCHEMA_VERSION}`);
+  } else if (currentVersion < SCHEMA_VERSION) {
     db.exec(`PRAGMA user_version = ${SCHEMA_VERSION}`);
   }
 }
