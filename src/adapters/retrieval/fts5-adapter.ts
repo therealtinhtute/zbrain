@@ -56,7 +56,7 @@ export class Fts5Adapter {
       ORDER BY fts.rank ASC
       LIMIT ?
     `;
-    const params: (string | number)[] = [escapeFtsQuery(options.query), options.workspace, ...statusFilter, limit];
+    const params: (string | number)[] = [buildFtsQuery(options.query), options.workspace, ...statusFilter, limit];
     const rows = this.db.prepare(sql).all(...params) as Array<{
       id: string;
       workspace: string;
@@ -83,13 +83,17 @@ export class Fts5Adapter {
   }
 }
 
-// Escape user input for FTS5 MATCH: wrap in double quotes, escape any
-// embedded double quotes. This is a conservative sanitizer; richer query
-// syntax (NEAR, column filters) is not exposed.
-function escapeFtsQuery(input: string): string {
-  const trimmed = input.trim();
-  if (trimmed.length === 0) return '""';
-  return `"${trimmed.replace(/"/g, '""')}"`;
+// Tokenize a query into FTS5 prefix-match terms. Each whitespace-delimited
+// token becomes `term*` so partial words match (e.g. "auth" -> "auth*").
+// AND semantics between tokens (default FTS5 behavior).
+function buildFtsQuery(input: string): string {
+  const tokens = input
+    .trim()
+    .split(/\s+/)
+    .map((t) => t.replace(/[^A-Za-z0-9_-]/g, ""))
+    .filter((t) => t.length > 0);
+  if (tokens.length === 0) return '""';
+  return tokens.map((t) => `${t}*`).join(" ");
 }
 
 export const TIER_WEIGHTS: Record<string, number> = {
