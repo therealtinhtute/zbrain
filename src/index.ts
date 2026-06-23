@@ -14,6 +14,7 @@ import { registerNoteCommand } from "./commands/note";
 import { registerLeaseCommand } from "./commands/lease";
 import { registerDoctorCommand } from "./commands/doctor";
 import { registerMcpCommand } from "./commands/mcp";
+import { registerExportCommand } from "./commands/export";
 
 export function createProgram(): Command {
   const program = new Command();
@@ -42,6 +43,7 @@ export function createProgram(): Command {
   registerLeaseCommand(program);
   registerDoctorCommand(program);
   registerMcpCommand(program);
+  registerExportCommand(program);
 
   program
     .command("update")
