@@ -3,7 +3,7 @@
 // The DB is a derived cache, rebuildable from files via `indexer.rebuild()`.
 
 import { createHash, randomUUID } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { parseFrontmatter, serializeMarkdown } from "./frontmatter";
 import { assertTransition, InvalidTransitionError } from "./lifecycle";
@@ -369,7 +369,6 @@ export function restoreNote(
   mkdirSync(dirname(targetPath), { recursive: true });
   renameSync(backupPath, targetPath);
   // Remove tombstone.
-  const { unlinkSync } = require("node:fs");
   try { unlinkSync(tombstonePath); } catch {}
   const restored = readNote(paths, workspace, originalTier, slug);
   if (!restored) throw new Error(`Restoration failed: ${targetPath}`);

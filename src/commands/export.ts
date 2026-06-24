@@ -3,7 +3,7 @@
 // logs). Round-trip safe: `import` re-extracts and reindexes.
 
 import { spawnSync } from "node:child_process";
-import { existsSync, readFileSync, writeFileSync, mkdirSync, rmSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync, mkdirSync, rmSync, readdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, basename } from "node:path";
 import { Command } from "commander";
@@ -54,7 +54,6 @@ function buildManifest(runtimeDir: string): string {
 }
 
 function walk(root: string, dir: string, skip: Set<string>, lines: string[]): void {
-  const { readdirSync } = require("node:fs");
   for (const entry of readdirSync(dir, { withFileTypes: true })) {
     if (skip.has(entry.name)) continue;
     const full = join(dir, entry.name);

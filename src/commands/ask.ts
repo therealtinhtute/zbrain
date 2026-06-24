@@ -1,4 +1,6 @@
-import { existsSync } from "node:fs";
+// `zbrain ask` CLI — retrieve ranked workspace context for one question.
+
+import { existsSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { Command } from "commander";
 import { assertRuntimeReady, createCommandContext } from "./helpers";
@@ -9,6 +11,7 @@ import { retrieveMultiWorkspaceContext, retrieveWorkspaceContext, type Retrieval
 import { resolveActiveWorkspace } from "../core/workspace-resolver";
 import { rebuildWorkspace } from "../core/indexer";
 import { createRetrievalAdapter } from "../adapters/retrieval";
+import { getSessionId } from "../core/session";
 import type { RuntimePathOptions } from "../core/runtime-paths";
 
 export interface AskCommandOptions {
@@ -18,6 +21,7 @@ export interface AskCommandOptions {
   pathOptions?: RuntimePathOptions;
   adapter?: RetrievalAdapter;
   noLazyIndex?: boolean;
+  sessionId?: string;
 }
 
 function isIndexStale(paths: ReturnType<typeof createCommandContext>["paths"], workspace: string): boolean {
@@ -26,10 +30,7 @@ function isIndexStale(paths: ReturnType<typeof createCommandContext>["paths"], w
   const db = openDb(paths.runtimeDir);
   const wiki = join(paths.workspacesDir, workspace, "wiki");
   if (!existsSync(wiki)) return false;
-  const { countFilesUnderWiki } = require("../core/indexer");
-  // Inline: count .md under wiki/.
   let fileCount = 0;
-  const { readdirSync } = require("node:fs");
   for (const tier of ["axioms", "mental-models", "projects", "decisions"]) {
     const tierDir = join(wiki, tier);
     if (!existsSync(tierDir)) continue;
@@ -69,6 +70,9 @@ export async function runAsk(query: string, options: AskCommandOptions = {}): Pr
   const parsedLimit = typeof options.limit === "string" ? Number(options.limit) : options.limit;
   const limit = typeof parsedLimit === "number" && Number.isInteger(parsedLimit) && parsedLimit > 0 ? parsedLimit : 8;
   const adapter = options.adapter ?? createRetrievalAdapter(db, context.paths);
+  // V2 multi-agent fix: thread session id through retrieval so per-session
+  // context files don't clobber each other.
+  const sessionId = options.sessionId ?? getSessionId();
 
   ui.intro("zbrain ask");
   const spinner = ui.spinner();
@@ -82,15 +86,17 @@ export async function runAsk(query: string, options: AskCommandOptions = {}): Pr
           secondaries,
           workspacesDir: context.paths.workspacesDir,
           limit,
+          sessionId,
         },
         adapter,
       )
-    : retrieveWorkspaceContext(context.paths, { workspace: active, query, limit }, adapter);
+    : retrieveWorkspaceContext(context.paths, { workspace: active, query, limit, sessionId }, adapter);
   spinner.stop("Context retrieved");
 
   ui.note(
     [
       `workspace: ${active}`,
+      `session_id: ${result.sessionId}`,
       `results: ${result.results.length}`,
       `context_file: ${result.filePath}`,
     ].join("\n"),

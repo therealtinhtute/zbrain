@@ -2,7 +2,7 @@
 
 import { Command } from "commander";
 import { assertRuntimeReady, createCommandContext } from "./helpers";
-import { McpServer } from "../mcp/server";
+import { MCP_TOOLS, McpServer } from "../mcp/server";
 
 export async function runMcpServe(): Promise<void> {
   const context = createCommandContext();
@@ -28,10 +28,7 @@ export async function runMcpServe(): Promise<void> {
 }
 
 export async function runMcpToolsList(): Promise<void> {
-  // Lazy import to avoid circular dependency (server.ts imports the same adapter).
-  const { McpServer } = await import("../mcp/server");
-  const tools = (McpServer as any).TOOLS ?? require("../mcp/server").McpServer.TOOLS;
-  console.log(JSON.stringify({ tools }, null, 2));
+  console.log(JSON.stringify({ tools: MCP_TOOLS }, null, 2));
 }
 
 export function registerMcpCommand(program: Command): void {

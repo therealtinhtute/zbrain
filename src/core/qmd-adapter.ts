@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { join, basename } from "node:path";
+import { basename } from "node:path";
 import { type RuntimePaths, wikiRoot } from "./runtime-paths";
 
 export interface QmdSearchResult {
@@ -83,10 +83,6 @@ export function workspaceCollectionName(workspace: string): string {
   }
 
   return trimmed;
-}
-
-export function workspaceCollectionPath(paths: RuntimePaths, workspace: string): string {
-  return join(paths.workspacesDir, workspace);
 }
 
 export class QmdAdapter {

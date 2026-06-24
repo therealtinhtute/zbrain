@@ -1,6 +1,4 @@
 import { createHash } from "node:crypto";
-import { renameSync } from "node:fs";
-import { ensureDir, writeTextFile } from "./fs";
 import { join } from "node:path";
 import { type RuntimePaths } from "./runtime-paths";
 import { type RankedRetrievalResult, type RetrievalTier } from "./retrieval-ranking";
@@ -105,19 +103,12 @@ export function generateCurrentTaskMarkdown({ query, workspace, secondaryWorkspa
   return lines.join("\n");
 }
 
+// V2: runtime writes per-session context files via `writeSessionContext`
+// (see session.ts). This path is retained only for the legacy `context_file`
+// field written into project bindings by `initProject` (AC-P1-9 partial;
+// not yet wired to per-session directory).
 export function currentTaskFilePath(paths: RuntimePaths): string {
   return join(paths.projectsDir, projectRuntimeKey(paths.cwd), "current-task.md");
-}
-
-export function writeCurrentTask(paths: RuntimePaths, markdown: string): string {
-  const filePath = currentTaskFilePath(paths);
-  ensureDir(join(paths.projectsDir, projectRuntimeKey(paths.cwd)));
-  // Write to a temp sibling then rename — atomic on the same filesystem, so a
-  // crash mid-write never leaves the agent a truncated context_file.
-  const tempFile = `${filePath}.tmp`;
-  writeTextFile(tempFile, markdown, { overwrite: true });
-  renameSync(tempFile, filePath);
-  return filePath;
 }
 
 export function projectRuntimeKey(projectRoot: string): string {

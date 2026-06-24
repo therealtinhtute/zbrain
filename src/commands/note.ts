@@ -1,5 +1,6 @@
 // `zbrain note` CLI — update / archive / forget / restore / show.
 
+import { existsSync, readdirSync } from "node:fs";
 import { Command } from "commander";
 import { assertRuntimeReady, createCommandContext } from "./helpers";
 import { clackUi, type CommandUi } from "./ui";
@@ -33,14 +34,14 @@ export async function runNoteShow(id: string, options: NoteCommandOptions = {}):
   const ui = options.ui ?? clackUi;
   const context = createCommandContext(options.pathOptions);
   assertRuntimeReady(context.paths);
-  const workspaces = require("node:fs").readdirSync(context.paths.workspacesDir, { withFileTypes: true })
-    .filter((e: any) => e.isDirectory())
-    .map((e: any) => e.name);
+  const workspaces = readdirSync(context.paths.workspacesDir, { withFileTypes: true })
+    .filter((e) => e.isDirectory())
+    .map((e) => e.name);
   for (const ws of workspaces) {
     for (const tier of ["axioms", "mental-models", "projects", "decisions"] as WikiTier[]) {
       const tierDir = `${context.paths.workspacesDir}/${ws}/wiki/${tier}`;
-      if (!require("node:fs").existsSync(tierDir)) continue;
-      for (const entry of require("node:fs").readdirSync(tierDir)) {
+      if (!existsSync(tierDir)) continue;
+      for (const entry of readdirSync(tierDir)) {
         if (!entry.endsWith(".md")) continue;
         const slug = entry.replace(/\.md$/, "");
         const note = readNote(context.paths, ws, tier, slug);
@@ -127,21 +128,21 @@ export async function runNoteRestore(
 }
 
 function firstWorkspace(paths: any): string | null {
-  if (!require("node:fs").existsSync(paths.workspacesDir)) return null;
-  for (const e of require("node:fs").readdirSync(paths.workspacesDir, { withFileTypes: true })) {
+  if (!existsSync(paths.workspacesDir)) return null;
+  for (const e of readdirSync(paths.workspacesDir, { withFileTypes: true })) {
     if (e.isDirectory()) return e.name;
   }
   return null;
 }
 
 function locateNote(paths: any, noteId: string) {
-  if (!require("node:fs").existsSync(paths.workspacesDir)) return null;
-  for (const wsEntry of require("node:fs").readdirSync(paths.workspacesDir, { withFileTypes: true })) {
+  if (!existsSync(paths.workspacesDir)) return null;
+  for (const wsEntry of readdirSync(paths.workspacesDir, { withFileTypes: true })) {
     if (!wsEntry.isDirectory()) continue;
     for (const tier of ["axioms", "mental-models", "projects", "decisions"] as WikiTier[]) {
       const tierDir = `${paths.workspacesDir}/${wsEntry.name}/wiki/${tier}`;
-      if (!require("node:fs").existsSync(tierDir)) continue;
-      for (const entry of require("node:fs").readdirSync(tierDir)) {
+      if (!existsSync(tierDir)) continue;
+      for (const entry of readdirSync(tierDir)) {
         if (!entry.endsWith(".md")) continue;
         const slug = entry.replace(/\.md$/, "");
         const note = readNote(paths, wsEntry.name, tier, slug);

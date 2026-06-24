@@ -3,7 +3,7 @@
 // `remember` writes to evidence pipeline (NOT directly to notes).
 // Review -> apply still required (the moat).
 
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import type { Database } from "bun:sqlite";
 import { initDb } from "../core/db";
@@ -29,7 +29,7 @@ interface JsonRpcResponse {
 
 const PROTOCOL_VERSION = "2024-11-05";
 
-const TOOLS = [
+export const MCP_TOOLS = [
   {
     name: "recall",
     description: "Retrieve ranked memory context for a question. Returns active notes only.",
@@ -132,7 +132,7 @@ export class McpServer {
       case "notifications/initialized":
         return {};
       case "tools/list":
-        return { tools: TOOLS };
+        return { tools: MCP_TOOLS };
       case "tools/call":
         return this.callTool((params ?? {}) as { name: string; arguments?: Record<string, unknown> });
       case "ping":
@@ -236,7 +236,6 @@ export class McpServer {
 
   private firstWorkspace(): string | null {
     if (!existsSync(this.paths.workspacesDir)) return null;
-    const { readdirSync } = require("node:fs");
     for (const e of readdirSync(this.paths.workspacesDir, { withFileTypes: true })) {
       if (e.isDirectory()) return e.name;
     }
@@ -245,10 +244,9 @@ export class McpServer {
 
   private allWorkspaces(): string[] {
     if (!existsSync(this.paths.workspacesDir)) return [];
-    const { readdirSync } = require("node:fs");
     return readdirSync(this.paths.workspacesDir, { withFileTypes: true })
-      .filter((e: any) => e.isDirectory())
-      .map((e: any) => e.name);
+      .filter((e) => e.isDirectory())
+      .map((e) => e.name);
   }
 
   private respond(
