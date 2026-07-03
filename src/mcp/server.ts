@@ -1,15 +1,20 @@
 // Minimal MCP server (JSON-RPC 2.0 over stdio).
-// Per SPEC §5 AC-P3-4: 4 tools — recall, remember, list_pending, get_note.
-// `remember` writes to evidence pipeline (NOT directly to notes).
-// Review -> apply still required (the moat).
+// Per SPEC §5 AC-P3-4: recall, remember, list_pending, get_note.
+// v2.1 adds `add_note` — a trusted fast path straight to the wiki, conflict-checked.
+// `remember` still writes to the evidence pipeline (NOT directly to notes);
+// review -> apply is still required for unverified external material (the moat).
 
 import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import type { Database } from "bun:sqlite";
 import { initDb } from "../core/db";
 import { Fts5Adapter } from "../adapters/retrieval/fts5-adapter";
-import { readNote, listNotes } from "../core/note-service";
+import { createNote, listNotes, readNote, slugify } from "../core/note-service";
+import { detectConflict } from "../core/conflict";
+import { upsertNote } from "../core/indexer";
+import { isWikiTier, type WikiTier } from "../core/workspace-layout";
 import { createEvidenceRecord, insertEvidence } from "../core/evidence-service";
+import { getSessionId, touchSession } from "../core/session";
 import type { RuntimePaths } from "../core/runtime-paths";
 import { resolveRuntimePaths } from "../core/runtime-paths";
 
@@ -65,6 +70,22 @@ export const MCP_TOOLS = [
     },
   },
   {
+    name: "add_note",
+    description: "Write a note directly to the wiki (trusted fast path, conflict-checked). Use `remember` instead for unverified external material, which still requires human review.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        title: { type: "string" },
+        body: { type: "string" },
+        tier: { type: "string", enum: ["axioms", "mental-models", "projects", "decisions"] },
+        workspace: { type: "string" },
+        slug: { type: "string" },
+        sources: { type: "array", items: { type: "string" } },
+      },
+      required: ["title", "body", "tier"],
+    },
+  },
+  {
     name: "list_pending",
     description: "List evidence items awaiting human review or apply.",
     inputSchema: {
@@ -96,6 +117,9 @@ export class McpServer {
   private paths: RuntimePaths;
   private db: Database;
   private buffer = "";
+  // One session id per running MCP server process — a Claude Code session
+  // talks to one server instance for its whole lifetime.
+  private sessionId = getSessionId();
 
   constructor(options: McpServerOptions = {}) {
     this.paths = options.paths ?? resolveRuntimePaths();
@@ -149,6 +173,8 @@ export class McpServer {
         return this.toolRecall(args);
       case "remember":
         return this.toolRemember(args);
+      case "add_note":
+        return this.toolAddNote(args);
       case "list_pending":
         return this.toolListPending(args);
       case "get_note":
@@ -165,6 +191,7 @@ export class McpServer {
     if (!workspace) {
       return { content: [{ type: "text", text: "No workspace available." }] };
     }
+    touchSession(this.db, { id: this.sessionId, projectRoot: this.paths.cwd, workspace });
     const adapter = new Fts5Adapter(this.db, this.paths);
     const result = adapter.search({ workspace, query, limit });
     const lines = result.hits.map((h) => `- [${h.tier}] ${h.path}\n  ${h.body.slice(0, 200)}`);
@@ -191,6 +218,38 @@ export class McpServer {
       content: [{
         type: "text",
         text: `Remembered: evidence_id=${record.id} (state=ingested). Pending human review. Use \`zbrain ingest review ${record.id}\` next.`,
+      }],
+    };
+  }
+
+  private toolAddNote(args: Record<string, unknown>): { content: Array<{ type: "text"; text: string }> } {
+    const title = String(args.title ?? "");
+    const body = String(args.body ?? "");
+    const tierArg = String(args.tier ?? "");
+    if (!title || !body) throw new Error("title and body are required");
+    if (!isWikiTier(tierArg)) {
+      throw new Error(`Invalid tier "${tierArg}". Must be one of: axioms, mental-models, projects, decisions.`);
+    }
+    const tier: WikiTier = tierArg;
+    const workspace = typeof args.workspace === "string" ? args.workspace : this.firstWorkspace();
+    if (!workspace) throw new Error("No workspace available");
+    const slug = typeof args.slug === "string" && args.slug ? args.slug : slugify(title);
+    const sources = Array.isArray(args.sources) ? args.sources.filter((s): s is string => typeof s === "string") : [];
+
+    const conflict = detectConflict(this.paths, workspace, tier, slug, []);
+    if (conflict) {
+      throw new Error(
+        `Conflict: ${conflict.proposedPath} already exists (id: ${conflict.existing.id}). ` +
+          `Call get_note with that id to inspect it, then supersede via \`zbrain note update ${conflict.existing.id}\` or retry with a different slug.`,
+      );
+    }
+
+    const note = createNote(this.paths, { workspace, tier, slug, body, title, sources });
+    upsertNote({ paths: this.paths, workspace, db: this.db }, note);
+    return {
+      content: [{
+        type: "text",
+        text: `Added: id=${note.id} path=${note.relPath} tier=${note.tier} workspace=${workspace}`,
       }],
     };
   }

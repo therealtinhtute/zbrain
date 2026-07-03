@@ -3,10 +3,11 @@ import { mkdtempSync, mkdirSync, rmSync, existsSync, writeFileSync } from "node:
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { initDb } from "../src/core/db";
-import { runDoctor, checkDbFileConsistency, checkBrokenLinks, checkFtsSync, checkSchemaVersion } from "../src/core/doctor";
+import { runDoctor, checkDbFileConsistency, checkBrokenLinks, checkFtsSync, checkSchemaVersion, checkIdleSessions, fixIdleSessions } from "../src/core/doctor";
 import { resolveRuntimePaths, wikiTierPath } from "../src/core/runtime-paths";
 import { createNote, supersedeNote } from "../src/core/note-service";
 import { upsertNote, rebuildWorkspace, removeNote } from "../src/core/indexer";
+import { touchSession, sessionContextPath, writeSessionContext } from "../src/core/session";
 
 let tempHome: string;
 let paths: ReturnType<typeof resolveRuntimePaths>;
@@ -88,6 +89,36 @@ test("runDoctor: full report on clean workspace", () => {
     if (r.name === "idle-sessions") continue;
     expect(r.status).toBe("ok");
   }
+});
+
+test("checkIdleSessions: flags a session idle past the threshold", () => {
+  touchSession(db, { id: "stale", projectRoot: "/proj", workspace: "research" });
+  db.prepare(`UPDATE sessions SET last_activity_at = '2020-01-01T00:00:00.000Z' WHERE id = 'stale'`).run();
+  const result = checkIdleSessions(db, "research");
+  expect(result.status).toBe("warn");
+  expect(result.findings.some((f) => f.message.includes("stale"))).toBe(true);
+});
+
+test("checkIdleSessions: a fresh session is left untouched", () => {
+  touchSession(db, { id: "fresh", projectRoot: "/proj", workspace: "research" });
+  const result = checkIdleSessions(db, "research");
+  expect(result.status).toBe("ok");
+});
+
+test("fixIdleSessions: --fix removes the stale row and its context file, leaves fresh sessions alone", () => {
+  writeSessionContext(paths, "/proj", "stale", "# old context");
+  touchSession(db, { id: "stale", projectRoot: "/proj", workspace: "research" });
+  db.prepare(`UPDATE sessions SET last_activity_at = '2020-01-01T00:00:00.000Z' WHERE id = 'stale'`).run();
+  touchSession(db, { id: "fresh", projectRoot: "/proj", workspace: "research" });
+
+  const fixed = fixIdleSessions(db, paths, "research");
+  expect(fixed).toBe(1);
+  expect(db.prepare(`SELECT * FROM sessions WHERE id = 'stale'`).get()).toBeNull();
+  expect(existsSync(sessionContextPath(paths, "/proj", "stale"))).toBe(false);
+  expect(db.prepare(`SELECT * FROM sessions WHERE id = 'fresh'`).get()).not.toBeNull();
+
+  const result = checkIdleSessions(db, "research");
+  expect(result.status).toBe("ok");
 });
 
 test("runDoctor: detects orphaned evidence row", () => {

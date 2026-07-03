@@ -11,7 +11,7 @@ import { retrieveMultiWorkspaceContext, retrieveWorkspaceContext, type Retrieval
 import { resolveActiveWorkspace } from "../core/workspace-resolver";
 import { rebuildWorkspace } from "../core/indexer";
 import { createRetrievalAdapter } from "../adapters/retrieval";
-import { getSessionId } from "../core/session";
+import { getSessionId, touchSession } from "../core/session";
 import type { RuntimePathOptions } from "../core/runtime-paths";
 
 export interface AskCommandOptions {
@@ -73,6 +73,7 @@ export async function runAsk(query: string, options: AskCommandOptions = {}): Pr
   // V2 multi-agent fix: thread session id through retrieval so per-session
   // context files don't clobber each other.
   const sessionId = options.sessionId ?? getSessionId();
+  touchSession(db, { id: sessionId, projectRoot: context.paths.cwd, workspace: active });
 
   ui.intro("zbrain ask");
   const spinner = ui.spinner();

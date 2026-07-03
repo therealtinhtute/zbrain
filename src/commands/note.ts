@@ -1,14 +1,16 @@
-// `zbrain note` CLI — update / archive / forget / restore / show.
+// `zbrain note` CLI — add / update / archive / forget / restore / show.
 
-import { existsSync, readdirSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { Command } from "commander";
 import { assertRuntimeReady, createCommandContext } from "./helpers";
 import { clackUi, type CommandUi } from "./ui";
 import {
   archiveNote,
+  createNote,
   forgetNote,
   readNote,
   restoreNote,
+  slugify,
   supersedeNote,
 } from "../core/note-service";
 import { detectConflict } from "../core/conflict";
@@ -17,6 +19,7 @@ import { NotFoundError } from "../core/note-service";
 import { isWikiTier, type WikiTier } from "../core/workspace-layout";
 import { initDb } from "../core/db";
 import { upsertNote, removeNote } from "../core/indexer";
+import { resolveWorkspaceName } from "../core/workspace-resolver";
 import type { RuntimePathOptions } from "../core/runtime-paths";
 
 export interface NoteCommandOptions {
@@ -24,10 +27,74 @@ export interface NoteCommandOptions {
   pathOptions?: RuntimePathOptions;
 }
 
-function findNoteById(workspace: string, noteId: string) {
-  // Walk the workspace; first note with matching id wins.
-  // Caller passes a paths arg. Lazy import to avoid circular.
-  return { __deferred: true } as const;
+async function readStdin(): Promise<string> {
+  let contents = "";
+  for await (const chunk of process.stdin) {
+    contents += chunk;
+  }
+  return contents;
+}
+
+async function resolveBody(ui: CommandUi, options: { body?: string; file?: string }): Promise<string> {
+  if (typeof options.body === "string") {
+    return options.body;
+  }
+  if (options.file) {
+    return readFileSync(options.file, "utf8");
+  }
+  if (!process.stdin.isTTY) {
+    return readStdin();
+  }
+  return ui.text({
+    message: "Note body",
+    placeholder: "Write the note body (markdown)",
+    validate: (value) => (value?.trim() ? undefined : "Note body is required."),
+  });
+}
+
+export async function runNoteAdd(
+  options: {
+    tier: string;
+    title: string;
+    workspace?: string;
+    slug?: string;
+    body?: string;
+    file?: string;
+    sources?: string[];
+  } & NoteCommandOptions,
+): Promise<void> {
+  const ui = options.ui ?? clackUi;
+  const context = createCommandContext(options.pathOptions);
+  assertRuntimeReady(context.paths);
+  const db = initDb(context.paths.runtimeDir);
+
+  if (!isWikiTier(options.tier)) {
+    throw new Error(`Invalid tier "${options.tier}". Must be one of: axioms, mental-models, projects, decisions.`);
+  }
+  const tier: WikiTier = options.tier;
+  const workspace = resolveWorkspaceName(context.paths, options.workspace);
+  const slug = options.slug ?? slugify(options.title);
+  const body = await resolveBody(ui, options);
+
+  const conflict = detectConflict(context.paths, workspace, tier, slug, []);
+  if (conflict) {
+    throw new Error(
+      `Conflict: ${conflict.proposedPath} already exists (id: ${conflict.existing.id}). ` +
+        `Use \`zbrain note update ${conflict.existing.id}\` to supersede it, or pass --slug with a different value.`,
+    );
+  }
+
+  const note = createNote(context.paths, {
+    workspace,
+    tier,
+    slug,
+    body,
+    title: options.title,
+    sources: options.sources ?? [],
+  });
+  upsertNote({ paths: context.paths, workspace, db }, note);
+
+  ui.note(`id: ${note.id}\npath: ${note.relPath}\ntier: ${note.tier}\nworkspace: ${workspace}`, "Note added");
 }
 
 export async function runNoteShow(id: string, options: NoteCommandOptions = {}): Promise<void> {
@@ -69,9 +136,16 @@ export async function runNoteUpdate(
   // Locate the note.
   const found = locateNote(context.paths, id);
   if (!found) throw new NotFoundError(id);
-  const conflict = detectConflict(context.paths, found.workspace, found.tier, options.slug ?? found.tier, []);
-  if (conflict) {
-    throw new Error(`Conflict: ${conflict.proposedPath} already exists. Pass --slug to a unique value or declare supersedes.`);
+  // Only check for a path conflict when an explicit --slug is given; the
+  // auto-generated slug (id-derived) can never collide with an existing note.
+  if (options.slug) {
+    const conflict = detectConflict(context.paths, found.workspace, found.tier, options.slug, []);
+    if (conflict) {
+      throw new Error(
+        `Conflict: ${conflict.proposedPath} already exists (id: ${conflict.existing.id}). ` +
+          `Pass a different --slug or declare supersedes.`,
+      );
+    }
   }
   const { oldNote, newNote } = supersedeNote(context.paths, found, {
     newBody: options.body,
@@ -156,7 +230,19 @@ function locateNote(paths: any, noteId: string) {
 export function registerNoteCommand(program: Command): void {
   const note = program
     .command("note")
-    .description("Manage notes (update, archive, forget, restore, show)");
+    .description("Manage notes (add, update, archive, forget, restore, show)");
+
+  note
+    .command("add")
+    .description("Add a note directly to the wiki (trusted fast path, conflict-checked)")
+    .requiredOption("--tier <tier>", "axioms | mental-models | projects | decisions")
+    .requiredOption("--title <text>", "note title")
+    .option("--workspace <name>", "target workspace (default: resolved active workspace)")
+    .option("--slug <text>", "slug (defaults to a slugified title)")
+    .option("--body <text>", "note body (else --file, else stdin, else prompt)")
+    .option("--file <path>", "read note body from a file")
+    .option("--source <id...>", "evidence source id(s) this note is derived from")
+    .action((options: any) => runNoteAdd({ ...options, sources: options.source }));
 
   note
     .command("show <id>")

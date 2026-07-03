@@ -8,7 +8,7 @@ ingested → reviewed → applied → archived
 
 ## Stage 1: Learn
 
-1. Resolve active workspace from `~/.zbrain/projects.json` by matching the current project root, or fallback to `~/.zbrain/config.yml`.
+1. Resolve active workspace by running `zbrain workspace current` (JSON output), or fallback to `~/.zbrain/config.yml`.
 2. Generate a short unique evidence ID: `YYYYMMDD-{slug}`.
 3. Create `evidence/sources/{id}/` directory.
 4. Write raw content as `raw.md` — **immutable after this step**.

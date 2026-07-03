@@ -15,6 +15,7 @@ import { registerLeaseCommand } from "./commands/lease";
 import { registerDoctorCommand } from "./commands/doctor";
 import { registerMcpCommand } from "./commands/mcp";
 import { registerExportCommand } from "./commands/export";
+import { registerSyncCommand } from "./commands/sync";
 
 export function createProgram(): Command {
   const program = new Command();
@@ -44,6 +45,7 @@ export function createProgram(): Command {
   registerDoctorCommand(program);
   registerMcpCommand(program);
   registerExportCommand(program);
+  registerSyncCommand(program);
 
   program
     .command("update")

@@ -25,7 +25,7 @@ Status legend: ✅ verified by test | 🔧 verified by code + manual smoke | ⏳
 | **AC-P1-6** `zbrain doctor` 8 checks | ✅ | `tests/doctor.test.ts:runDoctor: full report on clean workspace` + 6 more granular tests. |
 | **AC-P1-7** `zbrain reindex` rebuilds deterministically | ✅ | `tests/indexer-roundtrip.test.ts:AC-P1-7: rebuild restores notes after DB is deleted` + `tests/lazy-index.test.ts`. |
 | **AC-P1-8** First `ask` on fresh workspace self-heals | ✅ | `commands/ask.ts:isIndexStale` triggers `rebuildWorkspace` when files on disk but DB empty. `tests/lazy-index.test.ts` verifies. |
-| **AC-P1-9** One project store only (SQLite) | ⏳ | Partial: `init` still writes `projects.json` as a legacy mirror for engine rules that read it. Full collapse requires a follow-up (small, isolated). |
+| **AC-P1-9** One project store only (SQLite) | ✅ | `init` no longer writes `projects.json`; `initDb` migrates any legacy file into SQLite then archives it to `.bak`. `tests/registry-migration.test.ts` (5 tests: fresh-home never creates the file, legacy import, anti-clobber of existing rows, malformed-JSON handling, `zbrain workspace current` resolution). All bundled skills/engine-rules assets read via `zbrain workspace current`. |
 | **AC-P1-10** File-first writes; crash recovery via `doctor`/`reindex` | ✅ | `indexer.upsertNote` writes file first, then DB txn. `tests/indexer-roundtrip.test.ts` proves `rm zbrain.db && reindex` is lossless. |
 
 ## P2 — Make memory honest at scale
@@ -50,16 +50,15 @@ Status legend: ✅ verified by test | 🔧 verified by code + manual smoke | ⏳
 ## Summary
 
 - **P0**: 4 / 4 closed
-- **P1**: 9 / 10 closed; 1 partial (`AC-P1-9` `projects.json` mirror — small follow-up)
+- **P1**: 10 / 10 closed
 - **P2**: 3 / 4 closed; 1 partial (`AC-P2-4` — focused dead-code PR)
 - **P3**: 4 / 5 closed; 1 partial (`AC-P3-2` UUID instead of ULID — migration when needed)
 
-**Closed: 20 / 23. Partial (deferred with rationale): 3.**
+**Closed: 21 / 23. Partial (deferred with rationale): 2.**
 
-The 3 partial items are:
-1. `AC-P1-9` — `projects.json` legacy mirror (small follow-up)
-2. `AC-P2-4` — Focused dead-code removal (out of scope for v2 pivot)
-3. `AC-P3-2` — UUID instead of ULID (no new dep; upgrade when needed)
+The 2 partial items are:
+1. `AC-P2-4` — Focused dead-code removal (out of scope for v2 pivot)
+2. `AC-P3-2` — UUID instead of ULID (no new dep; upgrade when needed)
 
 None of these block the v2.0.0 release per `CHANGELOG.md` deferred sections.
 

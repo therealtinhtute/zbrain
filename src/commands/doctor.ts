@@ -4,7 +4,7 @@ import { Command } from "commander";
 import { assertRuntimeReady, createCommandContext, listWorkspaceNames } from "./helpers";
 import { clackUi, type CommandUi } from "./ui";
 import { initDb } from "../core/db";
-import { runDoctor } from "../core/doctor";
+import { runDoctor, fixIdleSessions } from "../core/doctor";
 import type { RuntimePathOptions } from "../core/runtime-paths";
 
 export interface DoctorOptions {
@@ -12,6 +12,7 @@ export interface DoctorOptions {
   pathOptions?: RuntimePathOptions;
   workspace?: string;
   json?: boolean;
+  fix?: boolean;
 }
 
 export async function runDoctorCommand(options: DoctorOptions = {}): Promise<void> {
@@ -30,6 +31,12 @@ export async function runDoctorCommand(options: DoctorOptions = {}): Promise<voi
   }
 
   ui.intro("zbrain doctor");
+  if (options.fix) {
+    for (const workspace of targets) {
+      const fixed = fixIdleSessions(db, context.paths, workspace);
+      if (fixed > 0) ui.note(`Removed ${fixed} idle session(s).`, `workspace: ${workspace} --fix`);
+    }
+  }
   let allOk = true;
   for (const workspace of targets) {
     const report = runDoctor(context.paths, workspace, db);
@@ -57,7 +64,8 @@ export function registerDoctorCommand(program: Command): void {
     .description("Check workspace health + reconciliation")
     .option("--workspace <name>", "check a single workspace")
     .option("--json", "machine-readable output")
-    .action((options: { workspace?: string; json?: boolean }) =>
-      runDoctorCommand({ workspace: options.workspace, json: options.json }),
+    .option("--fix", "GC idle sessions (30+ days inactive)")
+    .action((options: { workspace?: string; json?: boolean; fix?: boolean }) =>
+      runDoctorCommand({ workspace: options.workspace, json: options.json, fix: options.fix }),
     );
 }

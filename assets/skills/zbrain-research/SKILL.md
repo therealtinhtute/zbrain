@@ -90,7 +90,7 @@ Detect which search and fetch providers are reachable. Run before Step 1.
 If only WebSearch is available, continue with a warning: "Falling back to built-in WebSearch — results may be less semantic than Exa."
 
 ### Step 1 — Workspace
-Resolve active workspace from `~/.zbrain/projects.json` by matching the current project root, fallback to `~/.zbrain/config.yml`. Stop and report if neither resolves.
+Resolve active workspace by running `zbrain workspace current` (JSON output), fallback to `~/.zbrain/config.yml`. Stop and report if neither resolves.
 
 ### Step 2 — Search
 

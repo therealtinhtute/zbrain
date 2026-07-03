@@ -49,12 +49,12 @@ test("initialize: returns protocol version + serverInfo + capabilities", async (
   expect(parsed.result.capabilities.tools).toBeDefined();
 });
 
-test("tools/list: returns 4 tools", async () => {
+test("tools/list: returns 5 tools", async () => {
   const response = await server.handleLine(REQ(2, "tools/list"));
   const parsed = JSON.parse(response!);
-  expect(parsed.result.tools.length).toBe(4);
+  expect(parsed.result.tools.length).toBe(5);
   const names = parsed.result.tools.map((t: any) => t.name).sort();
-  expect(names).toEqual(["get_note", "list_pending", "recall", "remember"]);
+  expect(names).toEqual(["add_note", "get_note", "list_pending", "recall", "remember"]);
 });
 
 test("malformed JSON returns parse error", async () => {
@@ -122,6 +122,47 @@ test("tools/call: get_note returns body + sources", async () => {
   const parsed = JSON.parse(response!);
   expect(parsed.result.content[0].text).toContain("rotate tokens quarterly");
   expect(parsed.result.content[0].text).toContain("src-1");
+});
+
+test("tools/call: add_note writes an active wiki note directly (NOT evidence)", async () => {
+  const response = await server.handleLine(REQ(9, "tools/call", {
+    name: "add_note",
+    arguments: {
+      title: "Rate limits",
+      body: "The public API caps at 100 req/min per key.",
+      tier: "axioms",
+      workspace: "research",
+    },
+  }));
+  const parsed = JSON.parse(response!);
+  expect(parsed.result.content[0].text).toContain("Added: id=");
+  expect(parsed.result.content[0].text).toContain("axioms/rate-limits.md");
+
+  // Immediately retrievable via recall — no review/apply step in between.
+  const recall = await server.handleLine(REQ(10, "tools/call", {
+    name: "recall",
+    arguments: { query: "rate limits", workspace: "research" },
+  }));
+  const recallParsed = JSON.parse(recall!);
+  expect(recallParsed.result.content[0].text).toContain("axioms/rate-limits.md");
+});
+
+test("tools/call: add_note conflict returns an error naming the existing note id", async () => {
+  const first = await server.handleLine(REQ(11, "tools/call", {
+    name: "add_note",
+    arguments: { title: "Dup", body: "first version", tier: "axioms", workspace: "research", slug: "dup" },
+  }));
+  const firstId = JSON.parse(first!).result.content[0].text.match(/id=([\w-]+)/)?.[1];
+  expect(firstId).toBeTruthy();
+
+  const second = await server.handleLine(REQ(12, "tools/call", {
+    name: "add_note",
+    arguments: { title: "Dup", body: "second version", tier: "axioms", workspace: "research", slug: "dup" },
+  }));
+  const parsed = JSON.parse(second!);
+  expect(parsed.error).toBeDefined();
+  expect(parsed.error.data.message).toContain(firstId);
+  expect(parsed.error.data.message).toContain("Conflict");
 });
 
 test("tools/call: list_pending lists evidence in ingested/reviewed state", async () => {

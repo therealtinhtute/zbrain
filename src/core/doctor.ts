@@ -9,6 +9,7 @@ import type { Database } from "bun:sqlite";
 import { SCHEMA_VERSION } from "./db";
 import { WikiTiers } from "./workspace-layout";
 import { wikiRoot, type RuntimePaths } from "./runtime-paths";
+import { SESSION_IDLE_GC_DAYS, listStaleSessions, deleteSession } from "./session";
 
 export type CheckStatus = "ok" | "warn" | "error";
 
@@ -140,11 +141,37 @@ export function checkExpiredLeases(db: Database, threshold = 10): CheckResult {
   return result;
 }
 
-export function checkIdleSessions(thresholdDays = 30): CheckResult {
+export function checkIdleSessions(
+  db: Database,
+  workspace: string,
+  thresholdDays = SESSION_IDLE_GC_DAYS,
+): CheckResult {
   const result = empty("idle-sessions");
-  // No sessions table touched in this phase; report none.
-  push(result, "ok", "session GC: not yet wired (deferred to follow-up)");
+  const stale = listStaleSessions(db, thresholdDays, workspace);
+  for (const s of stale) {
+    push(
+      result,
+      "warn",
+      `Session ${s.id} idle since ${s.lastActivityAt} (started ${s.startedAt})`,
+      "run `zbrain doctor --fix` to GC",
+    );
+  }
   return result;
+}
+
+// `zbrain doctor --fix`: GC idle session rows + their context files.
+// Returns the number of sessions removed.
+export function fixIdleSessions(
+  db: Database,
+  paths: RuntimePaths,
+  workspace: string,
+  thresholdDays = SESSION_IDLE_GC_DAYS,
+): number {
+  const stale = listStaleSessions(db, thresholdDays, workspace);
+  for (const s of stale) {
+    deleteSession(db, paths, s.id, s.projectRoot);
+  }
+  return stale.length;
 }
 
 export function checkSchemaVersion(db: Database): CheckResult {
@@ -182,7 +209,7 @@ export function runDoctor(
     checkStaleReview(workspace, db),
     checkBrokenLinks(workspace, db),
     checkExpiredLeases(db),
-    checkIdleSessions(),
+    checkIdleSessions(db, workspace),
     checkFtsSync(workspace, db),
   ];
   return {

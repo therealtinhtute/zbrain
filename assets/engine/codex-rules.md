@@ -1,20 +1,20 @@
 ## zbrain Integration
 
 zbrain is a workspace-isolated knowledge retrieval layer for this project.
-Runtime root: `~/.zbrain/`. Project registry: `~/.zbrain/projects.json`.
+Runtime root: `~/.zbrain/`. Project registry: SQLite (`~/.zbrain/zbrain.db`) — read it via `zbrain workspace current`.
 
 ### Workspace Resolution
 
-1. Read `~/.zbrain/projects.json`.
-2. Find the entry whose `project_root` matches the current project root.
-3. Use that entry's `workspace` and `context_file`.
-4. Fallback: `~/.zbrain/config.yml` → `default_workspace`.
-5. If neither resolves, stop and report — never guess a workspace.
+1. Run `zbrain workspace current` (JSON output) — gives `workspace` and `context_file` for the current project root.
+2. Fallback: `~/.zbrain/config.yml` → `default_workspace`.
+3. If neither resolves, stop and report — never guess a workspace.
 
 ### Expected Usage
 
 - Use `zbrain learn` to record raw source material.
 - Use `zbrain ingest` to list, analyze, QA, and apply evidence.
+- Use `zbrain note add` to write trusted, already-verified knowledge directly to the wiki
+  (no external source to gate) — still conflict-checked, still supersede-not-overwrite.
 - Before answering domain questions, use `zbrain ask` retrieval first.
 - Read the registry entry's `context_file` after retrieval to inspect ranked context and citations.
 - Keep all retrieval and evidence work inside the active workspace.

@@ -1,7 +1,9 @@
 import { Database } from "bun:sqlite";
+import { existsSync, readFileSync, renameSync } from "node:fs";
 import { join } from "node:path";
 import { ensureDir } from "./fs";
 import { applyPendingMigrations } from "../db/migrator";
+import { upsertProject, readProject } from "./db-projects";
 
 // Embedded fallback schema (V2) — used when migration files are not present
 // (e.g. in a published binary where the src/ tree is not shipped).
@@ -28,7 +30,42 @@ export function initDb(runtimeDir: string, migrationsDir?: string): Database {
     // Legacy bootstrap (V2 baseline inline).
     bootstrapV2Schema(db);
   }
+  migrateLegacyProjectRegistry(db, runtimeDir);
   return db;
+}
+
+// AC-P1-9: one-time import of the legacy `projects.json` mirror into SQLite
+// (the only source of truth going forward), then archive the file — never
+// delete it outright. No-op once the file has been renamed to `.bak`.
+function migrateLegacyProjectRegistry(db: Database, runtimeDir: string): void {
+  const registryFile = join(runtimeDir, "projects.json");
+  if (!existsSync(registryFile)) return;
+  try {
+    const parsed = JSON.parse(readFileSync(registryFile, "utf8")) as { projects?: unknown };
+    const projects = Array.isArray(parsed.projects) ? parsed.projects : [];
+    const nowIso = new Date().toISOString();
+    for (const p of projects) {
+      const binding = p as Record<string, unknown>;
+      if (!binding || typeof binding.project_root !== "string" || typeof binding.workspace !== "string" || typeof binding.context_file !== "string") {
+        continue;
+      }
+      if (readProject(db, binding.project_root)) continue; // SQLite already has a binding for this project — don't clobber it.
+      upsertProject(
+        db,
+        {
+          project_root: binding.project_root,
+          workspace: binding.workspace,
+          context_file: binding.context_file,
+          runtimes: Array.isArray(binding.runtimes) ? (binding.runtimes as never) : [],
+          secondary_workspaces: Array.isArray(binding.secondary_workspaces) ? (binding.secondary_workspaces as never) : [],
+        },
+        nowIso,
+      );
+    }
+  } catch {
+    // Malformed legacy file — nothing importable, still archive it below.
+  }
+  renameSync(registryFile, `${registryFile}.bak`);
 }
 
 function bootstrapV2Schema(db: Database): void {

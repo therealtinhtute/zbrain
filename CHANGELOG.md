@@ -1,5 +1,40 @@
 # CHANGELOG
 
+## 2.1.0 (2026-07-03)
+
+### Added
+- **`zbrain sync <workspace>`**: git-backed workspace sync — commit local changes, `pull --rebase`,
+  push, reindex. `zbrain sync init <workspace> [--remote <url>]` turns a workspace into a git repo.
+  Cross-machine consistency is git's job; advisory leases/optimistic locking remain the
+  same-machine, multi-agent safety net (see README "Team setup").
+- **`zbrain note add`**: fast-path write for already-trusted, first-party knowledge directly to
+  the wiki, bypassing `learn`/`ingest` staging. Still conflict-checked and governed by the same
+  supersede-not-overwrite lifecycle; reserve `learn`/`ingest` for material needing a human review
+  step.
+- **`zbrain workspace current`**: prints the resolved project→workspace binding as JSON. Replaces
+  reading `~/.zbrain/projects.json` directly.
+- **Session metadata wired end-to-end**: the `sessions` SQLite table (previously dead) is now
+  written on every `zbrain ask` call and every MCP `recall` call (`touchSession`), and surfaced in
+  `zbrain doctor`'s idle-session check.
+- **`zbrain doctor --fix`**: GCs sessions idle 30+ days (`SESSION_IDLE_GC_DAYS`) before generating
+  the doctor report.
+
+### Changed
+- **Project registry consolidated to SQLite (AC-P1-9).** `~/.zbrain/projects.json` is no longer
+  written. On first run after upgrade, `initDb` imports any existing `projects.json` entries not
+  already in SQLite, then renames the file to `projects.json.bak` (never deletes). All bundled
+  skills/engine-rules assets now instruct agents to run `zbrain workspace current` instead of
+  reading the file.
+
+### Fixed
+- **`zbrain sync init --remote <url>` on a workspace whose remote already has history** used to
+  always `git init` an unrelated root, so the very first `sync` rebased onto the remote's history
+  and conflicted immediately (reproduced end-to-end during this release's smoke test). It now
+  fetches first and adopts the existing `main`/`master` branch when present, clearing the
+  freshly-scaffolded starter files so they don't block the checkout. A second teammate can now
+  join a shared workspace through the documented CLI flow (`workspace create` → `sync init
+  --remote`) without a manual `git clone` workaround.
+
 ## 2.0.0 (2026-06-23)
 
 ### Breaking
