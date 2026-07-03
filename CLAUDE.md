@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Use the active workspace only. Cite the retrieved evidence. Do not infer facts from another workspace.
 
-Project registry: `~/.zbrain/projects.json`
+Project registry: SQLite (`~/.zbrain/zbrain.db`, `projects` table) — read via `zbrain workspace current`
 Runtime root: `~/.zbrain/`
 
 ---
@@ -72,7 +72,7 @@ Asset subdirectories:
 ### Workspace and Project Pointer
 
 Active workspace resolution order (highest priority first):
-1. `~/.zbrain/projects.json` entry matching the current project root → `workspace`
+1. SQLite `projects` table entry matching the current project root → `workspace` (read via `zbrain workspace current --json`; `~/.zbrain/projects.json` is gone as of AC-P1-9 — a one-time migration on first `initDb` call imports any legacy file into SQLite and renames it to `.bak`)
 2. `~/.zbrain/config.yml` → `default_workspace`
 3. Auto-detect if exactly one workspace exists
 4. Error
@@ -113,15 +113,13 @@ Both schemas use `.passthrough()` — unknown fields survive parsing rather than
 ## zbrain Integration
 
 zbrain is a workspace-isolated knowledge retrieval layer. Skills live in `.claude/skills/zbrain-*`.
-Runtime root: `~/.zbrain/`. Project registry: `~/.zbrain/projects.json`.
+Runtime root: `~/.zbrain/`. Project registry: SQLite (`~/.zbrain/zbrain.db`) — read it via `zbrain workspace current`.
 
 ### Workspace Resolution
 
-1. Read `~/.zbrain/projects.json`.
-2. Find the entry whose `project_root` matches the current project root.
-3. Use that entry's `workspace` and `context_file`.
-4. Fallback: `~/.zbrain/config.yml` → `default_workspace`.
-5. If neither resolves, stop and report — never guess a workspace.
+1. Run `zbrain workspace current` (JSON output) — gives `workspace` and `context_file` for the current project root.
+2. Fallback: `~/.zbrain/config.yml` → `default_workspace`.
+3. If neither resolves, stop and report — never guess a workspace.
 
 ### Skill Triggers
 

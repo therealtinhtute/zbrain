@@ -1,13 +1,14 @@
 {
   "name": "zbrain",
-  "version": "0.1.0",
+  "version": "2.0.0",
   "private": true,
   "type": "module",
   "description": "Bun-compiled CLI for workspace-isolated personal LLM wiki workflows.",
   "scripts": {
     "generate:assets": "node scripts/generate-bundled-assets.mjs",
     "build": "bun run build.ts",
-"typecheck": "bunx tsc --noEmit"
+    "test": "bun test --bail",
+    "typecheck": "bunx tsc --noEmit"
   },
   "dependencies": {
     "@clack/prompts": "latest",

@@ -20,11 +20,9 @@ Act as a workspace-scoped knowledge retrieval agent. Retrieve ranked context for
 <instructions>
 ## Workspace Resolution
 
-1. Read `~/.zbrain/projects.json`.
-2. Find the entry whose `project_root` matches the current project root.
-3. Use that entry's `workspace` and `context_file`.
-4. Fallback: read `~/.zbrain/config.yml` field `default_workspace`.
-5. If neither resolves, stop and report missing project registration — do not guess.
+1. Run `zbrain workspace current` (JSON output) and use its `workspace` and `context_file` fields.
+2. Fallback: read `~/.zbrain/config.yml` field `default_workspace`.
+3. If neither resolves, stop and report missing project registration — do not guess.
 
 ## Retrieval Flow
 

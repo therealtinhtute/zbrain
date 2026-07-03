@@ -1,12 +1,17 @@
-import { existsSync } from "node:fs";
+// `zbrain ask` CLI — retrieve ranked workspace context for one question.
+
+import { existsSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { Command } from "commander";
 import { assertRuntimeReady, createCommandContext } from "./helpers";
 import { clackUi, type CommandUi } from "./ui";
 import { readProjectBinding } from "../core/config";
-import { openDb } from "../core/db";
+import { openDb, initDb } from "../core/db";
 import { retrieveMultiWorkspaceContext, retrieveWorkspaceContext, type RetrievalAdapter } from "../core/retrieval";
 import { resolveActiveWorkspace } from "../core/workspace-resolver";
+import { rebuildWorkspace } from "../core/indexer";
+import { createRetrievalAdapter } from "../adapters/retrieval";
+import { getSessionId, touchSession } from "../core/session";
 import type { RuntimePathOptions } from "../core/runtime-paths";
 
 export interface AskCommandOptions {
@@ -15,6 +20,27 @@ export interface AskCommandOptions {
   ui?: CommandUi;
   pathOptions?: RuntimePathOptions;
   adapter?: RetrievalAdapter;
+  noLazyIndex?: boolean;
+  sessionId?: string;
+}
+
+function isIndexStale(paths: ReturnType<typeof createCommandContext>["paths"], workspace: string): boolean {
+  // Index is "stale" if any .md exists under wiki/ but the notes table has zero
+  // rows for this workspace, OR if the row count is < file count.
+  const db = openDb(paths.runtimeDir);
+  const wiki = join(paths.workspacesDir, workspace, "wiki");
+  if (!existsSync(wiki)) return false;
+  let fileCount = 0;
+  for (const tier of ["axioms", "mental-models", "projects", "decisions"]) {
+    const tierDir = join(wiki, tier);
+    if (!existsSync(tierDir)) continue;
+    for (const entry of readdirSync(tierDir, { withFileTypes: true })) {
+      if (entry.isFile() && entry.name.endsWith(".md")) fileCount += 1;
+    }
+  }
+  const row = db.prepare(`SELECT COUNT(*) as c FROM notes WHERE workspace = ?`).get(workspace) as { c: number };
+  db.close();
+  return fileCount > 0 && row.c === 0;
 }
 
 export async function runAsk(query: string, options: AskCommandOptions = {}): Promise<void> {
@@ -31,11 +57,23 @@ export async function runAsk(query: string, options: AskCommandOptions = {}): Pr
   } else {
     active = resolveActiveWorkspace(context.paths).name;
   }
-  const db = openDb(context.paths.runtimeDir);
+  const db = initDb(context.paths.runtimeDir);
+
+  // AC-P1-8: lazy/auto index. If the index is stale (files on disk but no
+  // DB rows), rebuild before searching. Opt-out via --no-lazy-index.
+  if (!options.noLazyIndex && isIndexStale(context.paths, active)) {
+    rebuildWorkspace({ paths: context.paths, workspace: active, db });
+  }
+
   const projectBinding = readProjectBinding(db, context.paths.cwd);
   const secondaries = options.workspace ? [] : projectBinding?.secondary_workspaces ?? [];
   const parsedLimit = typeof options.limit === "string" ? Number(options.limit) : options.limit;
   const limit = typeof parsedLimit === "number" && Number.isInteger(parsedLimit) && parsedLimit > 0 ? parsedLimit : 8;
+  const adapter = options.adapter ?? createRetrievalAdapter(db, context.paths);
+  // V2 multi-agent fix: thread session id through retrieval so per-session
+  // context files don't clobber each other.
+  const sessionId = options.sessionId ?? getSessionId();
+  touchSession(db, { id: sessionId, projectRoot: context.paths.cwd, workspace: active });
 
   ui.intro("zbrain ask");
   const spinner = ui.spinner();
@@ -49,15 +87,17 @@ export async function runAsk(query: string, options: AskCommandOptions = {}): Pr
           secondaries,
           workspacesDir: context.paths.workspacesDir,
           limit,
+          sessionId,
         },
-        options.adapter,
+        adapter,
       )
-    : retrieveWorkspaceContext(context.paths, { workspace: active, query, limit }, options.adapter);
+    : retrieveWorkspaceContext(context.paths, { workspace: active, query, limit, sessionId }, adapter);
   spinner.stop("Context retrieved");
 
   ui.note(
     [
       `workspace: ${active}`,
+      `session_id: ${result.sessionId}`,
       `results: ${result.results.length}`,
       `context_file: ${result.filePath}`,
     ].join("\n"),
@@ -73,5 +113,6 @@ export function registerAskCommand(program: Command): void {
     .description("Retrieve ranked workspace context for a question")
     .option("--workspace <name>", "target workspace")
     .option("--limit <n>", "result limit")
+    .option("--no-lazy-index", "skip auto-rebuild when index is stale")
     .action((question: string, options: AskCommandOptions) => runAsk(question, options));
 }

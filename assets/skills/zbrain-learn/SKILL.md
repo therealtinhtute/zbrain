@@ -28,7 +28,7 @@ zbrain:learn --type web --origin https://example.com --label "BM25 notes"
 
 ## Flow
 
-1. Resolve active workspace from `~/.zbrain/projects.json` by matching the current project root, or fallback to `~/.zbrain/config.yml`.
+1. Resolve active workspace by running `zbrain workspace current` (JSON output), or fallback to `~/.zbrain/config.yml`.
 2. Normalize source metadata: `source_type`, `origin`, and `label`.
 3. Create one evidence item under `~/.zbrain/workspaces/{workspace}/evidence/sources/{id}/`.
 4. Update `evidence/_index.md` with state `ingested`.

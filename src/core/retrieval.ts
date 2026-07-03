@@ -1,7 +1,8 @@
 import { type RuntimePaths } from "./runtime-paths";
 import { QmdAdapter, type QmdSearchResult } from "./qmd-adapter";
 import { rankRetrievalResults, type RankedRetrievalResult } from "./retrieval-ranking";
-import { generateCurrentTaskMarkdown, writeCurrentTask } from "./current-task";
+import { generateCurrentTaskMarkdown } from "./current-task";
+import { writeSessionContext, getSessionId } from "./session";
 import { parseQuery } from "./query-parser";
 import { resolveSecondaryWorkspaces } from "./secondary-resolver";
 import { type SecondaryWorkspaceEntry } from "../schemas/config";
@@ -12,6 +13,7 @@ export interface RetrievalContext {
   results: RankedRetrievalResult[];
   markdown: string;
   filePath: string;
+  sessionId: string;
 }
 
 export interface RetrievalAdapter {
@@ -25,13 +27,23 @@ export interface MultiWorkspaceRetrievalOptions {
   workspacesDir: string;
   limit?: number;
   nowIso?: string;
+  sessionId?: string;
+}
+
+export interface RetrieveWorkspaceContextOptions {
+  workspace: string;
+  query: string;
+  limit?: number;
+  nowIso?: string;
+  sessionId?: string;
 }
 
 export function retrieveWorkspaceContext(
   paths: RuntimePaths,
-  options: { workspace: string; query: string; limit?: number; nowIso?: string },
+  options: RetrieveWorkspaceContextOptions,
   adapter: RetrievalAdapter = new QmdAdapter(paths),
 ): RetrievalContext {
+  const sessionId = options.sessionId ?? getSessionId();
   const rawResults = adapter.searchWorkspace(options);
   const ranked = rankRetrievalResults(rawResults, options.limit ?? 8);
   const markdown = generateCurrentTaskMarkdown({
@@ -40,12 +52,15 @@ export function retrieveWorkspaceContext(
     results: ranked,
     nowIso: options.nowIso,
   });
-  const filePath = writeCurrentTask(paths, markdown);
+  // V2 multi-agent fix: write to per-session file instead of shared
+  // current-task.md (which clobbered between parallel agents).
+  const filePath = writeSessionContext(paths, paths.cwd, sessionId, markdown);
 
   return {
     results: ranked,
     markdown,
     filePath,
+    sessionId,
   };
 }
 
@@ -120,7 +135,9 @@ export function retrieveMultiWorkspaceContext(
     results: dedupedResults,
     nowIso: options.nowIso,
   });
-  const filePath = writeCurrentTask(paths, markdown);
+  const sessionId = options.sessionId ?? getSessionId();
+  // V2 multi-agent fix: per-session file (not shared current-task.md).
+  const filePath = writeSessionContext(paths, paths.cwd, sessionId, markdown);
 
-  return { results: dedupedResults, markdown, filePath };
+  return { results: dedupedResults, markdown, filePath, sessionId };
 }

@@ -1,7 +1,58 @@
 import { Command } from "commander";
 import { assertRuntimeReady, createCommandContext, createWorkspaceScaffold, validateWorkspaceName } from "./helpers";
 import { clackUi, type CommandUi } from "./ui";
-import type { RuntimePathOptions } from "../core/runtime-paths";
+import { initDb } from "../core/db";
+import { readProjectBinding } from "../core/config";
+import { resolveActiveWorkspace, WorkspaceResolutionError } from "../core/workspace-resolver";
+import type { RuntimePaths, RuntimePathOptions } from "../core/runtime-paths";
+
+export interface WorkspaceCurrentOptions {
+  pathOptions?: RuntimePathOptions;
+}
+
+export interface WorkspaceCurrentResult {
+  project_root: string;
+  workspace: string;
+  secondary_workspaces: unknown[];
+  context_file: string | null;
+}
+
+// Replacement read path for AC-P1-9: agents resolve the active workspace binding
+// via this command instead of reading `~/.zbrain/projects.json` directly —
+// SQLite (via `readProjectBinding`) is now the only source of truth.
+export function resolveWorkspaceCurrent(paths: RuntimePaths): WorkspaceCurrentResult | { error: string } {
+  const db = initDb(paths.runtimeDir);
+  const binding = readProjectBinding(db, paths.cwd);
+  if (binding) {
+    return {
+      project_root: binding.project_root,
+      workspace: binding.workspace,
+      secondary_workspaces: binding.secondary_workspaces ?? [],
+      context_file: binding.context_file,
+    };
+  }
+
+  try {
+    const resolved = resolveActiveWorkspace(paths);
+    return {
+      project_root: paths.cwd,
+      workspace: resolved.name,
+      secondary_workspaces: [],
+      context_file: null,
+    };
+  } catch (err) {
+    if (err instanceof WorkspaceResolutionError) {
+      return { error: err.message };
+    }
+    throw err;
+  }
+}
+
+export function runWorkspaceCurrent(options: WorkspaceCurrentOptions = {}): void {
+  const context = createCommandContext(options.pathOptions);
+  assertRuntimeReady(context.paths);
+  console.log(JSON.stringify(resolveWorkspaceCurrent(context.paths), null, 2));
+}
 
 export interface WorkspaceCreateOptions {
   ui?: CommandUi;
@@ -52,4 +103,9 @@ export function registerWorkspaceCommands(program: Command): void {
     .argument("<name>", "workspace name")
     .description("Create a workspace scaffold")
     .action((name: string) => runWorkspaceCreate(name));
+
+  workspace
+    .command("current")
+    .description("Print the resolved workspace binding for this project as JSON")
+    .action(() => runWorkspaceCurrent());
 }

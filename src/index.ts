@@ -9,6 +9,13 @@ import { runInteractive } from "./commands/interactive";
 import { registerLearnCommand } from "./commands/learn";
 import { registerIngestCommands } from "./commands/ingest";
 import { registerAskCommand } from "./commands/ask";
+import { registerReindexCommand } from "./commands/reindex";
+import { registerNoteCommand } from "./commands/note";
+import { registerLeaseCommand } from "./commands/lease";
+import { registerDoctorCommand } from "./commands/doctor";
+import { registerMcpCommand } from "./commands/mcp";
+import { registerExportCommand } from "./commands/export";
+import { registerSyncCommand } from "./commands/sync";
 
 export function createProgram(): Command {
   const program = new Command();
@@ -32,6 +39,13 @@ export function createProgram(): Command {
   registerLearnCommand(program);
   registerIngestCommands(program);
   registerAskCommand(program);
+  registerReindexCommand(program);
+  registerNoteCommand(program);
+  registerLeaseCommand(program);
+  registerDoctorCommand(program);
+  registerMcpCommand(program);
+  registerExportCommand(program);
+  registerSyncCommand(program);
 
   program
     .command("update")

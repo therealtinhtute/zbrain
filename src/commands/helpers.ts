@@ -7,6 +7,12 @@ import { readGlobalConfig, upsertProjectBinding, writeGlobalConfig } from "../co
 import { currentTaskFilePath } from "../core/current-task";
 import { createSymlinkOrCopy, ensureDir, pathInside, readTextFile, writeTextFile } from "../core/fs";
 import { resolveRuntimePaths, type RuntimePathOptions, type RuntimePaths } from "../core/runtime-paths";
+import {
+  WikiTiers,
+  WORKSPACE_LAYOUT_VERSION,
+  setWorkspaceLayoutVersion,
+} from "../core/workspace-layout";
+import { migrateAllWorkspaces } from "../core/workspace-migration";
 import { type RuntimeName } from "../schemas/config";
 
 export interface CommandContext {
@@ -75,12 +81,11 @@ export function createWorkspaceScaffold(
 ): { createdPaths: string[]; defaultWorkspaceSet: boolean } {
   const workspaceRoot = join(paths.workspacesDir, workspaceName);
   const createdPaths: string[] = [];
+  // V2 layout: tier content lives under `wiki/`; `evidence/` stays at root.
+  // See SPEC §7 AD-2. Only `wiki/` is indexed for retrieval.
   const requiredDirs = [
     workspaceRoot,
-    join(workspaceRoot, "axioms"),
-    join(workspaceRoot, "mental-models"),
-    join(workspaceRoot, "projects"),
-    join(workspaceRoot, "decisions"),
+    ...WikiTiers.map((tier) => join(workspaceRoot, "wiki", tier)),
     join(workspaceRoot, "agents"),
     join(workspaceRoot, "evidence"),
     join(workspaceRoot, "evidence", "sources"),
@@ -109,6 +114,7 @@ export function createWorkspaceScaffold(
 
   writeTextFile(join(workspaceRoot, "workspace.md"), renderedWorkspace, { overwrite: true });
   writeTextFile(join(workspaceRoot, "evidence", "_index.md"), renderedIndex, { overwrite: true });
+  setWorkspaceLayoutVersion(workspaceRoot, WORKSPACE_LAYOUT_VERSION);
 
   const config = readGlobalConfig(paths.configFile);
   let defaultWorkspaceSet = false;
@@ -208,20 +214,12 @@ export function initProject(
   const created: string[] = [];
   const updated: string[] = [];
   const runtimes = selectedRuntimes(selection.injectTargets);
-  const registry = upsertProjectBinding(db, {
+  upsertProjectBinding(db, {
     project_root: paths.cwd,
     workspace: selection.workspace,
     context_file: currentTaskFilePath(paths),
     runtimes,
   });
-  // Mirror the SQLite registry to the projects.json file that every skill /
-  // engine rule instructs the agent to read (otherwise step 1 hits a missing file).
-  writeTextFile(
-    paths.projectRegistryFile,
-    `${JSON.stringify(registry, null, 2)}\n`,
-    { overwrite: true },
-  );
-  created.push(paths.projectRegistryFile);
 
   const claudeDir = join(paths.cwd, ".claude");
   const legacyPointerFile = join(claudeDir, "zwiki.json");
@@ -317,6 +315,18 @@ function selectedRuntimes(injectTargets: string[]): RuntimeName[] {
 export function assertRuntimeReady(paths: RuntimePaths): void {
   if (!existsSync(paths.runtimeDir)) {
     throw new Error("Runtime not found. Run `zbrain setup` first.");
+  }
+  // Auto-migrate V1 workspaces to V2 layout on every CLI boot.
+  // Idempotent. Per-workspace failures are logged and do not block commands.
+  if (existsSync(paths.workspacesDir)) {
+    const summary = migrateAllWorkspaces(paths.workspacesDir);
+    for (const { workspace, result } of summary.results) {
+      if (!result.skipped && result.movedFiles.length > 0) {
+        for (const moved of result.movedFiles) {
+          console.warn(`[zbrain] migrated ${workspace}: ${moved}`);
+        }
+      }
+    }
   }
 }
 
