@@ -8,17 +8,12 @@ export async function runMcpServe(): Promise<void> {
   const context = createCommandContext();
   assertRuntimeReady(context.paths);
   const server = new McpServer({ paths: context.paths });
-  // Read line-by-line from stdin, write responses to stdout.
+  // Stream raw stdin chunks; `server.serve` buffers and splits lines itself.
   const decoder = new TextDecoder();
-  let buffer = "";
   const readable = (async function* () {
     for await (const chunk of Bun.stdin.stream() as AsyncIterable<Uint8Array>) {
-      buffer += decoder.decode(chunk, { stream: true });
-      const lines = buffer.split("\n");
-      buffer = lines.pop() ?? "";
-      for (const line of lines) yield line;
+      yield decoder.decode(chunk, { stream: true });
     }
-    if (buffer.length > 0) yield buffer;
   })();
   await server.serve(readable, {
     write: (s) => {

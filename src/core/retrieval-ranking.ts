@@ -17,17 +17,20 @@ const tierOrder: Record<RetrievalTier, number> = {
 };
 
 export function classifyByTier(path: string): RetrievalTier {
-  const normalized = path.replace(/\\/g, "/");
-  if (normalized.includes("/axioms/")) {
+  // Note paths are stored relative to the workspace `wiki/` root (e.g.
+  // "mental-models/foo.md", no leading slash), so match on the leading
+  // path segment rather than requiring a "/tier/" substring.
+  const normalized = path.replace(/\\/g, "/").replace(/^\.?\//, "");
+  if (normalized === "axioms" || normalized.startsWith("axioms/")) {
     return "P0";
   }
-  if (normalized.includes("/mental-models/")) {
+  if (normalized === "mental-models" || normalized.startsWith("mental-models/")) {
     return "P1";
   }
-  if (normalized.includes("/projects/")) {
+  if (normalized === "projects" || normalized.startsWith("projects/")) {
     return "P2";
   }
-  if (normalized.includes("/decisions/")) {
+  if (normalized === "decisions" || normalized.startsWith("decisions/")) {
     return "P3";
   }
   return "P2";
