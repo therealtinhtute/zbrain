@@ -23,6 +23,9 @@ function makeRunner(): QmdRunner {
   return (args) => {
     capturedArgs.push(args);
     if (args[0] === "search") return { stdout: "[]\n", stderr: "", exitCode: 0 };
+    // "collection show" simulates a not-yet-registered collection so
+    // indexWorkspace takes the "collection add" branch.
+    if (args[0] === "collection" && args[1] === "show") return { stdout: "", stderr: "", exitCode: 1 };
     return { stdout: "", stderr: "", exitCode: 0 };
   };
 }
@@ -33,12 +36,13 @@ test("AC-P0-1 (structural): indexWorkspace points qmd at wiki/ subtree, not work
 
   new QmdAdapter(paths, makeRunner()).indexWorkspace({ workspace });
 
-  const indexCall = capturedArgs[0];
-  expect(indexCall).toBeDefined();
-  expect(indexCall?.[0]).toBe("index");
+  const addCall = capturedArgs.find((args) => args[0] === "collection" && args[1] === "add");
+  expect(addCall).toBeDefined();
+  expect(addCall?.[0]).toBe("collection");
+  expect(addCall?.[1]).toBe("add");
   // Path must end with the workspace's wiki/ subtree, not the workspace root.
-  expect(indexCall?.[1]).toBe(wikiRoot(paths, workspace));
-  expect(indexCall?.[1]).not.toBe(workspaceRoot(paths, workspace));
+  expect(addCall?.[2]).toBe(wikiRoot(paths, workspace));
+  expect(addCall?.[2]).not.toBe(workspaceRoot(paths, workspace));
 });
 
 test("wikiRoot returns <runtimeDir>/workspaces/<name>/wiki", () => {
@@ -71,7 +75,8 @@ test("AC-P0-1 (end-to-end with poisoned fixture): qmd is never asked to index ev
 
   new QmdAdapter(paths, makeRunner()).indexWorkspace({ workspace: ws });
 
-  const indexedPath = capturedArgs[0]?.[1];
+  const addCall = capturedArgs.find((args) => args[0] === "collection" && args[1] === "add");
+  const indexedPath = addCall?.[2];
   // The structural guarantee: qmd is pointed at wiki/ ONLY. No path that
   // contains "evidence" was ever passed. A poisoned raw.md cannot be indexed.
   expect(indexedPath).toBeDefined();

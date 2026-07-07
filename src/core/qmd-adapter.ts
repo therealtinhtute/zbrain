@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { basename } from "node:path";
+import { basename, relative, resolve } from "node:path";
 import { type RuntimePaths, wikiRoot } from "./runtime-paths";
 
 export interface QmdSearchResult {
@@ -70,6 +70,12 @@ function normalizeSearchResult(input: unknown): QmdSearchResult {
   return { path, score, snippet, body };
 }
 
+// Parses the "Path:" line out of `qmd collection show <name>` output.
+function parseCollectionShowPath(stdout: string): string | null {
+  const match = stdout.match(/^\s*Path:\s*(.+)$/m);
+  return match ? match[1].trim() : null;
+}
+
 export function workspaceCollectionName(workspace: string): string {
   const trimmed = workspace.trim();
   if (trimmed.length === 0) {
@@ -98,9 +104,11 @@ export class QmdAdapter {
       query,
       "--collection",
       collection,
-      "--limit",
+      "-n",
       String(limit),
-      "--json",
+      "--format",
+      "json",
+      "--full-path",
     ]);
 
     if (result.exitCode !== 0) {
@@ -111,7 +119,14 @@ export class QmdAdapter {
       return [];
     }
 
-    return parseSearchOutput(result.stdout);
+    const wikiPath = wikiRoot(this.paths, workspace);
+    return parseSearchOutput(result.stdout).map((hit) => ({
+      ...hit,
+      // `--full-path` returns absolute on-disk paths; downstream tier
+      // classification and citations expect paths relative to `wiki/`,
+      // matching the FTS5 adapter's shape.
+      path: relative(wikiPath, hit.path),
+    }));
   }
 
   indexWorkspace({ workspace }: IndexWorkspaceOptions): void {
@@ -119,13 +134,35 @@ export class QmdAdapter {
     // C1 fix: index only the `wiki/` subtree. `evidence/` and `.trash/` are
     // structurally unindexable. See SPEC §7 AD-2.
     const wikiPath = wikiRoot(this.paths, workspace);
-    const result = this.runner([
-      "index",
-      wikiPath,
-      "--collection",
-      collection,
-    ]);
 
+    // qmd collection names default to the indexed folder's basename, which
+    // would collide across workspaces (every workspace's wiki/ folder is
+    // literally named "wiki") — pass --name explicitly. qmd has no scoped
+    // per-collection reindex, so an already-registered collection is
+    // refreshed via a full `qmd update` instead of re-adding.
+    const show = this.runner(["collection", "show", collection]);
+    if (show.exitCode === 0) {
+      // A collection with this name already exists in qmd's global index —
+      // it may predate the workspace (stale state, or created by another
+      // tool) and point somewhere other than wiki/. Reusing it blindly
+      // would search/index evidence/ or the workspace root, breaking the
+      // isolation invariant (AC-P0-1). Refuse instead of silently leaking.
+      const registeredPath = parseCollectionShowPath(show.stdout);
+      if (registeredPath !== null && resolve(registeredPath) !== resolve(wikiPath)) {
+        throw new Error(
+          `qmd collection "${collection}" already exists but points at "${registeredPath}", ` +
+            `not the expected wiki root "${wikiPath}". Remove it (\`qmd collection remove ${collection}\`) ` +
+            `or rename it before indexing this workspace.`,
+        );
+      }
+      const result = this.runner(["update"]);
+      if (result.exitCode !== 0) {
+        throw new Error(result.stderr.trim() || "qmd index failed");
+      }
+      return;
+    }
+
+    const result = this.runner(["collection", "add", wikiPath, "--name", collection]);
     if (result.exitCode !== 0) {
       throw new Error(result.stderr.trim() || "qmd index failed");
     }
