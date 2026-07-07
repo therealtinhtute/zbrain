@@ -158,13 +158,13 @@ export function appendIntegrationRules(
 
   for (const legacyTitle of [...legacyTitles, "zwiki Integration"]) {
     withoutLegacy = withoutLegacy.replace(
-      new RegExp(`(?:^|\\n)# ${legacyTitle.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\n[\\s\\S]*?(?=\\n# [^\\n]+\\n|\\s*$)`, "g"),
+      new RegExp(`(?:^|\\n)## ${legacyTitle.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\n[\\s\\S]*?(?=\\n## [^\\n]+\\n|\\s*$)`, "g"),
       "",
     ).trimEnd();
   }
 
   withoutLegacy = withoutLegacy.replace(
-    new RegExp(`(?:^|\\n)# ${title.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\n[\\s\\S]*?(?=\\n# [^\\n]+\\n|\\s*$)`, "g"),
+    new RegExp(`(?:^|\\n)## ${title.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\n[\\s\\S]*?(?=\\n## [^\\n]+\\n|\\s*$)`, "g"),
     "",
   ).trimEnd();
 
@@ -180,6 +180,10 @@ export function appendIntegrationRules(
   const nextContent = withoutLegacy.trim().length === 0
     ? `${section}\n`
     : `${withoutLegacy}\n\n${section}\n`;
+  if (nextContent === existing) {
+    return { updated: false };
+  }
+
   writeFileSync(rulesFile, nextContent, "utf8");
   return { updated: true };
 }

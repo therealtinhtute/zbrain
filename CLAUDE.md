@@ -2,15 +2,6 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-## zbrain Integration
-
-Use the active workspace only. Cite the retrieved evidence. Do not infer facts from another workspace.
-
-Project registry: SQLite (`~/.zbrain/zbrain.db`, `projects` table) — read via `zbrain workspace current`
-Runtime root: `~/.zbrain/`
-
----
-
 ## Prerequisites
 
 `qmd` is required for the retrieval pipeline (`zbrain ask`). Install once:
@@ -128,6 +119,7 @@ Runtime root: `~/.zbrain/`. Project registry: SQLite (`~/.zbrain/zbrain.db`) —
 | Answer domain questions (architecture, decisions, patterns) | `zbrain:ask` |
 | Record a file, URL content, pasted text, or observation | `zbrain:learn` |
 | List, analyze, QA, or apply evidence | `zbrain:ingest` |
+| Write trusted, already-verified knowledge directly (no external source to gate) | `zbrain note add` |
 
 **Before answering any question about domain knowledge, project decisions, or architectural patterns — invoke `zbrain:ask` first. Never answer from memory.**
 
@@ -147,6 +139,12 @@ learn → ingest → ask
 
 Use `zbrain:ingest list` to see which stage each item is in and what command runs next.
 **Never advance to apply if any P0 or P1 question is unresolved.**
+
+**Fast path (`zbrain note add`):** for knowledge that is already trusted and first-party
+(no external source to gate — e.g. a decision made in this conversation, a verified fact),
+write directly to the wiki instead of going through `learn` → `ingest`. Still conflict-checked
+and still governed by the same lifecycle (supersede, not overwrite). Reserve `learn`/`ingest`
+for material from outside the conversation that needs a human review step.
 
 ### Secondary Workspaces (optional)
 
