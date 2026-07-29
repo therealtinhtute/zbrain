@@ -74,3 +74,13 @@ Use Conventional Commit style, matching recent history such as `feat(core): ...`
 - Treat workspace isolation as a hard rule — never add logic that reads across workspace boundaries
 - `raw.md` and `source.yaml` inside `evidence/sources/` are immutable by design — never write code that modifies them after creation
 - `src/generated/bundled-assets.ts` embeds asset file contents — review diffs carefully to avoid accidentally bundling sensitive local files
+
+<!-- ZHARNESS:BEGIN -->
+## Harness
+
+Run `zharness --version`, then `zharness preflight <stage> [--mode <mode>] --json` for every workflow skill invocation. Follow a returned stop and recovery exactly.
+
+Read `docs/WORKFLOW.md`, then only the returned stage playbook and repository material relevant to the requested outcome. Repository docs, code, tests, and observable behavior are authoritative; the database is a lifecycle ledger and recovery index.
+
+Read-only and bounded work may use reduced mode and must not mutate harness state. Durable planning, full execution, full checks, and durable handoffs require an initialized database. Claim completion only with executable or observable evidence.
+<!-- ZHARNESS:END -->

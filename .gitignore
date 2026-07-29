@@ -2,12 +2,11 @@
 .DS_Store
 Thumbs.db
 
-# Node / Bun
+# Legacy JS dependency directories
 node_modules/
-bun.lockb
-dist/
 
 # Build output
+dist/
 zbrain
 zbrain-darwin-arm64
 zbrain-darwin-x64
@@ -29,3 +28,8 @@ workflow-state.yml
 .env
 .env.local
 *.env
+harness.db
+harness.db-wal
+harness.db-shm
+.kit/cache/
+.kit/conflicts/
