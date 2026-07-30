@@ -10,13 +10,13 @@ This repository has been reset from the previous Bun/TypeScript implementation t
 zbrain setup
 zbrain workspace create <name>
 zbrain workspace current
+zbrain ask <query>
 zbrain version
 ```
 
 Planned commands to rebuild next:
 
 - `zbrain note ...`
-- `zbrain ask ...`
 - `zbrain learn ...`
 - `zbrain ingest ...`
 - `zbrain mcp ...`

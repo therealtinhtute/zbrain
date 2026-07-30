@@ -1,10 +1,12 @@
 package cli
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"os"
+	"strings"
 	"time"
 
 	zruntime "github.com/therealtinhtute/zbrain/internal/runtime"
@@ -49,6 +51,8 @@ func (app App) Run(args []string) error {
 		return app.runSetup(args[1:])
 	case "workspace":
 		return app.runWorkspace(args[1:])
+	case "ask":
+		return app.runAsk(args[1:])
 	default:
 		return fmt.Errorf("unknown command: %s", args[0])
 	}
@@ -70,6 +74,26 @@ func (app App) runSetup(args []string) error {
 		return err
 	}
 	_, err = fmt.Fprintf(app.Stdout, "zbrain setup complete\nruntime: %s\nconfig_created: %t\nassets_copied: %d\nassets_skipped: %d\n", app.Paths.RuntimeDir, created, len(extracted.Copied), len(extracted.Skipped))
+	return err
+}
+
+func (app App) runAsk(args []string) error {
+	if len(args) == 0 {
+		return errors.New("usage: zbrain ask <query>")
+	}
+	current, err := zruntime.ResolveCurrentWorkspace(app.Paths)
+	if err != nil {
+		return err
+	}
+	results, err := zruntime.SearchWorkspace(app.Paths, current.Workspace, strings.Join(args, " "), 10)
+	if err != nil {
+		return err
+	}
+	encoded, err := json.MarshalIndent(results, "", "  ")
+	if err != nil {
+		return err
+	}
+	_, err = fmt.Fprintf(app.Stdout, "%s\n", encoded)
 	return err
 }
 
@@ -116,6 +140,7 @@ Commands:
   setup                      Prepare the runtime directory
   workspace create <name>    Create a workspace
   workspace current          Print the active workspace as JSON
+  ask <query>                Search active workspace wiki notes
   version                    Print version
 `)
 }

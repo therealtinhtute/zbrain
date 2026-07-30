@@ -13,6 +13,7 @@ The current implementation is intentionally minimal:
 - `zbrain setup`
 - `zbrain workspace create <name>`
 - `zbrain workspace current`
+- `zbrain ask <query>`
 - `zbrain version`
 
 ## Commands
