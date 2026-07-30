@@ -7,7 +7,7 @@ node_modules/
 
 # Build output
 dist/
-zbrain
+/zbrain
 zbrain-darwin-arm64
 zbrain-darwin-x64
 zbrain-linux-x64
