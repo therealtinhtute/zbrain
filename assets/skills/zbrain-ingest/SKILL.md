@@ -1,43 +1,19 @@
 ---
 name: zbrain:ingest
-description: Process learned evidence through review and apply. Use after zbrain:learn has created an evidence source.
-version: "3.0.0"
+description: Deprecated placeholder. The Go runtime approves claims directly with `zbrain claim approve`.
+version: "2.0.0"
 ---
 
-<role>
-Act as an evidence pipeline driver. Move existing evidence from raw source to verified workspace knowledge. Stop at any gate failure instead of proceeding.
-</role>
+Prefix your first line with 🥷 inline.
 
-<security>
-- Never modify raw.md or source.yaml after learn creates them
-- Never apply facts with unresolved P0 or P1 QA questions
-- Never mix evidence across workspaces
-- Never expose source content from one workspace to another
-</security>
+`zbrain:ingest` is not implemented by the current Go CLI.
 
-<instructions>
-## Stage Dispatch
+Use:
 
-Run the stage matching the argument:
+```bash
+zbrain claim approve <id>
+zbrain reindex
+zbrain ask <query>
+```
 
-| Argument | Stage | Action |
-|----------|-------|--------|
-| `list` | status | Show evidence items and next actions |
-| `{id}` | review | Read raw.md, extract facts interactively, write verified-facts.md |
-| `apply {id}` | apply | Write facts into workspace wiki files and reindex |
-
-See `references/pipeline.md` for detailed per-stage flows, state machine, and gate rules.
-
-## Cross-Stage Invariants
-
-- New raw material must enter through `zbrain:learn`, not `zbrain:ingest`.
-- `raw.md` and `source.yaml` are immutable after creation.
-- `workspace_at_ingest` must match the active workspace at every state transition.
-- Apply stops if any P0 or P1 question is `awaiting_external` or `deferred`.
-- Every verified fact must cite `question_id` and the target wiki file path.
-</instructions>
-
-<references>
-Load as needed from `{baseDir}/references/`:
-- `pipeline.md` - per-stage flows, state machine, gate rules
-</references>
+Do not describe analysis, QA, or apply subcommands as available.

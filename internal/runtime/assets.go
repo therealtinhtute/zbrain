@@ -23,17 +23,12 @@ func ExtractBundledAssets(paths Paths) (ExtractionResult, error) {
 		if entry.IsDir() || strings.HasSuffix(path, ".go") {
 			return nil
 		}
-
-		destination := filepath.Join(paths.RuntimeDir, filepath.FromSlash(path))
 		if strings.HasPrefix(path, "workspaces/") {
-			if _, err := os.Stat(destination); err == nil {
-				result.Skipped = append(result.Skipped, path)
-				return nil
-			} else if !os.IsNotExist(err) {
-				return err
-			}
+			result.Skipped = append(result.Skipped, path)
+			return nil
 		}
 
+		destination := filepath.Join(paths.RuntimeDir, filepath.FromSlash(path))
 		contents, err := bundled.FS.ReadFile(path)
 		if err != nil {
 			return err
