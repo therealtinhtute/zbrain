@@ -7,6 +7,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"gopkg.in/yaml.v3"
 )
 
 type ClaimStore struct {
@@ -25,10 +27,23 @@ type InvalidClaim struct {
 	Error string
 }
 
+type ClaimMigrationSummary struct {
+	Workspace string `json:"workspace"`
+	Migrated  int    `json:"migrated"`
+	Skipped   int    `json:"skipped"`
+	Invalid   int    `json:"invalid"`
+}
+
 func (store ClaimStore) WriteDraft(workspace string, claim Claim) (Claim, error) {
+	claim.Schema = ""
+	claim.Type = OKFClaimType
 	claim.Status = ClaimStatusDraft
 	claim.Path = ""
 	claim.Tier = strings.TrimSpace(claim.Tier)
+	claim.VerifiedAt = ""
+	claim.VerifiedBy = ""
+	claim.VerifiedDigest = ""
+	claim.Sources = nil
 	if err := ValidateClaim(claim); err != nil {
 		return Claim{}, err
 	}
@@ -43,7 +58,11 @@ func (store ClaimStore) WriteDraft(workspace string, claim Claim) (Claim, error)
 	} else if !os.IsNotExist(err) {
 		return Claim{}, err
 	}
-	return claim, writeClaimAtomic(path, claim)
+	if err := writeClaimAtomic(path, claim); err != nil {
+		return Claim{}, err
+	}
+	claim.Path = claimRelPath(claim)
+	return claim, nil
 }
 
 func (store ClaimStore) Approve(workspace string, id string) (Claim, error) {
@@ -57,7 +76,25 @@ func (store ClaimStore) Approve(workspace string, id string) (Claim, error) {
 	if err := ValidateClaimApproval(claim); err != nil {
 		return Claim{}, err
 	}
+	if err := store.validateApprovalReferences(workspace, claim); err != nil {
+		return Claim{}, err
+	}
+	sources, err := store.claimSources(workspace, claim.EvidenceIDs)
+	if err != nil {
+		return Claim{}, err
+	}
+	claim.Schema = ""
+	claim.Type = OKFClaimType
 	claim.Status = ClaimStatusApproved
+	claim.Sources = sources
+	claim.VerifiedAt = store.now().UTC().Format(time.RFC3339)
+	claim.VerifiedBy = "owner"
+	claim.VerifiedDigest = ""
+	digest, err := ClaimVerificationDigest(claim)
+	if err != nil {
+		return Claim{}, err
+	}
+	claim.VerifiedDigest = digest
 	if err := store.writeExisting(workspace, claim); err != nil {
 		return Claim{}, err
 	}
@@ -68,6 +105,9 @@ func (store ClaimStore) Approve(workspace string, id string) (Claim, error) {
 		}
 		if old.Status == ClaimStatusApproved {
 			old.Status = ClaimStatusSuperseded
+			old.VerifiedAt = ""
+			old.VerifiedBy = ""
+			old.VerifiedDigest = ""
 			if err := store.writeExisting(workspace, old); err != nil {
 				return Claim{}, err
 			}
@@ -100,6 +140,9 @@ func (store ClaimStore) Revoke(workspace string, id string, reason string) (Clai
 		return Claim{}, fmt.Errorf("claim %s is already revoked", id)
 	}
 	claim.Status = ClaimStatusRevoked
+	claim.VerifiedAt = ""
+	claim.VerifiedBy = ""
+	claim.VerifiedDigest = ""
 	claim.Body = strings.TrimRight(claim.Body, "\n") + "\n\nRevoked: " + strings.TrimSpace(reason) + "\n"
 	if err := store.writeExisting(workspace, claim); err != nil {
 		return Claim{}, err
@@ -150,7 +193,7 @@ func (store ClaimStore) ScanWorkspace(workspace string) (ClaimScan, error) {
 			return err
 		}
 		rel = filepath.ToSlash(rel)
-		if !strings.HasPrefix(string(contents), "---\n") || !strings.Contains(string(contents), "schema: "+ClaimSchemaVersion) {
+		if !isZbrainClaimDocument(contents) {
 			scan.LegacyUnindexed = append(scan.LegacyUnindexed, rel)
 			return nil
 		}
@@ -171,6 +214,27 @@ func (store ClaimStore) ScanWorkspace(workspace string) (ClaimScan, error) {
 	return scan, nil
 }
 
+func (store ClaimStore) MigrateOKF(workspace string) (ClaimMigrationSummary, error) {
+	scan, err := store.ScanWorkspace(workspace)
+	if err != nil {
+		return ClaimMigrationSummary{}, err
+	}
+	summary := ClaimMigrationSummary{Workspace: workspace, Invalid: len(scan.Invalid), Skipped: len(scan.LegacyUnindexed)}
+	for _, claim := range scan.Claims {
+		if claim.Schema != ClaimSchemaVersion {
+			summary.Skipped++
+			continue
+		}
+		claim.Schema = ""
+		claim.Type = OKFClaimType
+		if err := store.writeExisting(workspace, claim); err != nil {
+			return ClaimMigrationSummary{}, err
+		}
+		summary.Migrated++
+	}
+	return summary, nil
+}
+
 func (store ClaimStore) claimPath(workspace string, claim Claim) (string, error) {
 	if !IsSafeWorkspaceName(workspace) {
 		return "", fmt.Errorf("workspace name must use lowercase letters, numbers, or hyphens only")
@@ -178,8 +242,22 @@ func (store ClaimStore) claimPath(workspace string, claim Claim) (string, error)
 	return filepath.Join(store.Paths.WorkspacesDir, workspace, "wiki", claim.Tier, claim.ID+".md"), nil
 }
 
+func (store ClaimStore) claimFilePath(workspace string, claim Claim) (string, error) {
+	if !IsSafeWorkspaceName(workspace) {
+		return "", fmt.Errorf("workspace name must use lowercase letters, numbers, or hyphens only")
+	}
+	if claim.Path != "" {
+		clean := filepath.Clean(filepath.FromSlash(claim.Path))
+		if filepath.IsAbs(clean) || strings.HasPrefix(clean, ".."+string(filepath.Separator)) || clean == ".." || filepath.Ext(clean) != ".md" {
+			return "", fmt.Errorf("claim path %q is not safe", claim.Path)
+		}
+		return filepath.Join(store.Paths.WorkspacesDir, workspace, "wiki", clean), nil
+	}
+	return store.claimPath(workspace, claim)
+}
+
 func (store ClaimStore) writeExisting(workspace string, claim Claim) error {
-	path, err := store.claimPath(workspace, claim)
+	path, err := store.claimFilePath(workspace, claim)
 	if err != nil {
 		return err
 	}
@@ -220,4 +298,67 @@ func appendUniqueClaimID(ids []string, id string) []string {
 		}
 	}
 	return append(ids, id)
+}
+
+func (store ClaimStore) validateApprovalReferences(workspace string, claim Claim) error {
+	evidenceStore := EvidenceStore{Paths: store.Paths}
+	for _, evidenceID := range claim.EvidenceIDs {
+		if err := evidenceStore.Verify(workspace, evidenceID); err != nil {
+			return fmt.Errorf("verify evidence %s: %w", evidenceID, err)
+		}
+	}
+	for _, supportID := range claim.SupportingClaimIDs {
+		support, err := store.Read(workspace, supportID)
+		if err != nil {
+			return fmt.Errorf("read supporting claim %s: %w", supportID, err)
+		}
+		if support.Status != ClaimStatusApproved {
+			return fmt.Errorf("supporting claim %s is %s; derived claims require approved support", supportID, support.Status)
+		}
+	}
+	return nil
+}
+
+func (store ClaimStore) claimSources(workspace string, evidenceIDs []string) ([]ClaimSource, error) {
+	sources := make([]ClaimSource, 0, len(evidenceIDs))
+	evidenceStore := EvidenceStore{Paths: store.Paths}
+	for _, evidenceID := range evidenceIDs {
+		evidence, err := evidenceStore.Read(workspace, evidenceID)
+		if err != nil {
+			return nil, err
+		}
+		sources = append(sources, ClaimSource{
+			ID:       evidence.ID,
+			Resource: filepath.ToSlash(filepath.Join("evidence", "sources", evidence.ID, "raw")),
+			Title:    evidence.Origin,
+			Digest:   "sha256:" + evidence.SHA256,
+		})
+	}
+	return sources, nil
+}
+
+func (store ClaimStore) now() time.Time {
+	if store.Now != nil {
+		return store.Now()
+	}
+	return time.Now()
+}
+
+func claimRelPath(claim Claim) string {
+	return filepath.ToSlash(filepath.Join(claim.Tier, claim.ID+".md"))
+}
+
+func isZbrainClaimDocument(contents []byte) bool {
+	frontmatter, _, err := splitMarkdownFrontmatter(contents)
+	if err != nil {
+		return false
+	}
+	var probe struct {
+		Schema string `yaml:"schema"`
+		Type   string `yaml:"type"`
+	}
+	if err := yaml.Unmarshal(frontmatter, &probe); err != nil {
+		return false
+	}
+	return probe.Schema == ClaimSchemaVersion || probe.Type == OKFClaimType
 }

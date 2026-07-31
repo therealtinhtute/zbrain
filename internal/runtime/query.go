@@ -45,13 +45,16 @@ type TrustedQueryResponse struct {
 }
 
 type QueryClaim struct {
-	Workspace string      `json:"workspace"`
-	ID        string      `json:"id"`
-	Path      string      `json:"path"`
-	Tier      string      `json:"tier"`
-	Status    ClaimStatus `json:"status"`
-	Title     string      `json:"title"`
-	Score     float64     `json:"score"`
+	Workspace   string      `json:"workspace"`
+	ID          string      `json:"id"`
+	Path        string      `json:"path"`
+	Tier        string      `json:"tier"`
+	Type        string      `json:"type"`
+	Status      ClaimStatus `json:"status"`
+	Title       string      `json:"title"`
+	Description string      `json:"description,omitempty"`
+	StaleAfter  string      `json:"stale_after,omitempty"`
+	Score       float64     `json:"score"`
 }
 
 type QueryConflict struct {
@@ -153,13 +156,16 @@ func TrustedQuery(paths Paths, options TrustedQueryOptions) (TrustedQueryRespons
 
 func toQueryClaim(workspace string, claim IndexedClaim) QueryClaim {
 	return QueryClaim{
-		Workspace: workspace,
-		ID:        claim.ID,
-		Path:      claim.Path,
-		Tier:      claim.Tier,
-		Status:    claim.Status,
-		Title:     claim.Title,
-		Score:     claim.Score,
+		Workspace:   workspace,
+		ID:          claim.ID,
+		Path:        claim.Path,
+		Tier:        claim.Tier,
+		Type:        claim.Type,
+		Status:      claim.Status,
+		Title:       claim.Title,
+		Description: claim.Description,
+		StaleAfter:  claim.StaleAfter,
+		Score:       claim.Score,
 	}
 }
 

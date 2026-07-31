@@ -6,7 +6,7 @@ zbrain is a Go-native CLI for local-first trusted memory. Core layout:
 
 - `cmd/zbrain/` — CLI binary entrypoint.
 - `internal/cli/` — command dispatch and user-facing command behavior.
-- `internal/runtime/` — runtime paths, config, embedded asset extraction, workspace layout, claims, evidence, index, and trusted query logic.
+- `internal/runtime/` — runtime paths, config, embedded asset extraction, workspace layout, OKF claim concepts, evidence, index, and trusted query logic.
 - `assets/` — runtime content embedded into the binary and copied by `zbrain setup`.
 - `docs/` — durable plans and supporting project documentation.
 
@@ -43,6 +43,8 @@ Smoke tests must use `ZBRAIN_HOME` so they never touch real runtime data.
 - Skill files in `assets/skills/*/SKILL.md` must have frontmatter: `name`, `description`, `version`.
 - Engine files in `assets/engine/` are plain Markdown.
 - Template files in `assets/templates/` use `{{placeholder}}` tokens matching the Go scaffold logic.
+- Trusted claim templates should be OKF-style Markdown with `type: zbrain.claim` and `zbrain.profile: zbrain.trusted-memory/v1`.
+- Evidence metadata templates must match the Go runtime `source.yaml` shape.
 - After editing `assets/`, run tests and smoke; assets are embedded directly by Go.
 
 ## Security & Configuration Tips
@@ -50,7 +52,8 @@ Smoke tests must use `ZBRAIN_HOME` so they never touch real runtime data.
 - Do not commit secrets, personal workspace data, or populated runtime output.
 - Workspace isolation is a hard rule; never read across workspace boundaries unless the caller passed explicit `--include`.
 - Evidence snapshots are immutable local copies; never mutate a captured source after creation.
-- Only approved claims are trusted context. Drafts are promotion candidates, not answer material.
+- Raw evidence is untrusted source data. Only approved OKF claim concepts are trusted context.
+- Drafts are promotion candidates, not answer material.
 - Derived SQLite indexes are disposable and must be rebuildable from canonical Markdown.
 
 ## Commit & Pull Request Guidelines

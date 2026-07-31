@@ -2,7 +2,7 @@
 
 `zbrain` is a Go-native CLI for local-first trusted memory and workspace-isolated agent context.
 
-The current slice stores canonical Markdown claims, immutable local evidence snapshots, and a disposable SQLite FTS5 index. `zbrain ask` returns trusted context JSON only; it does not call an LLM.
+The current slice stores canonical OKF-style Markdown claim concepts, immutable local evidence snapshots, and a disposable SQLite FTS5 index. `zbrain ask` returns trusted context JSON only; it does not call an LLM.
 
 ## Current command surface
 
@@ -15,6 +15,7 @@ zbrain claim draft --tier <tier> --title <title> --basis <owner|evidence|derived
 zbrain claim approve <id>
 zbrain claim supersede <id>
 zbrain claim revoke <id> --reason <reason>
+zbrain migrate okf [--workspace <name>]
 zbrain reindex [--workspace <name>]
 zbrain ask [--workspace <name>] [--include <name>] <query>
 zbrain version
@@ -76,13 +77,16 @@ After `zbrain setup` and `zbrain workspace create research`:
 - `workspace`
 - `secondary_workspaces`
 
-## Trusted memory model
+## OKF trusted memory model
 
-- One Markdown file is one atomic claim.
+- One Markdown file is one OKF concept document.
+- Trusted zbrain claim concepts use top-level `type: zbrain.claim` plus `zbrain.profile: zbrain.trusted-memory/v1`.
+- zbrain keeps stable `clm_<32 hex>` IDs in `zbrain.id`; OKF path identity is not used as the trust identity.
 - Claim lifecycle is `draft -> approved -> superseded|revoked`.
-- Only approved claims are trusted by `zbrain ask`.
+- Only approved claim concepts are trusted by `zbrain ask`.
 - Drafts appear only as `promotion_candidates`.
 - External factual claims need local immutable evidence snapshots.
+- Approval verifies referenced evidence hashes and records OKF `sources` plus `verified` metadata.
 - Approved claims are replaced through superseding claims, not in-place mutation.
 - Explicit conflicts make `zbrain ask` fail closed with `status: "blocked"`.
 - Missing approved memory returns `status: "gap"`.

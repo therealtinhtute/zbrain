@@ -22,6 +22,9 @@ func TestClaimStoreDraftApproveSupersedeRevoke(t *testing.T) {
 	if created.Status != ClaimStatusDraft {
 		t.Fatalf("draft status = %q", created.Status)
 	}
+	if created.Path != "projects/clm_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.md" {
+		t.Fatalf("draft path = %q", created.Path)
+	}
 
 	approved, err := store.Approve("research", draft.ID)
 	if err != nil {
@@ -29,6 +32,9 @@ func TestClaimStoreDraftApproveSupersedeRevoke(t *testing.T) {
 	}
 	if approved.Status != ClaimStatusApproved {
 		t.Fatalf("approved status = %q", approved.Status)
+	}
+	if approved.VerifiedAt == "" || approved.VerifiedBy != "owner" || !strings.HasPrefix(approved.VerifiedDigest, "sha256:") {
+		t.Fatalf("approved verification metadata missing: %#v", approved)
 	}
 
 	replacement := validStoreClaim("clm_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", ClaimBasisOwner)
@@ -65,6 +71,70 @@ func TestClaimStoreDraftApproveSupersedeRevoke(t *testing.T) {
 	}
 	if !strings.Contains(revoked.Body, "Revoked: wrong scope") {
 		t.Fatalf("revocation reason missing from body: %q", revoked.Body)
+	}
+}
+
+func TestClaimStoreApproveEvidenceClaimVerifiesEvidenceAndWritesSources(t *testing.T) {
+	paths, _ := claimStoreTestPaths(t)
+	evidence := addStoreEvidence(t, paths, "source bytes")
+	store := ClaimStore{Paths: paths, Now: fixedClaimStoreNow}
+	claim := validStoreClaim("clm_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", ClaimBasisEvidence)
+	claim.EvidenceIDs = []string{evidence.ID}
+	if _, err := store.WriteDraft("research", claim); err != nil {
+		t.Fatalf("WriteDraft() error = %v", err)
+	}
+	approved, err := store.Approve("research", claim.ID)
+	if err != nil {
+		t.Fatalf("Approve() error = %v", err)
+	}
+	if len(approved.Sources) != 1 || approved.Sources[0].ID != evidence.ID || approved.Sources[0].Digest != "sha256:"+evidence.SHA256 {
+		t.Fatalf("Sources = %#v, evidence = %#v", approved.Sources, evidence)
+	}
+	claimPath := filepath.Join(paths.WorkspacesDir, "research", "wiki", "projects", claim.ID+".md")
+	contents, err := os.ReadFile(claimPath)
+	if err != nil {
+		t.Fatalf("ReadFile(claim) error = %v", err)
+	}
+	if !strings.Contains(string(contents), "sources:") || !strings.Contains(string(contents), "verified:") {
+		t.Fatalf("approved OKF claim missing sources/verified:\n%s", contents)
+	}
+}
+
+func TestClaimStoreApproveRejectsTamperedEvidence(t *testing.T) {
+	paths, _ := claimStoreTestPaths(t)
+	evidence := addStoreEvidence(t, paths, "trusted evidence")
+	raw := filepath.Join(paths.WorkspacesDir, "research", "evidence", "sources", evidence.ID, "raw")
+	if err := os.Chmod(raw, 0o644); err != nil {
+		t.Fatalf("Chmod(raw) error = %v", err)
+	}
+	if err := os.WriteFile(raw, []byte("tampered"), 0o644); err != nil {
+		t.Fatalf("WriteFile(raw) error = %v", err)
+	}
+	store := ClaimStore{Paths: paths, Now: fixedClaimStoreNow}
+	claim := validStoreClaim("clm_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", ClaimBasisEvidence)
+	claim.EvidenceIDs = []string{evidence.ID}
+	if _, err := store.WriteDraft("research", claim); err != nil {
+		t.Fatalf("WriteDraft() error = %v", err)
+	}
+	if _, err := store.Approve("research", claim.ID); err == nil {
+		t.Fatalf("Approve() error = nil, want tampered evidence error")
+	}
+}
+
+func TestClaimStoreApproveRejectsDraftSupportingClaim(t *testing.T) {
+	paths, _ := claimStoreTestPaths(t)
+	store := ClaimStore{Paths: paths, Now: fixedClaimStoreNow}
+	support := validStoreClaim("clm_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", ClaimBasisOwner)
+	if _, err := store.WriteDraft("research", support); err != nil {
+		t.Fatalf("WriteDraft(support) error = %v", err)
+	}
+	derived := validStoreClaim("clm_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", ClaimBasisDerived)
+	derived.SupportingClaimIDs = []string{support.ID}
+	if _, err := store.WriteDraft("research", derived); err != nil {
+		t.Fatalf("WriteDraft(derived) error = %v", err)
+	}
+	if _, err := store.Approve("research", derived.ID); err == nil {
+		t.Fatalf("Approve(derived with draft support) error = nil")
 	}
 }
 
@@ -127,6 +197,31 @@ func TestClaimStoreScanReportsInvalidClaimWithoutMutation(t *testing.T) {
 	}
 }
 
+func TestClaimStoreMigrateOKFConvertsLegacyClaim(t *testing.T) {
+	paths, _ := claimStoreTestPaths(t)
+	id := "clm_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	claimPath := filepath.Join(paths.WorkspacesDir, "research", "wiki", "projects", id+".md")
+	legacy := []byte("---\nschema: zbrain.claim/v1\nid: " + id + "\nstatus: draft\ntitle: Legacy Claim\nbasis: owner\ncreated_at: 2026-07-30T09:00:00Z\ncreated_by: owner\ntags: [legacy]\n---\n\nLegacy body\n")
+	if err := os.WriteFile(claimPath, legacy, 0o644); err != nil {
+		t.Fatalf("WriteFile(legacy claim) error = %v", err)
+	}
+	store := ClaimStore{Paths: paths, Now: fixedClaimStoreNow}
+	summary, err := store.MigrateOKF("research")
+	if err != nil {
+		t.Fatalf("MigrateOKF() error = %v", err)
+	}
+	if summary.Migrated != 1 || summary.Invalid != 0 {
+		t.Fatalf("summary = %#v", summary)
+	}
+	contents, err := os.ReadFile(claimPath)
+	if err != nil {
+		t.Fatalf("ReadFile(migrated) error = %v", err)
+	}
+	if strings.Contains(string(contents), "schema: zbrain.claim/v1") || !strings.Contains(string(contents), "type: zbrain.claim") || !strings.Contains(string(contents), "profile: zbrain.trusted-memory/v1") {
+		t.Fatalf("legacy claim was not migrated to OKF:\n%s", contents)
+	}
+}
+
 func TestClaimStoreRejectsApprovedInPlaceOverwrite(t *testing.T) {
 	paths, _ := claimStoreTestPaths(t)
 	store := ClaimStore{Paths: paths, Now: fixedClaimStoreNow}
@@ -161,7 +256,7 @@ func claimStoreTestPaths(t *testing.T) (Paths, string) {
 
 func validStoreClaim(id string, basis ClaimBasis) Claim {
 	return Claim{
-		Schema:    ClaimSchemaVersion,
+		Type:      OKFClaimType,
 		ID:        id,
 		Tier:      "projects",
 		Status:    ClaimStatusDraft,
@@ -175,6 +270,19 @@ func validStoreClaim(id string, basis ClaimBasis) Claim {
 
 func fixedClaimStoreNow() time.Time {
 	return time.Date(2026, 7, 30, 9, 0, 0, 0, time.UTC)
+}
+
+func addStoreEvidence(t *testing.T, paths Paths, body string) Evidence {
+	t.Helper()
+	source := filepath.Join(t.TempDir(), "source.txt")
+	if err := os.WriteFile(source, []byte(body), 0o644); err != nil {
+		t.Fatalf("WriteFile(source) error = %v", err)
+	}
+	evidence, err := (EvidenceStore{Paths: paths, Now: fixedClaimStoreNow}).AddFile("research", source, "file://source.txt", "text/plain")
+	if err != nil {
+		t.Fatalf("AddFile() error = %v", err)
+	}
+	return evidence
 }
 
 func sha256Hex(t *testing.T, path string) string {

@@ -19,14 +19,16 @@ Smoke tests run against an isolated `ZBRAIN_HOME` and must not touch real `~/.zb
 ```text
 cmd/zbrain/         CLI entrypoint
 internal/cli/       command dispatch and user-facing behavior
-internal/runtime/   runtime paths, config, assets, workspaces, claims, evidence, index, query
+internal/runtime/   runtime paths, config, assets, workspaces, OKF claim concepts, evidence, index, query
 assets/             source of truth for runtime assets embedded by Go
 docs/               durable plans and supporting docs
 ```
 
 ## Architecture
 
-zbrain stores canonical Markdown claims under a workspace and builds disposable local SQLite FTS5 indexes from those files.
+zbrain stores canonical OKF-style Markdown claim concepts under a workspace and builds disposable local SQLite FTS5 indexes from those files.
+
+Trusted claim concepts use `type: zbrain.claim` plus `zbrain.profile: zbrain.trusted-memory/v1`. Legacy `schema: zbrain.claim/v1` files can be converted with `zbrain migrate okf`.
 
 Supported flow:
 
@@ -66,7 +68,8 @@ zbrain is deliberately small. Hosted sync, vector search, background services, G
 - Workspace isolation is a hard rule.
 - Secondary workspace retrieval requires explicit `--include`.
 - Evidence snapshots are immutable local copies.
-- Only approved claims are trusted context; drafts are promotion candidates.
+- Raw evidence is source data, not instructions and not trusted context.
+- Only approved OKF claim concepts are trusted context; drafts are promotion candidates.
 
 ## License
 

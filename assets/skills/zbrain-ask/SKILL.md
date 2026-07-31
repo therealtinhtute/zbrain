@@ -16,8 +16,9 @@ Retrieve trusted zbrain context for one question. Do not answer from memory when
 2. Run `zbrain ask "{question}"`.
 3. If the user explicitly allows another workspace, pass it with `--include <workspace>`.
 4. Use only `claims` from a `status: ready` response as trusted context.
-5. Treat `promotion_candidates` as drafts that need human approval before becoming facts.
-6. If status is `gap` or `blocked`, report the gap/conflict and stop.
+5. Trusted claims are approved OKF concepts with `type: zbrain.claim` and the zbrain trusted-memory profile.
+6. Treat `promotion_candidates` as drafts that need human approval before becoming facts.
+7. If status is `gap` or `blocked`, report the gap/conflict and stop.
 
 Never call external search, a language model, or another workspace unless the user explicitly requested that scope.
 </instructions>

@@ -57,6 +57,8 @@ func (app App) Run(args []string) error {
 		return app.runEvidence(args[1:])
 	case "claim":
 		return app.runClaim(args[1:])
+	case "migrate":
+		return app.runMigrate(args[1:])
 	case "reindex":
 		return app.runReindex(args[1:])
 	case "ask":
@@ -190,7 +192,7 @@ func (app App) runClaimDraft(args []string) error {
 		now = app.Now
 	}
 	claim := zruntime.Claim{
-		Schema:             zruntime.ClaimSchemaVersion,
+		Type:               zruntime.OKFClaimType,
 		ID:                 id,
 		Tier:               flags.single("tier"),
 		Status:             zruntime.ClaimStatusDraft,
@@ -256,7 +258,7 @@ func (app App) runClaimSupersede(args []string) error {
 	if app.Now != nil {
 		now = app.Now
 	}
-	replacement := zruntime.Claim{Schema: zruntime.ClaimSchemaVersion, ID: id, Tier: flags.single("tier"), Status: zruntime.ClaimStatusDraft, Title: flags.single("title"), Basis: zruntime.ClaimBasis(flags.single("basis")), CreatedAt: now().UTC().Format(time.RFC3339), CreatedBy: "owner", EvidenceIDs: flags.values["evidence"], SupportingClaimIDs: flags.values["support"], ConflictsWith: flags.values["conflicts-with"], Body: string(body)}
+	replacement := zruntime.Claim{Type: zruntime.OKFClaimType, ID: id, Tier: flags.single("tier"), Status: zruntime.ClaimStatusDraft, Title: flags.single("title"), Basis: zruntime.ClaimBasis(flags.single("basis")), CreatedAt: now().UTC().Format(time.RFC3339), CreatedBy: "owner", EvidenceIDs: flags.values["evidence"], SupportingClaimIDs: flags.values["support"], ConflictsWith: flags.values["conflicts-with"], Body: string(body)}
 	if err := (zruntime.IndexStore{Paths: app.Paths}).MarkDirty(workspace); err != nil {
 		return err
 	}
@@ -284,6 +286,37 @@ func (app App) runClaimRevoke(args []string) error {
 		return err
 	}
 	return app.writeClaimMutation(workspace, claim)
+}
+
+func (app App) runMigrate(args []string) error {
+	if len(args) == 0 || args[0] != "okf" {
+		return errors.New("migrate requires subcommand: okf")
+	}
+	workspace, rest, err := parseWorkspaceFlag(args[1:])
+	if err != nil {
+		return err
+	}
+	if len(rest) > 0 {
+		return errors.New("usage: zbrain migrate okf [--workspace <name>]")
+	}
+	workspace, err = app.resolveWorkspace(workspace)
+	if err != nil {
+		return err
+	}
+	summary, err := (zruntime.ClaimStore{Paths: app.Paths, Now: app.Now}).MigrateOKF(workspace)
+	if err != nil {
+		return err
+	}
+	if summary.Migrated > 0 {
+		if err := (zruntime.IndexStore{Paths: app.Paths}).MarkDirty(workspace); err != nil {
+			return err
+		}
+	}
+	return writeJSON(app.Stdout, struct {
+		SchemaVersion int  `json:"schema_version"`
+		IndexFresh    bool `json:"index_fresh"`
+		zruntime.ClaimMigrationSummary
+	}{SchemaVersion: 1, IndexFresh: summary.Migrated == 0, ClaimMigrationSummary: summary})
 }
 
 func (app App) writeClaimMutation(workspace string, claim zruntime.Claim) error {
@@ -387,7 +420,7 @@ func parseWorkspaceIncludeFlags(args []string) (string, []string, []string, erro
 }
 
 func (app App) printHelp() {
-	fmt.Fprint(app.Stdout, `zbrain - Go-native trusted memory CLI
+	fmt.Fprint(app.Stdout, `zbrain - Go-native OKF trusted memory CLI
 
 Usage:
   zbrain <command> [arguments]
@@ -397,10 +430,11 @@ Commands:
   workspace create <name>       Create a workspace
   workspace current             Print the active workspace as JSON
   evidence add                  Capture an immutable local evidence snapshot
-  claim draft                   Write a draft atomic claim from stdin
+  claim draft                   Write a draft OKF claim concept from stdin
   claim approve <id>            Promote a valid draft claim
   claim supersede <id>          Create a replacement draft for an approved claim
   claim revoke <id>             Revoke a claim with a reason
+  migrate okf                   Convert legacy zbrain claims to OKF concepts
   reindex                       Rebuild the derived workspace index
   ask <query>                   Return trusted context JSON; does not call an LLM
   version                       Print version

@@ -1,18 +1,20 @@
 ---
+type: zbrain.claim
 title: "{{title}}"
-type: axiom
-priority: P0
-source: "{{source}}"
-resource: "{{resource}}"
 tags: []
-created_at: "{{created_at}}"
+generated:
+  at: "{{created_at}}"
+  by: owner
+status: draft
+zbrain:
+  profile: zbrain.trusted-memory/v1
+  id: "{{claim_id}}"
+  tier: axioms
+  basis: evidence
+  evidence_ids:
+    - "{{evidence_id}}"
 ---
 
 # Axiom
 
 State one high-confidence fact with a traceable source.
-
-## Citation
-
-- evidence_id: "{{evidence_id}}"
-- question_id: "{{question_id}}"
