@@ -37,6 +37,35 @@ func TestCreateWorkspaceCreatesLayoutAndDefault(t *testing.T) {
 	}
 }
 
+func TestCreateWorkspaceRejectsExistingWorkspace(t *testing.T) {
+	tmp := t.TempDir()
+	paths, err := ResolvePaths(Options{CWD: tmp, HomeDir: tmp, RuntimeDir: filepath.Join(tmp, ".zbrain")})
+	if err != nil {
+		t.Fatalf("ResolvePaths() error = %v", err)
+	}
+	if _, err := EnsureConfig(paths.ConfigFile); err != nil {
+		t.Fatalf("EnsureConfig() error = %v", err)
+	}
+	if err := CreateWorkspace(paths, "research", time.Date(2026, 7, 29, 0, 0, 0, 0, time.UTC)); err != nil {
+		t.Fatalf("CreateWorkspace() error = %v", err)
+	}
+	workspaceReadme := filepath.Join(paths.WorkspacesDir, "research", "workspace.md")
+	custom := []byte("# Custom workspace\n")
+	if err := os.WriteFile(workspaceReadme, custom, 0o644); err != nil {
+		t.Fatalf("WriteFile(workspace.md) error = %v", err)
+	}
+	if err := CreateWorkspace(paths, "research", time.Date(2026, 7, 30, 0, 0, 0, 0, time.UTC)); err == nil {
+		t.Fatalf("CreateWorkspace(existing) error = nil")
+	}
+	contents, err := os.ReadFile(workspaceReadme)
+	if err != nil {
+		t.Fatalf("ReadFile(workspace.md) error = %v", err)
+	}
+	if string(contents) != string(custom) {
+		t.Fatalf("workspace.md was overwritten: %q", contents)
+	}
+}
+
 func TestResolveCurrentWorkspaceReturnsJSONShape(t *testing.T) {
 	tmp := t.TempDir()
 	paths, err := ResolvePaths(Options{CWD: filepath.Join(tmp, "project"), HomeDir: tmp, RuntimeDir: filepath.Join(tmp, ".zbrain")})

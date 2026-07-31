@@ -15,6 +15,7 @@ type Paths struct {
 	ConfigFile    string
 	WorkspacesDir string
 	ProjectsDir   string
+	IndexesDir    string
 }
 
 type Options struct {
@@ -69,6 +70,7 @@ func ResolvePaths(options Options) (Paths, error) {
 		ConfigFile:    filepath.Join(runtimeDir, "config.yml"),
 		WorkspacesDir: filepath.Join(runtimeDir, "workspaces"),
 		ProjectsDir:   filepath.Join(runtimeDir, "projects"),
+		IndexesDir:    filepath.Join(runtimeDir, "indexes"),
 	}, nil
 }
 

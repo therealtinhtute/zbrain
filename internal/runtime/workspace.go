@@ -24,6 +24,11 @@ func CreateWorkspace(paths Paths, name string, now time.Time) error {
 	}
 
 	root := filepath.Join(paths.WorkspacesDir, name)
+	if _, err := os.Stat(root); err == nil {
+		return fmt.Errorf("workspace %q already exists", name)
+	} else if !os.IsNotExist(err) {
+		return err
+	}
 	for _, tier := range WikiTiers {
 		if err := os.MkdirAll(filepath.Join(root, "wiki", tier), 0o755); err != nil {
 			return err
