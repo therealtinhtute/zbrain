@@ -1,8 +1,8 @@
 # zbrain
 
-`zbrain` is a Go-native CLI for local-first personal memory and workspace-isolated agent context.
+`zbrain` is a Go-native CLI for local-first trusted memory and workspace-isolated agent context.
 
-This repository has been reset from the previous Bun/TypeScript implementation to a fresh Go implementation. The current Go foundation intentionally starts small: standalone binary, embedded runtime assets, runtime setup, and workspace creation/resolution.
+The current slice stores canonical Markdown claims, immutable local evidence snapshots, and a disposable SQLite FTS5 index. `zbrain ask` returns trusted context JSON only; it does not call an LLM.
 
 ## Current command surface
 
@@ -10,23 +10,19 @@ This repository has been reset from the previous Bun/TypeScript implementation t
 zbrain setup
 zbrain workspace create <name>
 zbrain workspace current
-zbrain ask <query>
+zbrain evidence add --file <path> --origin <uri-or-path> [--media-type <type>]
+zbrain claim draft --tier <tier> --title <title> --basis <owner|evidence|derived>
+zbrain claim approve <id>
+zbrain claim supersede <id>
+zbrain claim revoke <id> --reason <reason>
+zbrain reindex [--workspace <name>]
+zbrain ask [--workspace <name>] [--include <name>] <query>
 zbrain version
 ```
 
-Planned commands to rebuild next:
-
-- `zbrain note ...`
-- `zbrain learn ...`
-- `zbrain ingest ...`
-- `zbrain mcp ...`
-- `zbrain doctor`
-- `zbrain sync`
-- `zbrain export` / `zbrain import`
-
 ## Development
 
-Prerequisite: Go.
+Prerequisite: Go 1.24.
 
 ```bash
 make test
@@ -42,9 +38,9 @@ go build -o dist/zbrain ./cmd/zbrain
 ZBRAIN_HOME=/tmp/zbrain-smoke ./dist/zbrain setup
 ```
 
-## Runtime layout
+Use `ZBRAIN_HOME` to isolate tests or experiments from real runtime data.
 
-By default, runtime data lives under `~/.zbrain/`. Use `ZBRAIN_HOME` to isolate tests or experiments.
+## Runtime layout
 
 After `zbrain setup` and `zbrain workspace create research`:
 
@@ -55,6 +51,8 @@ After `zbrain setup` and `zbrain workspace create research`:
   engine/
   skills/
   templates/
+  indexes/
+    research.sqlite
   workspaces/
     research/
       workspace.md
@@ -77,17 +75,29 @@ After `zbrain setup` and `zbrain workspace create research`:
 - `project_root`
 - `workspace`
 - `secondary_workspaces`
-- `context_file`
+
+## Trusted memory model
+
+- One Markdown file is one atomic claim.
+- Claim lifecycle is `draft -> approved -> superseded|revoked`.
+- Only approved claims are trusted by `zbrain ask`.
+- Drafts appear only as `promotion_candidates`.
+- External factual claims need local immutable evidence snapshots.
+- Approved claims are replaced through superseding claims, not in-place mutation.
+- Explicit conflicts make `zbrain ask` fail closed with `status: "blocked"`.
+- Missing approved memory returns `status: "gap"`.
+- Secondary workspaces are searched only when explicitly passed with `--include`.
 
 ## Repository layout
 
 ```text
 cmd/zbrain/         CLI entrypoint
-internal/cli/       command dispatch
-internal/runtime/   runtime paths, config, assets, workspace layout
-assets/             embedded runtime assets
+internal/cli/       command dispatch and user-facing behavior
+internal/runtime/   runtime paths, config, assets, claims, evidence, index, query
+assets/             embedded runtime assets copied by setup
+docs/               durable plans and supporting docs
 ```
 
 ## Reset note
 
-The previous Bun/TypeScript implementation was intentionally removed from the working tree. The Go version uses a fresh runtime/schema direction and does not promise compatibility with the old Bun-created database yet.
+The current implementation is intentionally Go-native and minimal. It does not include hosted sync, vector search, network crawling, background services, or model-provider integration.

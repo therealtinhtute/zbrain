@@ -2,18 +2,18 @@
 
 ## Pipeline
 
-1. Parse task intent into search keywords.
-2. Query qmd BM25 for the active workspace collection only.
-3. Re-rank results by path tier before handing them to the main agent.
-4. Materialize ranked context into `current-task.md`.
+1. Resolve the primary workspace from `zbrain workspace current` or an explicit `--workspace` flag.
+2. Include secondary workspaces only when passed with `--include`.
+3. Run `zbrain ask` to retrieve trusted context JSON.
+4. Treat `status: ready` as usable context, `status: gap` as insufficient approved memory, and `status: blocked` as an unresolved explicit conflict.
 
 ## Ranking
 
-- `axioms/` -> P0
-- `mental-models/` -> P1
-- `projects/` -> P2
-- `decisions/` -> P3
+- Scope and lifecycle are hard filters first.
+- Only current `approved` claims are trusted context.
+- Ranking is BM25 over the derived local SQLite FTS5 index.
+- Tiers describe semantic role; they do not override relevance score.
 
 ## Failure Mode
 
-If no adequate context is found, report the gap and stop.
+If `zbrain ask` returns a gap, blocked conflict, dirty index, or missing workspace, stop and report the exact reason. Do not answer trusted-memory questions from unstored assumptions.

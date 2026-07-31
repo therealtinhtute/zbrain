@@ -2,78 +2,60 @@
 
 ## Project Structure & Module Organization
 
-zbrain is a Bun-compiled TypeScript CLI for personal LLM wiki workflows. Core layout:
+zbrain is a Go-native CLI for local-first trusted memory. Core layout:
 
-- `src/index.ts` — CLI entry point (Commander)
-- `src/commands/` — CLI command handlers: `setup`, `init`, `workspace`, `update`, `ui`, `helpers`
-- `src/core/` — business logic: evidence pipeline, retrieval, qmd adapter, runtime paths, workspace resolver, config, assets, `current-task.md` writer
-- `src/schemas/` — Zod schemas for `config.yml` and `zbrain.json`
-- `src/generated/bundled-assets.ts` — auto-generated asset manifest (do not edit by hand)
-- `assets/` — runtime assets bundled into the binary:
-  - `assets/engine/` — system prompt, constraints, retrieval rules, evidence rules, claude rules
-  - `assets/skills/` — Claude Code skill definitions (`zbrain:ask`, `zbrain:learn`, `zbrain:reflect`, `zbrain:workspace`, `zbrain:reindex`)
-  - `assets/templates/` — scaffolds for workspaces and evidence doc types
-  - `assets/workspaces/` — seed `workspace.md` files for the 4 default domains
-- `tests/` — Vitest tests (`tests/**/*.test.ts`)
-- `scripts/` — build utilities, asset generation
-- `docs/` — acceptance walkthrough, release guidance
-- `.kit/planning/` — locked SPEC.md, roadmap, phased execution plans
+- `cmd/zbrain/` — CLI binary entrypoint.
+- `internal/cli/` — command dispatch and user-facing command behavior.
+- `internal/runtime/` — runtime paths, config, embedded asset extraction, workspace layout, claims, evidence, index, and trusted query logic.
+- `assets/` — runtime content embedded into the binary and copied by `zbrain setup`.
+- `docs/` — durable plans and supporting project documentation.
 
-Keep business logic in `src/core/`. Keep command handlers thin — they parse args, call core, and print output. Do not mix workspace-specific content into engine or template files.
+Keep command handlers thin: parse args, call runtime logic, and print JSON or user-facing text. Keep durable runtime behavior in `internal/runtime/`.
 
 ## Build, Test, and Development Commands
 
 ```bash
-bun install                          # install dependencies
-bun run build                        # compile binary → dist/zbrain
-bun run generate:assets              # regenerate src/generated/bundled-assets.ts
-bun test --run                       # run all tests once
-bunx tsc --noEmit                    # type-check without emitting
+go test ./...                       # run all tests
+make test                           # same test gate
+make build                          # build dist/zbrain
+make smoke                          # build and run isolated lifecycle smoke
 ```
 
-Smoke test the binary after build:
-
-```bash
-./dist/zbrain --help
-ZBRAIN_HOME=/tmp/zbrain-smoke ./dist/zbrain setup
-```
-
-The `qmd` CLI is a runtime dependency, not a test dependency. Retrieval tests use a stubbed adapter for deterministic proof when qmd is not installed.
+Smoke tests must use `ZBRAIN_HOME` so they never touch real runtime data.
 
 ## Coding Style & Naming Conventions
 
-- TypeScript, strict mode, ESM (`"type": "module"`)
-- 2-space indentation; no semicolons in object schemas (follow existing file style)
-- `camelCase` for functions and variables; `PascalCase` for types and classes
-- Zod schemas for all config and pointer validation — extend `src/schemas/config.ts`
-- Keep core functions pure when possible; side-effectful I/O goes in `src/commands/` or explicit `*-store.ts` files
-- `src/generated/bundled-assets.ts` is auto-generated — always regenerate with `bun run generate:assets` after changing `assets/`
+- Go 1.24.
+- Use standard Go formatting.
+- Prefer small package-level functions and structs that match surrounding code.
+- Keep filesystem writes behind explicit runtime stores or CLI commands.
+- Preserve `assets/` as the runtime content source of truth.
 
 ## Testing Guidelines
 
-- Tests live in `tests/**/*.test.ts` and run with Vitest
-- Prefer unit tests that use temp directories (`os.tmpdir()`) and avoid touching `~/.zbrain/`
-- Use the stubbed qmd adapter (`src/core/qmd-adapter.ts`) for retrieval tests — do not require a real qmd install
-- Add focused tests near the module they cover; follow the existing `*.test.ts` naming pattern
-- Run `bunx tsc --noEmit` before committing to catch type errors early
+- Add focused `*_test.go` coverage next to the package being changed.
+- Use temp directories and explicit `ZBRAIN_HOME` isolation.
+- Run `go test ./...` before claiming completion.
+- For command/runtime behavior, also run a relevant isolated smoke command.
 
 ## Asset Authoring Guidelines
 
-- Skill files in `assets/skills/*/SKILL.md` must have frontmatter: `name`, `description`, `version`
-- Engine files in `assets/engine/` are plain Markdown — no frontmatter required
-- Template files in `assets/templates/` use `{{placeholder}}` tokens matching the scaffold logic in `src/core/`
-- After editing any file under `assets/`, run `bun run generate:assets` to update the bundled manifest
-
-## Commit & Pull Request Guidelines
-
-Use Conventional Commit style, matching recent history such as `feat(core): ...`, `fix(cli): ...`, `docs(spec): ...`. Keep scopes specific to the area changed. PRs should include a short summary, affected paths, and commands run to verify.
+- Skill files in `assets/skills/*/SKILL.md` must have frontmatter: `name`, `description`, `version`.
+- Engine files in `assets/engine/` are plain Markdown.
+- Template files in `assets/templates/` use `{{placeholder}}` tokens matching the Go scaffold logic.
+- After editing `assets/`, run tests and smoke; assets are embedded directly by Go.
 
 ## Security & Configuration Tips
 
-- Do not commit secrets, personal workspace data, or any populated `~/.zbrain/` output
-- Treat workspace isolation as a hard rule — never add logic that reads across workspace boundaries
-- `raw.md` and `source.yaml` inside `evidence/sources/` are immutable by design — never write code that modifies them after creation
-- `src/generated/bundled-assets.ts` embeds asset file contents — review diffs carefully to avoid accidentally bundling sensitive local files
+- Do not commit secrets, personal workspace data, or populated runtime output.
+- Workspace isolation is a hard rule; never read across workspace boundaries unless the caller passed explicit `--include`.
+- Evidence snapshots are immutable local copies; never mutate a captured source after creation.
+- Only approved claims are trusted context. Drafts are promotion candidates, not answer material.
+- Derived SQLite indexes are disposable and must be rebuildable from canonical Markdown.
+
+## Commit & Pull Request Guidelines
+
+Use Conventional Commit style, matching recent history such as `feat(cli): ...`, `fix(runtime): ...`, and `docs(spec): ...`. Keep scopes specific to the area changed. PRs should include a short summary, affected paths, and commands run to verify.
 
 <!-- ZHARNESS:BEGIN -->
 ## Harness

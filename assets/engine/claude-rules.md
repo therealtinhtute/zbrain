@@ -1,57 +1,31 @@
 ## zbrain Integration
 
-zbrain is a workspace-isolated knowledge retrieval layer. Skills live in `.claude/skills/zbrain-*`.
-Runtime root: `~/.zbrain/`. Project registry: SQLite (`~/.zbrain/zbrain.db`) — read it via `zbrain workspace current`.
+zbrain is a local-first trusted memory CLI. It returns versioned JSON context for agents; it does not call an LLM or write final answers.
 
 ### Workspace Resolution
 
-1. Run `zbrain workspace current` (JSON output) — gives `workspace` and `context_file` for the current project root.
-2. Fallback: `~/.zbrain/config.yml` → `default_workspace`.
-3. If neither resolves, stop and report — never guess a workspace.
+1. Run `zbrain workspace current` to identify the primary workspace.
+2. Use `--workspace <name>` only when the caller explicitly names a primary workspace.
+3. Use `--include <name>` only when the caller explicitly permits a read-only secondary workspace.
+4. If no workspace resolves, stop and ask the user to create one.
 
-### Skill Triggers
+### Trusted Memory Flow
 
-| When you need to… | Use |
-|--------------------|-----|
-| Answer domain questions (architecture, decisions, patterns) | `zbrain:ask` |
-| Record a file, URL content, pasted text, or observation | `zbrain:learn` |
-| List, analyze, QA, or apply evidence | `zbrain:ingest` |
-| Write trusted, already-verified knowledge directly (no external source to gate) | `zbrain note add` |
-
-**Before answering any question about domain knowledge, project decisions, or architectural patterns — invoke `zbrain:ask` first. Never answer from memory.**
-
-### Retrieval Tier Priority
-
-`axioms/` (P0) → `mental-models/` (P1) → `projects/` (P2) → `decisions/` (P3)
-
-Higher-tier results rank first regardless of BM25 score.
-
-### Evidence Pipeline
-
-Each piece of external material moves through three public verbs:
-
-```
-learn → ingest → ask
-```
-
-Use `zbrain:ingest list` to see which stage each item is in and what command runs next.
-**Never advance to apply if any P0 or P1 question is unresolved.**
-
-**Fast path (`zbrain note add`):** for knowledge that is already trusted and first-party
-(no external source to gate — e.g. a decision made in this conversation, a verified fact),
-write directly to the wiki instead of going through `learn` → `ingest`. Still conflict-checked
-and still governed by the same lifecycle (supersede, not overwrite). Reserve `learn`/`ingest`
-for material from outside the conversation that needs a human review step.
-
-### Secondary Workspaces (optional)
-
-Each project registry entry supports a `secondary_workspaces` array for cross-workspace context.
-Each entry has `workspace`, `keywords`, and optional `limit`.
-Secondary results fill remaining slots after primary results.
+| Need | Command |
+|---|---|
+| Capture a local evidence snapshot | `zbrain evidence add --file <path> --origin <uri-or-path>` |
+| Draft an atomic claim from stdin | `zbrain claim draft --tier <tier> --title <title> --basis <owner|evidence|derived>` |
+| Promote a valid draft claim | `zbrain claim approve <id>` |
+| Replace an approved claim | `zbrain claim supersede <id>` then approve the replacement |
+| Revoke a claim | `zbrain claim revoke <id> --reason <text>` |
+| Rebuild the derived index | `zbrain reindex` |
+| Retrieve trusted context | `zbrain ask [--include <workspace>] <query>` |
 
 ### Invariants
 
-- **Cite all retrieved context.** Never answer domain questions from memory.
-- **One workspace per query.** Never cross workspace boundaries in a single retrieval.
-- **Evidence is immutable after ingest.** Never edit `raw.md` or `source.yaml`.
-- **Apply gate.** Block apply if any P0 or P1 QA question is `awaiting_external`.
+- Only `approved` claims are trusted context.
+- Drafts may appear only as `promotion_candidates`.
+- Missing approved context returns a gap; unresolved explicit conflicts return blocked status.
+- Evidence snapshots are immutable local files.
+- Markdown claim files are canonical; SQLite indexes are disposable caches.
+- Never infer cross-workspace access. Secondary scopes must be explicit.
