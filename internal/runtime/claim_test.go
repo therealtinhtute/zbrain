@@ -19,14 +19,17 @@ func TestClaimIDFormat(t *testing.T) {
 func TestClaimRoundTripPreservesBodyAndMetadata(t *testing.T) {
 	created := "2026-07-30T09:00:00Z"
 	claim := Claim{
-		Schema:             ClaimSchemaVersion,
+		Type:               OKFClaimType,
 		ID:                 "clm_0123456789abcdef0123456789abcdef",
 		Tier:               "projects",
 		Status:             ClaimStatusDraft,
 		Title:              "Trusted Ask Contract",
+		Description:        "Trusted ask returns scoped context.",
+		Resource:           "https://example.com/trusted-ask",
 		Basis:              ClaimBasisEvidence,
 		CreatedAt:          created,
 		CreatedBy:          "owner",
+		StaleAfter:         "2027-07-30T09:00:00Z",
 		EvidenceIDs:        []string{"evd_0123456789abcdef0123456789abcdef"},
 		SupportingClaimIDs: []string{"clm_11111111111111111111111111111111"},
 		Supersedes:         []string{"clm_22222222222222222222222222222222"},
@@ -39,6 +42,12 @@ func TestClaimRoundTripPreservesBodyAndMetadata(t *testing.T) {
 	if err != nil {
 		t.Fatalf("RenderClaimMarkdown() error = %v", err)
 	}
+	if !strings.Contains(string(rendered), "type: zbrain.claim") || !strings.Contains(string(rendered), "profile: zbrain.trusted-memory/v1") {
+		t.Fatalf("rendered claim is not an OKF zbrain concept:\n%s", rendered)
+	}
+	if strings.Contains(string(rendered), "schema: zbrain.claim/v1") {
+		t.Fatalf("rendered claim still emits legacy schema:\n%s", rendered)
+	}
 	parsed, err := ParseClaimMarkdown("projects", "projects/trusted-ask.md", rendered)
 	if err != nil {
 		t.Fatalf("ParseClaimMarkdown() error = %v", err)
@@ -47,7 +56,7 @@ func TestClaimRoundTripPreservesBodyAndMetadata(t *testing.T) {
 	if parsed.Body != claim.Body {
 		t.Fatalf("Body changed after round trip:\n got: %q\nwant: %q", parsed.Body, claim.Body)
 	}
-	if parsed.ID != claim.ID || parsed.Title != claim.Title || parsed.Status != claim.Status || parsed.Basis != claim.Basis || parsed.CreatedAt != created {
+	if parsed.ID != claim.ID || parsed.Title != claim.Title || parsed.Status != claim.Status || parsed.Basis != claim.Basis || parsed.CreatedAt != created || parsed.Description != claim.Description || parsed.Resource != claim.Resource || parsed.StaleAfter != claim.StaleAfter {
 		t.Fatalf("parsed metadata mismatch: %#v", parsed)
 	}
 	if got := strings.Join(parsed.Tags, ","); got != "memory,trust" {
@@ -63,14 +72,36 @@ func TestClaimRoundTripPreservesBodyAndMetadata(t *testing.T) {
 	}
 }
 
+func TestClaimParsesLegacySchema(t *testing.T) {
+	contents := []byte("---\nschema: zbrain.claim/v1\nid: clm_0123456789abcdef0123456789abcdef\nstatus: draft\ntitle: Legacy\nbasis: owner\ncreated_at: 2026-07-30T09:00:00Z\ncreated_by: owner\ntags: [legacy]\n---\n\nBody\n")
+	claim, err := ParseClaimMarkdown("projects", "projects/clm_0123456789abcdef0123456789abcdef.md", contents)
+	if err != nil {
+		t.Fatalf("ParseClaimMarkdown(legacy) error = %v", err)
+	}
+	if claim.Schema != ClaimSchemaVersion || claim.Type != OKFClaimType || claim.ID != "clm_0123456789abcdef0123456789abcdef" {
+		t.Fatalf("legacy claim parsed incorrectly: %#v", claim)
+	}
+}
+
 func TestClaimValidationRejectsTierMismatch(t *testing.T) {
-	contents := []byte("---\nschema: zbrain.claim/v1\nid: clm_0123456789abcdef0123456789abcdef\nstatus: draft\ntitle: Tier mismatch\nbasis: owner\ncreated_at: 2026-07-30T09:00:00Z\ncreated_by: owner\n---\n\nBody\n")
+	contents := []byte("---\ntype: zbrain.claim\ntitle: Tier mismatch\nstatus: draft\ngenerated:\n  at: 2026-07-30T09:00:00Z\n  by: owner\nzbrain:\n  profile: zbrain.trusted-memory/v1\n  id: clm_0123456789abcdef0123456789abcdef\n  tier: decisions\n  basis: owner\n---\n\nBody\n")
 	_, err := ParseClaimMarkdown("projects", "decisions/tier-mismatch.md", contents)
 	if err == nil {
 		t.Fatalf("ParseClaimMarkdown() error = nil, want tier mismatch")
 	}
 	if !strings.Contains(err.Error(), "tier") {
 		t.Fatalf("ParseClaimMarkdown() error = %v, want tier error", err)
+	}
+}
+
+func TestClaimValidationRejectsFilenameIDMismatch(t *testing.T) {
+	contents := []byte("---\ntype: zbrain.claim\ntitle: ID mismatch\nstatus: draft\ngenerated:\n  at: 2026-07-30T09:00:00Z\n  by: owner\nzbrain:\n  profile: zbrain.trusted-memory/v1\n  id: clm_0123456789abcdef0123456789abcdef\n  tier: projects\n  basis: owner\n---\n\nBody\n")
+	_, err := ParseClaimMarkdown("projects", "projects/clm_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.md", contents)
+	if err == nil {
+		t.Fatalf("ParseClaimMarkdown() error = nil, want path id mismatch")
+	}
+	if !strings.Contains(err.Error(), "path id") {
+		t.Fatalf("ParseClaimMarkdown() error = %v, want path id mismatch", err)
 	}
 }
 
@@ -134,7 +165,7 @@ func TestClaimValidationRejectsBadCreatedAt(t *testing.T) {
 
 func validOwnerClaim() Claim {
 	return Claim{
-		Schema:    ClaimSchemaVersion,
+		Type:      OKFClaimType,
 		ID:        "clm_0123456789abcdef0123456789abcdef",
 		Tier:      "projects",
 		Status:    ClaimStatusDraft,

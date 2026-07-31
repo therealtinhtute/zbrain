@@ -51,7 +51,7 @@ func TestTrustedQueryReturnsApprovedClaimsAndPromotionCandidatesSeparately(t *te
 	if response.Status != QueryStatusReady {
 		t.Fatalf("Status = %q", response.Status)
 	}
-	if len(response.Claims) != 1 || response.Claims[0].ID != approved.ID {
+	if len(response.Claims) != 1 || response.Claims[0].ID != approved.ID || response.Claims[0].Type != OKFClaimType {
 		t.Fatalf("Claims = %#v", response.Claims)
 	}
 	if len(response.PromotionCandidates) != 1 || response.PromotionCandidates[0].ID != draft.ID {
@@ -171,7 +171,7 @@ func queryTestPaths(t *testing.T) Paths {
 
 func queryClaim(id string, title string, basis ClaimBasis) Claim {
 	return Claim{
-		Schema:    ClaimSchemaVersion,
+		Type:      OKFClaimType,
 		ID:        id,
 		Tier:      "projects",
 		Status:    ClaimStatusDraft,

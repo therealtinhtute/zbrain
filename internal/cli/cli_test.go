@@ -97,10 +97,19 @@ func TestRunEvidenceAddAndClaimLifecycleJSON(t *testing.T) {
 		SchemaVersion int    `json:"schema_version"`
 		ID            string `json:"id"`
 		Status        string `json:"status"`
+		Path          string `json:"path"`
 	}
 	decodeJSON(t, stdout(app), &draft)
-	if draft.SchemaVersion != 1 || draft.Status != "draft" || !strings.HasPrefix(draft.ID, "clm_") {
+	if draft.SchemaVersion != 1 || draft.Status != "draft" || !strings.HasPrefix(draft.ID, "clm_") || draft.Path == "" {
 		t.Fatalf("draft output = %#v", draft)
+	}
+	claimPath := filepath.Join(app.Paths.WorkspacesDir, "research", "wiki", "projects", draft.ID+".md")
+	claimFile, err := os.ReadFile(claimPath)
+	if err != nil {
+		t.Fatalf("ReadFile(claim) error = %v", err)
+	}
+	if !strings.Contains(string(claimFile), "type: zbrain.claim") || !strings.Contains(string(claimFile), "profile: zbrain.trusted-memory/v1") || strings.Contains(string(claimFile), "schema: zbrain.claim/v1") {
+		t.Fatalf("claim draft did not write OKF profile file:\n%s", claimFile)
 	}
 
 	app.Stdout = &bytes.Buffer{}
@@ -136,6 +145,42 @@ func TestRunClaimApproveRejectsMissingEvidence(t *testing.T) {
 	decodeJSON(t, stdout(app), &draft)
 	if err := app.Run([]string{"claim", "approve", draft.ID}); err == nil {
 		t.Fatalf("Run(claim approve missing evidence) error = nil")
+	}
+}
+
+func TestRunMigrateOKFConvertsLegacyClaim(t *testing.T) {
+	app, _ := testApp(t)
+	if err := app.Run([]string{"setup"}); err != nil {
+		t.Fatalf("Run(setup) error = %v", err)
+	}
+	if err := app.Run([]string{"workspace", "create", "research"}); err != nil {
+		t.Fatalf("Run(workspace create) error = %v", err)
+	}
+	id := "clm_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	claimPath := filepath.Join(app.Paths.WorkspacesDir, "research", "wiki", "projects", id+".md")
+	legacy := []byte("---\nschema: zbrain.claim/v1\nid: " + id + "\nstatus: draft\ntitle: Legacy Claim\nbasis: owner\ncreated_at: 2026-07-30T09:00:00Z\ncreated_by: owner\n---\n\nLegacy body\n")
+	if err := os.WriteFile(claimPath, legacy, 0o644); err != nil {
+		t.Fatalf("WriteFile(legacy claim) error = %v", err)
+	}
+	app.Stdout = &bytes.Buffer{}
+	if err := app.Run([]string{"migrate", "okf"}); err != nil {
+		t.Fatalf("Run(migrate okf) error = %v", err)
+	}
+	var summary struct {
+		SchemaVersion int  `json:"schema_version"`
+		Migrated      int  `json:"migrated"`
+		IndexFresh    bool `json:"index_fresh"`
+	}
+	decodeJSON(t, stdout(app), &summary)
+	if summary.SchemaVersion != 1 || summary.Migrated != 1 || summary.IndexFresh {
+		t.Fatalf("migrate summary = %#v", summary)
+	}
+	migrated, err := os.ReadFile(claimPath)
+	if err != nil {
+		t.Fatalf("ReadFile(migrated claim) error = %v", err)
+	}
+	if strings.Contains(string(migrated), "schema: zbrain.claim/v1") || !strings.Contains(string(migrated), "type: zbrain.claim") {
+		t.Fatalf("claim was not migrated to OKF:\n%s", migrated)
 	}
 }
 

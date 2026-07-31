@@ -1,5 +1,6 @@
 id: "{{evidence_id}}"
-type: "{{source_type}}"
-workspace_at_ingest: "{{workspace_name}}"
-ingested_at: "{{ingested_at}}"
-state: ingested
+origin: "{{origin}}"
+captured_at: "{{captured_at}}"
+media_type: "{{media_type}}"
+byte_length: "{{byte_length}}"
+sha256: "{{sha256}}"

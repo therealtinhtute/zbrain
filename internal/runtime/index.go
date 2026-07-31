@@ -29,12 +29,15 @@ type SearchOptions struct {
 }
 
 type IndexedClaim struct {
-	ID     string      `json:"id"`
-	Path   string      `json:"path"`
-	Tier   string      `json:"tier"`
-	Status ClaimStatus `json:"status"`
-	Title  string      `json:"title"`
-	Score  float64     `json:"score"`
+	ID          string      `json:"id"`
+	Path        string      `json:"path"`
+	Tier        string      `json:"tier"`
+	Type        string      `json:"type"`
+	Status      ClaimStatus `json:"status"`
+	Title       string      `json:"title"`
+	Description string      `json:"description,omitempty"`
+	StaleAfter  string      `json:"stale_after,omitempty"`
+	Score       float64     `json:"score"`
 }
 
 func (store IndexStore) DatabasePath(workspace string) string {
@@ -188,7 +191,7 @@ func (store IndexStore) Search(workspace string, options SearchOptions) ([]Index
 	}
 	args = append(args, options.Limit)
 	rows, err := db.Query(`
-select c.id, c.path, c.tier, c.status, c.title, rank
+select c.id, c.path, c.tier, c.type, c.status, c.title, c.description, c.stale_after, rank
 from claims_fts
 join claims c on c.rowid = claims_fts.rowid
 where claims_fts match ? and c.status in (`+placeholders+`)
@@ -201,7 +204,7 @@ limit ?`, args...)
 	results := []IndexedClaim{}
 	for rows.Next() {
 		var result IndexedClaim
-		if err := rows.Scan(&result.ID, &result.Path, &result.Tier, &result.Status, &result.Title, &result.Score); err != nil {
+		if err := rows.Scan(&result.ID, &result.Path, &result.Tier, &result.Type, &result.Status, &result.Title, &result.Description, &result.StaleAfter, &result.Score); err != nil {
 			return nil, err
 		}
 		results = append(results, result)
@@ -227,13 +230,17 @@ create table claims (
   id text not null unique,
   path text not null unique,
   tier text not null,
+  type text not null,
   status text not null,
   title text not null,
+  description text not null,
+  stale_after text not null,
   tags text not null,
   body text not null
 );
 create virtual table claims_fts using fts5(
   title,
+  description,
   tags,
   body,
   content='claims',
@@ -241,25 +248,28 @@ create virtual table claims_fts using fts5(
   prefix='2 3'
 );
 create trigger claims_ai after insert on claims begin
-  insert into claims_fts(rowid, title, tags, body) values (new.rowid, new.title, new.tags, new.body);
+  insert into claims_fts(rowid, title, description, tags, body) values (new.rowid, new.title, new.description, new.tags, new.body);
 end;
 create trigger claims_ad after delete on claims begin
-  insert into claims_fts(claims_fts, rowid, title, tags, body) values ('delete', old.rowid, old.title, old.tags, old.body);
+  insert into claims_fts(claims_fts, rowid, title, description, tags, body) values ('delete', old.rowid, old.title, old.description, old.tags, old.body);
 end;
 create trigger claims_au after update on claims begin
-  insert into claims_fts(claims_fts, rowid, title, tags, body) values ('delete', old.rowid, old.title, old.tags, old.body);
-  insert into claims_fts(rowid, title, tags, body) values (new.rowid, new.title, new.tags, new.body);
+  insert into claims_fts(claims_fts, rowid, title, description, tags, body) values ('delete', old.rowid, old.title, old.description, old.tags, old.body);
+  insert into claims_fts(rowid, title, description, tags, body) values (new.rowid, new.title, new.description, new.tags, new.body);
 end;`)
 	return err
 }
 
 func insertIndexedClaim(tx *sql.Tx, claim Claim) error {
-	_, err := tx.Exec(`insert into claims(id, path, tier, status, title, tags, body) values (?, ?, ?, ?, ?, ?, ?)`,
+	_, err := tx.Exec(`insert into claims(id, path, tier, type, status, title, description, stale_after, tags, body) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		claim.ID,
 		claim.Path,
 		claim.Tier,
+		OKFClaimType,
 		string(claim.Status),
 		claim.Title,
+		claim.Description,
+		claim.StaleAfter,
 		strings.Join(claim.Tags, " "),
 		claim.Body,
 	)

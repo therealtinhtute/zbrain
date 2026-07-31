@@ -1,6 +1,6 @@
 ---
 name: zbrain:ingest
-description: Deprecated placeholder. The Go runtime approves claims directly with `zbrain claim approve`.
+description: Deprecated placeholder. The Go runtime approves OKF claim concepts directly with `zbrain claim approve`.
 version: "2.0.0"
 ---
 
@@ -16,4 +16,4 @@ zbrain reindex
 zbrain ask <query>
 ```
 
-Do not describe analysis, QA, or apply subcommands as available.
+Approved claims are OKF concepts with `type: zbrain.claim` and zbrain verification metadata. Do not describe analysis, QA, or apply subcommands as available.

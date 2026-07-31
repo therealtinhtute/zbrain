@@ -1,11 +1,20 @@
 ---
+type: zbrain.claim
 title: "{{title}}"
-type: "{{type}}"
-priority: P2
-source: "{{source}}"
+description: "{{description}}"
 resource: "{{resource}}"
 tags: []
-created_at: "{{created_at}}"
+generated:
+  at: "{{created_at}}"
+  by: owner
+status: draft
+zbrain:
+  profile: zbrain.trusted-memory/v1
+  id: "{{claim_id}}"
+  tier: projects
+  basis: evidence
+  evidence_ids:
+    - "{{evidence_id}}"
 ---
 
 # Project

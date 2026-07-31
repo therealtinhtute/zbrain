@@ -19,6 +19,7 @@ func TestReindexIndexesApprovedAndDraftButNotLegacyOrEvidence(t *testing.T) {
 	paths := indexTestPaths(t)
 	store := ClaimStore{Paths: paths, Now: fixedIndexNow}
 	approved := indexClaim("clm_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "Approved Local Memory", ClaimBasisOwner)
+	approved.Description = "description recall token"
 	if _, err := store.WriteDraft("research", approved); err != nil {
 		t.Fatalf("WriteDraft(approved) error = %v", err)
 	}
@@ -34,6 +35,10 @@ func TestReindexIndexesApprovedAndDraftButNotLegacyOrEvidence(t *testing.T) {
 	if err := os.WriteFile(legacyPath, []byte("legacy local memory should not index"), 0o644); err != nil {
 		t.Fatalf("WriteFile(legacy) error = %v", err)
 	}
+	nonZbrainOKF := filepath.Join(paths.WorkspacesDir, "research", "wiki", "projects", "okf-note.md")
+	if err := os.WriteFile(nonZbrainOKF, []byte("---\ntype: note\ntitle: Poison Note\n---\n\npoison local memory\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile(non-zbrain OKF) error = %v", err)
+	}
 	evidencePath := filepath.Join(paths.WorkspacesDir, "research", "evidence", "sources", "raw.md")
 	if err := os.WriteFile(evidencePath, []byte("poison local memory evidence"), 0o644); err != nil {
 		t.Fatalf("WriteFile(evidence) error = %v", err)
@@ -44,18 +49,18 @@ func TestReindexIndexesApprovedAndDraftButNotLegacyOrEvidence(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Rebuild() error = %v", err)
 	}
-	if summary.Approved != 1 || summary.Draft != 1 || summary.Legacy != 1 || summary.Invalid != 0 {
+	if summary.Approved != 1 || summary.Draft != 1 || summary.Legacy != 2 || summary.Invalid != 0 {
 		t.Fatalf("summary = %#v", summary)
 	}
 	if err := idx.CheckFresh("research"); err != nil {
 		t.Fatalf("CheckFresh() error = %v", err)
 	}
 
-	approvedResults, err := idx.Search("research", SearchOptions{Query: "local memory", Statuses: []ClaimStatus{ClaimStatusApproved}, Limit: 10})
+	approvedResults, err := idx.Search("research", SearchOptions{Query: "description recall", Statuses: []ClaimStatus{ClaimStatusApproved}, Limit: 10})
 	if err != nil {
 		t.Fatalf("Search(approved) error = %v", err)
 	}
-	if len(approvedResults) != 1 || approvedResults[0].ID != approved.ID {
+	if len(approvedResults) != 1 || approvedResults[0].ID != approved.ID || approvedResults[0].Type != OKFClaimType || approvedResults[0].Description != approved.Description {
 		t.Fatalf("approved results = %#v", approvedResults)
 	}
 	draftResults, err := idx.Search("research", SearchOptions{Query: "draft-only", Statuses: []ClaimStatus{ClaimStatusDraft}, Limit: 10})
@@ -137,7 +142,7 @@ func indexTestPaths(t *testing.T) Paths {
 
 func indexClaim(id string, title string, basis ClaimBasis) Claim {
 	return Claim{
-		Schema:    ClaimSchemaVersion,
+		Type:      OKFClaimType,
 		ID:        id,
 		Tier:      "projects",
 		Status:    ClaimStatusDraft,
