@@ -1,19 +1,19 @@
 # zbrain — Memory Engine Spec (Proposed)
 
 > Forward-looking design for zbrain's retrieval layer. **Not in force.**
-> The authoritative spec for what is built today is [`wiki-spec.md`](wiki-spec.md).
-> Evidence base: [`references/uteke-analysis.md`](references/uteke-analysis.md).
+> The authoritative spec for what is built today is [`trusted-memory-spec.md`](../trusted-memory-spec.md).
+> Evidence base: [`uteke-analysis.md`](uteke-analysis.md).
 
 **Status:** proposed · **Created:** 2026-08-03 · **Supersedes:** nothing
 
 ## 0. Read This First
 
-`wiki-spec.md` §2 lists as **out of scope for the current slice**: vector
+`trusted-memory-spec.md` §2 lists as **out of scope for the current slice**: vector
 databases, MCP integration, LLM/model-provider calls, hosted sync, and
 background services. This document specifies several of those.
 
 That is intentional and it is not a contradiction — this is a **later slice**.
-Nothing here should be implemented until `wiki-spec.md` §2 is amended to pull an
+Nothing here should be implemented until `trusted-memory-spec.md` §2 is amended to pull an
 item into scope. Treat every section below as a decision already reasoned
 through, waiting for a green light, not as work queued up.
 
@@ -55,7 +55,7 @@ see §10.
 - Rooms / multi-agent sharing — deferred, see §9
 - Entity knowledge graph — deferred, see §9
 - GPU inference
-- Anything in `wiki-spec.md` §2 that stays out of scope
+- Anything in `trusted-memory-spec.md` §2 that stays out of scope
 
 ## 3. Decision: One Store, One File
 
@@ -167,7 +167,7 @@ compat" at schema v5 and still dual-writing at v15 (analysis §2).
 
 ### `wiki/` vs `evidence/`
 
-`wiki-spec.md` already declares two content spaces. **One `items` table with a
+`trusted-memory-spec.md` already declares two content spaces. **One `items` table with a
 `kind` discriminator, one FTS index, one search path.** Uteke chose separate
 tables for memories vs documents and pays with duplicated FTS setup, duplicated
 search code, and seven extra MCP tools (analysis §2).
@@ -493,7 +493,7 @@ Add what they lack: `goreleaser` plus a non-blocking, cached version check.
 | **Rooms / multi-agent sharing** | 1917 lines and 8 MCP tools in Uteke for a feature with no notification mechanism and no visible usage signal. `workspace` already covers isolation. Build when two agents actually need to share, and let that case shape it. If built: junction table (memories stay in their author's namespace, rooms are a view), and push the filter into SQL per §5. |
 | **Entity knowledge graph** | Uteke's own default has graph reranking opt-in — their honest assessment of its value. Ship memory↔memory edges only. |
 | **Auto-linking on insert** | Uteke runs a vector search and writes edges at cos ≥0.80 on *every* insert — write amplification for a signal only consumed in opt-in mode. Requires an ablation before it earns its cost. |
-| **MCP surface** | Out of scope per `wiki-spec.md` §2. When in scope: 5-7 noun-grouped tools, not 32 flat ones (~4k tokens of context reclaimed); `resources/*` for addressable content, `tools/*` for mutations; error codes mapped properly (`-32602` for bad args, `isError` for domain failures, `-32603` only for genuine faults) so agents can self-correct. Use `github.com/modelcontextprotocol/go-sdk` — Uteke hand-rolled JSON-RPC and their content-union encoding shows the cost. |
+| **MCP surface** | Out of scope per `trusted-memory-spec.md` §2. When in scope: 5-7 noun-grouped tools, not 32 flat ones (~4k tokens of context reclaimed); `resources/*` for addressable content, `tools/*` for mutations; error codes mapped properly (`-32602` for bad args, `isError` for domain failures, `-32603` only for genuine faults) so agents can self-correct. Use `github.com/modelcontextprotocol/go-sdk` — Uteke hand-rolled JSON-RPC and their content-union encoding shows the cost. |
 | **Sync / replication** | Uteke has zero prior art (grep for `sync\|replicat\|litestream\|crdt` across their docs returns nothing). Needs its own research pass. §7's soft-update + `version` column is the substrate it would need — which is another reason to add both now. |
 
 ## 10. Verify Before Building
