@@ -258,6 +258,73 @@ func TestRunReindexAndAskTrustedContext(t *testing.T) {
 	}
 }
 
+func TestRunReindexReportsTamperedApprovedClaim(t *testing.T) {
+	app, _ := testApp(t)
+	if err := app.Run([]string{"setup"}); err != nil {
+		t.Fatalf("Run(setup) error = %v", err)
+	}
+	if err := app.Run([]string{"workspace", "create", "research"}); err != nil {
+		t.Fatalf("Run(workspace create) error = %v", err)
+	}
+	app.Stdout = &bytes.Buffer{}
+	app.Stdin = strings.NewReader("trusted canonical answer\n")
+	if err := app.Run([]string{"claim", "draft", "--tier", "projects", "--title", "Trusted Claim", "--basis", "owner"}); err != nil {
+		t.Fatalf("Run(claim draft) error = %v", err)
+	}
+	var draft struct {
+		ID string `json:"id"`
+	}
+	decodeJSON(t, stdout(app), &draft)
+	if err := app.Run([]string{"claim", "approve", draft.ID}); err != nil {
+		t.Fatalf("Run(claim approve) error = %v", err)
+	}
+
+	claimPath := filepath.Join(app.Paths.WorkspacesDir, "research", "wiki", "projects", draft.ID+".md")
+	contents, err := os.ReadFile(claimPath)
+	if err != nil {
+		t.Fatalf("ReadFile(claim) error = %v", err)
+	}
+	contents = []byte(strings.Replace(string(contents), "trusted canonical answer", "tampered canonical answer", 1))
+	if err := os.WriteFile(claimPath, contents, 0o644); err != nil {
+		t.Fatalf("WriteFile(tampered claim) error = %v", err)
+	}
+
+	app.Stdout = &bytes.Buffer{}
+	if err := app.Run([]string{"reindex"}); err != nil {
+		t.Fatalf("Run(reindex) error = %v", err)
+	}
+	var summary struct {
+		Approved      int `json:"approved"`
+		Invalid       int `json:"invalid"`
+		InvalidClaims []struct {
+			Path  string `json:"path"`
+			Error string `json:"error"`
+		} `json:"invalid_claims"`
+	}
+	decodeJSON(t, stdout(app), &summary)
+	if summary.Approved != 0 || summary.Invalid != 1 || len(summary.InvalidClaims) != 1 {
+		t.Fatalf("reindex summary = %#v", summary)
+	}
+	if summary.InvalidClaims[0].Path != "projects/"+draft.ID+".md" || !strings.Contains(summary.InvalidClaims[0].Error, "verification digest mismatch") {
+		t.Fatalf("invalid claim = %#v", summary.InvalidClaims[0])
+	}
+
+	app.Stdout = &bytes.Buffer{}
+	if err := app.Run([]string{"ask", "trusted", "canonical"}); err != nil {
+		t.Fatalf("Run(ask) error = %v", err)
+	}
+	var response struct {
+		Status string `json:"status"`
+		Claims []struct {
+			ID string `json:"id"`
+		} `json:"claims"`
+	}
+	decodeJSON(t, stdout(app), &response)
+	if response.Status != "gap" || len(response.Claims) != 0 {
+		t.Fatalf("ask response = %#v", response)
+	}
+}
+
 func TestRunAskReportsGap(t *testing.T) {
 	app, _ := testApp(t)
 	if err := app.Run([]string{"setup"}); err != nil {

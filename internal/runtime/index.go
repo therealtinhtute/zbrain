@@ -15,11 +15,12 @@ type IndexStore struct {
 }
 
 type IndexSummary struct {
-	Workspace string `json:"workspace"`
-	Approved  int    `json:"approved"`
-	Draft     int    `json:"draft"`
-	Invalid   int    `json:"invalid"`
-	Legacy    int    `json:"legacy"`
+	Workspace     string         `json:"workspace"`
+	Approved      int            `json:"approved"`
+	Draft         int            `json:"draft"`
+	Invalid       int            `json:"invalid"`
+	InvalidClaims []InvalidClaim `json:"invalid_claims,omitempty"`
+	Legacy        int            `json:"legacy"`
 }
 
 type SearchOptions struct {
@@ -117,7 +118,12 @@ func (store IndexStore) Rebuild(workspace string) (IndexSummary, error) {
 	if err != nil {
 		return IndexSummary{}, err
 	}
-	summary := IndexSummary{Workspace: workspace, Invalid: len(scan.Invalid), Legacy: len(scan.LegacyUnindexed)}
+	summary := IndexSummary{
+		Workspace:     workspace,
+		Invalid:       len(scan.Invalid),
+		InvalidClaims: scan.Invalid,
+		Legacy:        len(scan.LegacyUnindexed),
+	}
 	tx, err := db.Begin()
 	if err != nil {
 		return IndexSummary{}, err

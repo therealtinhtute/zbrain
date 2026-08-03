@@ -197,6 +197,42 @@ func TestClaimStoreScanReportsInvalidClaimWithoutMutation(t *testing.T) {
 	}
 }
 
+func TestClaimStoreScanRejectsTamperedApprovedClaim(t *testing.T) {
+	paths, _ := claimStoreTestPaths(t)
+	store := ClaimStore{Paths: paths, Now: fixedClaimStoreNow}
+	claim := validStoreClaim("clm_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", ClaimBasisOwner)
+	if _, err := store.WriteDraft("research", claim); err != nil {
+		t.Fatalf("WriteDraft() error = %v", err)
+	}
+	if _, err := store.Approve("research", claim.ID); err != nil {
+		t.Fatalf("Approve() error = %v", err)
+	}
+
+	claimPath := filepath.Join(paths.WorkspacesDir, "research", "wiki", "projects", claim.ID+".md")
+	contents, err := os.ReadFile(claimPath)
+	if err != nil {
+		t.Fatalf("ReadFile(claim) error = %v", err)
+	}
+	contents = []byte(strings.Replace(string(contents), "Store body", "Tampered body", 1))
+	if err := os.WriteFile(claimPath, contents, 0o644); err != nil {
+		t.Fatalf("WriteFile(tampered claim) error = %v", err)
+	}
+
+	scan, err := store.ScanWorkspace("research")
+	if err != nil {
+		t.Fatalf("ScanWorkspace() error = %v", err)
+	}
+	if len(scan.Claims) != 0 {
+		t.Fatalf("len(Claims) = %d, want 0", len(scan.Claims))
+	}
+	if len(scan.Invalid) != 1 {
+		t.Fatalf("Invalid = %#v, want one digest mismatch", scan.Invalid)
+	}
+	if scan.Invalid[0].Path != "projects/"+claim.ID+".md" || !strings.Contains(scan.Invalid[0].Error, "verification digest mismatch") {
+		t.Fatalf("Invalid = %#v, want tampered path and digest mismatch", scan.Invalid)
+	}
+}
+
 func TestClaimStoreMigrateOKFConvertsLegacyClaim(t *testing.T) {
 	paths, _ := claimStoreTestPaths(t)
 	id := "clm_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"

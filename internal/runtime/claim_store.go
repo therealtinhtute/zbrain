@@ -23,8 +23,8 @@ type ClaimScan struct {
 }
 
 type InvalidClaim struct {
-	Path  string
-	Error string
+	Path  string `json:"path"`
+	Error string `json:"error"`
 }
 
 type ClaimMigrationSummary struct {
@@ -199,6 +199,10 @@ func (store ClaimStore) ScanWorkspace(workspace string) (ClaimScan, error) {
 		}
 		claim, err := ParseClaimMarkdown(strings.Split(rel, "/")[0], rel, contents)
 		if err != nil {
+			scan.Invalid = append(scan.Invalid, InvalidClaim{Path: rel, Error: err.Error()})
+			return nil
+		}
+		if err := VerifyClaimDigest(claim); err != nil {
 			scan.Invalid = append(scan.Invalid, InvalidClaim{Path: rel, Error: err.Error()})
 			return nil
 		}
