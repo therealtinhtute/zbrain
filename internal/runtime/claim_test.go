@@ -72,6 +72,127 @@ func TestClaimRoundTripPreservesBodyAndMetadata(t *testing.T) {
 	}
 }
 
+func TestClaimVerificationDigestRoundTrip(t *testing.T) {
+	tests := []struct {
+		name string
+		body string
+	}{
+		{name: "approved owner claim", body: "Approved owner body\n"},
+		{name: "approved claim with markdown", body: "# Approved\n\nBody\n"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			claim := validOwnerClaim()
+			claim.Status = ClaimStatusApproved
+			claim.Body = tt.body
+			claim.VerifiedAt = "2026-07-30T10:00:00Z"
+			claim.VerifiedBy = "owner"
+
+			digest, err := ClaimVerificationDigest(claim)
+			if err != nil {
+				t.Fatalf("ClaimVerificationDigest() error = %v", err)
+			}
+			claim.VerifiedDigest = digest
+
+			rendered, err := RenderClaimMarkdown(claim)
+			if err != nil {
+				t.Fatalf("RenderClaimMarkdown() error = %v", err)
+			}
+			parsed, err := ParseClaimMarkdown("projects", "projects/"+claim.ID+".md", rendered)
+			if err != nil {
+				t.Fatalf("ParseClaimMarkdown() error = %v", err)
+			}
+
+			got, err := ClaimVerificationDigest(parsed)
+			if err != nil {
+				t.Fatalf("ClaimVerificationDigest(parsed) error = %v", err)
+			}
+			if got != parsed.VerifiedDigest {
+				t.Fatalf("round-trip digest = %q, want %q", got, parsed.VerifiedDigest)
+			}
+		})
+	}
+}
+
+func TestVerifyClaimDigest(t *testing.T) {
+	claim := validOwnerClaim()
+	claim.Status = ClaimStatusApproved
+	claim.VerifiedAt = "2026-07-30T10:00:00Z"
+	claim.VerifiedBy = "owner"
+	digest, err := ClaimVerificationDigest(claim)
+	if err != nil {
+		t.Fatalf("ClaimVerificationDigest() error = %v", err)
+	}
+	claim.VerifiedDigest = digest
+
+	tests := []struct {
+		name      string
+		mutate    func(*Claim)
+		wantError string
+	}{
+		{
+			name: "tampered body",
+			mutate: func(claim *Claim) {
+				claim.Body = "Tampered body\n"
+			},
+			wantError: "verification digest mismatch",
+		},
+		{
+			name: "tampered title",
+			mutate: func(claim *Claim) {
+				claim.Title = "Tampered title"
+			},
+			wantError: "verification digest mismatch",
+		},
+		{
+			name: "missing digest",
+			mutate: func(claim *Claim) {
+				claim.VerifiedDigest = ""
+			},
+			wantError: "missing verification digest",
+		},
+		{
+			name: "draft is skipped",
+			mutate: func(claim *Claim) {
+				claim.Status = ClaimStatusDraft
+				claim.VerifiedDigest = ""
+			},
+		},
+		{
+			name: "superseded is skipped",
+			mutate: func(claim *Claim) {
+				claim.Status = ClaimStatusSuperseded
+				claim.VerifiedDigest = ""
+			},
+		},
+		{
+			name: "revoked is skipped",
+			mutate: func(claim *Claim) {
+				claim.Status = ClaimStatusRevoked
+				claim.VerifiedDigest = ""
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			candidate := claim
+			tt.mutate(&candidate)
+			err := VerifyClaimDigest(candidate)
+			if tt.wantError == "" {
+				if err != nil {
+					t.Fatalf("VerifyClaimDigest() error = %v, want nil", err)
+				}
+				return
+			}
+			if err == nil || !strings.Contains(err.Error(), tt.wantError) {
+				t.Fatalf("VerifyClaimDigest() error = %v, want %q", err, tt.wantError)
+			}
+		})
+	}
+}
+
 func TestClaimParsesLegacySchema(t *testing.T) {
 	contents := []byte("---\nschema: zbrain.claim/v1\nid: clm_0123456789abcdef0123456789abcdef\nstatus: draft\ntitle: Legacy\nbasis: owner\ncreated_at: 2026-07-30T09:00:00Z\ncreated_by: owner\ntags: [legacy]\n---\n\nBody\n")
 	claim, err := ParseClaimMarkdown("projects", "projects/clm_0123456789abcdef0123456789abcdef.md", contents)

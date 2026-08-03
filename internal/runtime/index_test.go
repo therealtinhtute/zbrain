@@ -3,6 +3,7 @@ package runtime
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -76,6 +77,45 @@ func TestReindexIndexesApprovedAndDraftButNotLegacyOrEvidence(t *testing.T) {
 	}
 	if len(poisonResults) != 0 {
 		t.Fatalf("poison results = %#v", poisonResults)
+	}
+}
+
+func TestReindexExcludesTamperedApprovedClaim(t *testing.T) {
+	paths := indexTestPaths(t)
+	store := ClaimStore{Paths: paths, Now: fixedIndexNow}
+	claim := indexClaim("clm_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "Tampered Search", ClaimBasisOwner)
+	claim.Body = "original indexed body\n"
+	if _, err := store.WriteDraft("research", claim); err != nil {
+		t.Fatalf("WriteDraft() error = %v", err)
+	}
+	if _, err := store.Approve("research", claim.ID); err != nil {
+		t.Fatalf("Approve() error = %v", err)
+	}
+
+	claimPath := filepath.Join(paths.WorkspacesDir, "research", "wiki", "projects", claim.ID+".md")
+	contents, err := os.ReadFile(claimPath)
+	if err != nil {
+		t.Fatalf("ReadFile(claim) error = %v", err)
+	}
+	contents = []byte(strings.Replace(string(contents), "original indexed body", "tampered indexed body", 1))
+	if err := os.WriteFile(claimPath, contents, 0o644); err != nil {
+		t.Fatalf("WriteFile(tampered claim) error = %v", err)
+	}
+
+	idx := IndexStore{Paths: paths}
+	summary, err := idx.Rebuild("research")
+	if err != nil {
+		t.Fatalf("Rebuild() error = %v", err)
+	}
+	if summary.Approved != 0 || summary.Invalid != 1 {
+		t.Fatalf("summary = %#v, want approved=0 invalid=1", summary)
+	}
+	results, err := idx.Search("research", SearchOptions{Query: "tampered indexed", Statuses: []ClaimStatus{ClaimStatusApproved}, Limit: 10})
+	if err != nil {
+		t.Fatalf("Search() error = %v", err)
+	}
+	if len(results) != 0 {
+		t.Fatalf("tampered results = %#v, want none", results)
 	}
 }
 

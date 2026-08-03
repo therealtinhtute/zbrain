@@ -314,6 +314,23 @@ func ClaimVerificationDigest(claim Claim) (string, error) {
 	return "sha256:" + hex.EncodeToString(sum[:]), nil
 }
 
+func VerifyClaimDigest(claim Claim) error {
+	if claim.Status != ClaimStatusApproved {
+		return nil
+	}
+	if strings.TrimSpace(claim.VerifiedDigest) == "" {
+		return fmt.Errorf("approved claim is missing verification digest")
+	}
+	digest, err := ClaimVerificationDigest(claim)
+	if err != nil {
+		return fmt.Errorf("compute verification digest: %w", err)
+	}
+	if digest != claim.VerifiedDigest {
+		return fmt.Errorf("verification digest mismatch")
+	}
+	return nil
+}
+
 func splitMarkdownFrontmatter(contents []byte) ([]byte, []byte, error) {
 	if !bytes.HasPrefix(contents, []byte("---\n")) {
 		return nil, nil, fmt.Errorf("claim frontmatter is required")
