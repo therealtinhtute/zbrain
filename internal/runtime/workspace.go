@@ -77,10 +77,7 @@ func ResolveCurrentWorkspace(paths Paths) (WorkspaceCurrent, error) {
 	if workspace == "" {
 		return WorkspaceCurrent{}, errors.New("no default workspace configured; run `zbrain workspace create <name>` first")
 	}
-	if _, err := os.Stat(filepath.Join(paths.WorkspacesDir, workspace)); err != nil {
-		if os.IsNotExist(err) {
-			return WorkspaceCurrent{}, fmt.Errorf("workspace %q does not exist", workspace)
-		}
+	if _, err := ValidateWorkspace(paths, workspace); err != nil {
 		return WorkspaceCurrent{}, err
 	}
 	return WorkspaceCurrent{

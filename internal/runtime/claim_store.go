@@ -58,6 +58,9 @@ func (store ClaimStore) WriteDraft(workspace string, claim Claim) (Claim, error)
 	} else if !os.IsNotExist(err) {
 		return Claim{}, err
 	}
+	if err := store.markDirty(workspace); err != nil {
+		return Claim{}, err
+	}
 	if err := writeClaimAtomic(path, claim); err != nil {
 		return Claim{}, err
 	}
@@ -83,6 +86,20 @@ func (store ClaimStore) Approve(workspace string, id string) (Claim, error) {
 	if err != nil {
 		return Claim{}, err
 	}
+	oldClaims := make([]Claim, 0, len(claim.Supersedes))
+	for _, oldID := range claim.Supersedes {
+		old, err := store.Read(workspace, oldID)
+		if err != nil {
+			return Claim{}, err
+		}
+		if old.Status == ClaimStatusApproved {
+			old.Status = ClaimStatusSuperseded
+			old.VerifiedAt = ""
+			old.VerifiedBy = ""
+			old.VerifiedDigest = ""
+			oldClaims = append(oldClaims, old)
+		}
+	}
 	claim.Schema = ""
 	claim.Type = OKFClaimType
 	claim.Status = ClaimStatusApproved
@@ -95,22 +112,15 @@ func (store ClaimStore) Approve(workspace string, id string) (Claim, error) {
 		return Claim{}, err
 	}
 	claim.VerifiedDigest = digest
+	if err := store.markDirty(workspace); err != nil {
+		return Claim{}, err
+	}
 	if err := store.writeExisting(workspace, claim); err != nil {
 		return Claim{}, err
 	}
-	for _, oldID := range claim.Supersedes {
-		old, err := store.Read(workspace, oldID)
-		if err != nil {
+	for _, old := range oldClaims {
+		if err := store.writeExisting(workspace, old); err != nil {
 			return Claim{}, err
-		}
-		if old.Status == ClaimStatusApproved {
-			old.Status = ClaimStatusSuperseded
-			old.VerifiedAt = ""
-			old.VerifiedBy = ""
-			old.VerifiedDigest = ""
-			if err := store.writeExisting(workspace, old); err != nil {
-				return Claim{}, err
-			}
 		}
 	}
 	return claim, nil
@@ -144,6 +154,9 @@ func (store ClaimStore) Revoke(workspace string, id string, reason string) (Clai
 	claim.VerifiedBy = ""
 	claim.VerifiedDigest = ""
 	claim.Body = strings.TrimRight(claim.Body, "\n") + "\n\nRevoked: " + strings.TrimSpace(reason) + "\n"
+	if err := store.markDirty(workspace); err != nil {
+		return Claim{}, err
+	}
 	if err := store.writeExisting(workspace, claim); err != nil {
 		return Claim{}, err
 	}
@@ -154,9 +167,12 @@ func (store ClaimStore) Read(workspace string, id string) (Claim, error) {
 	if !claimIDPattern.MatchString(id) {
 		return Claim{}, fmt.Errorf("claim id must match clm_<32 lowercase hex chars>")
 	}
-	root := filepath.Join(store.Paths.WorkspacesDir, workspace, "wiki")
 	for _, tier := range WikiTiers {
-		path := filepath.Join(root, tier, id+".md")
+		relative := filepath.ToSlash(filepath.Join("wiki", tier, id+".md"))
+		path, err := ResolveWorkspacePath(store.Paths, workspace, relative)
+		if err != nil {
+			return Claim{}, err
+		}
 		contents, err := os.ReadFile(path)
 		if err == nil {
 			return ParseClaimMarkdown(tier, filepath.ToSlash(filepath.Join(tier, id+".md")), contents)
@@ -169,7 +185,14 @@ func (store ClaimStore) Read(workspace string, id string) (Claim, error) {
 }
 
 func (store ClaimStore) ScanWorkspace(workspace string) (ClaimScan, error) {
-	wikiRoot := filepath.Join(store.Paths.WorkspacesDir, workspace, "wiki")
+	workspaceRoot, err := ValidateWorkspace(store.Paths, workspace)
+	if err != nil {
+		return ClaimScan{}, err
+	}
+	wikiRoot, err := ResolveWorkspacePath(store.Paths, workspace, "wiki")
+	if err != nil {
+		return ClaimScan{}, err
+	}
 	if _, err := os.Stat(wikiRoot); err != nil {
 		if os.IsNotExist(err) {
 			return ClaimScan{}, fmt.Errorf("workspace %q does not exist", workspace)
@@ -177,22 +200,30 @@ func (store ClaimStore) ScanWorkspace(workspace string) (ClaimScan, error) {
 		return ClaimScan{}, err
 	}
 	scan := ClaimScan{}
-	err := filepath.WalkDir(wikiRoot, func(path string, entry os.DirEntry, walkErr error) error {
+	err = filepath.WalkDir(wikiRoot, func(path string, entry os.DirEntry, walkErr error) error {
 		if walkErr != nil {
 			return walkErr
 		}
 		if entry.IsDir() || filepath.Ext(path) != ".md" {
 			return nil
 		}
-		contents, err := os.ReadFile(path)
-		if err != nil {
-			return err
-		}
 		rel, err := filepath.Rel(wikiRoot, path)
 		if err != nil {
 			return err
 		}
 		rel = filepath.ToSlash(rel)
+		workspaceRel, err := filepath.Rel(workspaceRoot, path)
+		if err != nil {
+			return err
+		}
+		safePath, err := ResolveWorkspacePath(store.Paths, workspace, filepath.ToSlash(workspaceRel))
+		if err != nil {
+			return err
+		}
+		contents, err := os.ReadFile(safePath)
+		if err != nil {
+			return err
+		}
 		if !isZbrainClaimDocument(contents) {
 			scan.LegacyUnindexed = append(scan.LegacyUnindexed, rel)
 			return nil
@@ -224,6 +255,7 @@ func (store ClaimStore) MigrateOKF(workspace string) (ClaimMigrationSummary, err
 		return ClaimMigrationSummary{}, err
 	}
 	summary := ClaimMigrationSummary{Workspace: workspace, Invalid: len(scan.Invalid), Skipped: len(scan.LegacyUnindexed)}
+	migrated := make([]Claim, 0)
 	for _, claim := range scan.Claims {
 		if claim.Schema != ClaimSchemaVersion {
 			summary.Skipped++
@@ -231,6 +263,15 @@ func (store ClaimStore) MigrateOKF(workspace string) (ClaimMigrationSummary, err
 		}
 		claim.Schema = ""
 		claim.Type = OKFClaimType
+		migrated = append(migrated, claim)
+	}
+	if len(migrated) == 0 {
+		return summary, nil
+	}
+	if err := store.markDirty(workspace); err != nil {
+		return ClaimMigrationSummary{}, err
+	}
+	for _, claim := range migrated {
 		if err := store.writeExisting(workspace, claim); err != nil {
 			return ClaimMigrationSummary{}, err
 		}
@@ -240,22 +281,16 @@ func (store ClaimStore) MigrateOKF(workspace string) (ClaimMigrationSummary, err
 }
 
 func (store ClaimStore) claimPath(workspace string, claim Claim) (string, error) {
-	if !IsSafeWorkspaceName(workspace) {
-		return "", fmt.Errorf("workspace name must use lowercase letters, numbers, or hyphens only")
-	}
-	return filepath.Join(store.Paths.WorkspacesDir, workspace, "wiki", claim.Tier, claim.ID+".md"), nil
+	relative := filepath.ToSlash(filepath.Join("wiki", claim.Tier, claim.ID+".md"))
+	return ResolveWorkspacePath(store.Paths, workspace, relative)
 }
 
 func (store ClaimStore) claimFilePath(workspace string, claim Claim) (string, error) {
-	if !IsSafeWorkspaceName(workspace) {
-		return "", fmt.Errorf("workspace name must use lowercase letters, numbers, or hyphens only")
-	}
 	if claim.Path != "" {
-		clean := filepath.Clean(filepath.FromSlash(claim.Path))
-		if filepath.IsAbs(clean) || strings.HasPrefix(clean, ".."+string(filepath.Separator)) || clean == ".." || filepath.Ext(clean) != ".md" {
+		if filepath.Ext(filepath.FromSlash(claim.Path)) != ".md" {
 			return "", fmt.Errorf("claim path %q is not safe", claim.Path)
 		}
-		return filepath.Join(store.Paths.WorkspacesDir, workspace, "wiki", clean), nil
+		return ResolveWorkspacePath(store.Paths, workspace, filepath.ToSlash("wiki/"+claim.Path))
 	}
 	return store.claimPath(workspace, claim)
 }
@@ -266,6 +301,13 @@ func (store ClaimStore) writeExisting(workspace string, claim Claim) error {
 		return err
 	}
 	return writeClaimAtomic(path, claim)
+}
+
+func (store ClaimStore) markDirty(workspace string) error {
+	if _, err := ValidateWorkspace(store.Paths, workspace); err != nil {
+		return err
+	}
+	return (IndexStore{Paths: store.Paths}).MarkDirty(workspace)
 }
 
 func writeClaimAtomic(path string, claim Claim) error {

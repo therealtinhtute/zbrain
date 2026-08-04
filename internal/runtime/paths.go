@@ -5,7 +5,6 @@ import (
 	"encoding/hex"
 	"os"
 	"path/filepath"
-	"strings"
 )
 
 type Paths struct {
@@ -81,7 +80,6 @@ func CurrentTaskFilePath(paths Paths) string {
 }
 
 func IsSafeWorkspaceName(name string) bool {
-	name = strings.TrimSpace(name)
 	if name == "" || name != filepath.Base(name) {
 		return false
 	}

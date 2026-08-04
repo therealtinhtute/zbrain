@@ -321,6 +321,85 @@ func addStoreEvidence(t *testing.T, paths Paths, body string) Evidence {
 	return evidence
 }
 
+func TestClaimStoreWorkspaceIsolationAndSymlinkBoundary(t *testing.T) {
+	paths, _ := claimStoreTestPaths(t)
+	if err := CreateWorkspace(paths, "personal", fixedClaimStoreNow()); err != nil {
+		t.Fatalf("CreateWorkspace(personal) error = %v", err)
+	}
+	store := ClaimStore{Paths: paths, Now: fixedClaimStoreNow}
+	claim := validStoreClaim("clm_cccccccccccccccccccccccccccccccc", ClaimBasisOwner)
+	if _, err := store.WriteDraft("research", claim); err != nil {
+		t.Fatalf("WriteDraft() error = %v", err)
+	}
+	if _, err := store.Read("personal", claim.ID); err == nil {
+		t.Fatalf("Read(cross workspace) error = nil")
+	}
+
+	outside := t.TempDir()
+	outsidePath := filepath.Join(outside, claim.ID+".md")
+	if err := os.WriteFile(outsidePath, []byte("outside\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile(outside) error = %v", err)
+	}
+	escapePath := filepath.Join(paths.WorkspacesDir, "research", "wiki", "axioms", claim.ID+".md")
+	if err := os.Symlink(outsidePath, escapePath); err != nil {
+		t.Fatalf("Symlink(escape) error = %v", err)
+	}
+	if _, err := store.Read("research", claim.ID); err == nil {
+		t.Fatalf("Read(symlink escape) error = nil")
+	}
+}
+
+func TestClaimStoreDirtyBarrierLeavesCanonicalTreeUnchanged(t *testing.T) {
+	paths, _ := claimStoreTestPaths(t)
+	dirtyPaths := paths
+	dirtyPaths.IndexesDir = filepath.Join(t.TempDir(), "indexes-blocker")
+	if err := os.WriteFile(dirtyPaths.IndexesDir, []byte("not a directory"), 0o644); err != nil {
+		t.Fatalf("WriteFile(indexes blocker) error = %v", err)
+	}
+	store := ClaimStore{Paths: dirtyPaths, Now: fixedClaimStoreNow}
+	claim := validStoreClaim("clm_dddddddddddddddddddddddddddddddd", ClaimBasisOwner)
+	projectsDir := filepath.Join(paths.WorkspacesDir, "research", "wiki", "projects")
+	before, err := os.ReadDir(projectsDir)
+	if err != nil {
+		t.Fatalf("ReadDir(before) error = %v", err)
+	}
+	if _, err := store.WriteDraft("research", claim); err == nil {
+		t.Fatalf("WriteDraft(dirty failure) error = nil")
+	}
+	after, err := os.ReadDir(projectsDir)
+	if err != nil {
+		t.Fatalf("ReadDir(after) error = %v", err)
+	}
+	if len(after) != len(before) {
+		t.Fatalf("claim tree changed after dirty failure: before=%v after=%v", before, after)
+	}
+	if _, err := os.Stat(filepath.Join(dirtyPaths.IndexesDir, "research.dirty")); err == nil {
+		t.Fatalf("dirty marker exists after dirty failure")
+	}
+}
+
+func TestClaimStoreMigrateDirtyBarrierLeavesCanonicalBytesUnchanged(t *testing.T) {
+	paths, _ := claimStoreTestPaths(t)
+	id := "clm_eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+	claimPath := filepath.Join(paths.WorkspacesDir, "research", "wiki", "projects", id+".md")
+	legacy := []byte("---\nschema: zbrain.claim/v1\nid: " + id + "\nstatus: draft\ntitle: Legacy Claim\nbasis: owner\ncreated_at: 2026-07-30T09:00:00Z\ncreated_by: owner\n---\n\nLegacy body\n")
+	if err := os.WriteFile(claimPath, legacy, 0o644); err != nil {
+		t.Fatalf("WriteFile(legacy) error = %v", err)
+	}
+	dirtyPaths := paths
+	dirtyPaths.IndexesDir = filepath.Join(t.TempDir(), "indexes-blocker")
+	if err := os.WriteFile(dirtyPaths.IndexesDir, []byte("not a directory"), 0o644); err != nil {
+		t.Fatalf("WriteFile(indexes blocker) error = %v", err)
+	}
+	before := sha256Hex(t, claimPath)
+	if _, err := (ClaimStore{Paths: dirtyPaths, Now: fixedClaimStoreNow}).MigrateOKF("research"); err == nil {
+		t.Fatalf("MigrateOKF(dirty failure) error = nil")
+	}
+	if after := sha256Hex(t, claimPath); after != before {
+		t.Fatalf("legacy claim changed after dirty failure: before %s after %s", before, after)
+	}
+}
+
 func sha256Hex(t *testing.T, path string) string {
 	t.Helper()
 	contents, err := os.ReadFile(path)

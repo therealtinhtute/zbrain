@@ -184,6 +184,66 @@ func TestRunMigrateOKFConvertsLegacyClaim(t *testing.T) {
 	}
 }
 
+func TestRunMigrateOKFNoopLeavesIndexFresh(t *testing.T) {
+	app, _ := testApp(t)
+	if err := app.Run([]string{"setup"}); err != nil {
+		t.Fatalf("Run(setup) error = %v", err)
+	}
+	if err := app.Run([]string{"workspace", "create", "research"}); err != nil {
+		t.Fatalf("Run(workspace create) error = %v", err)
+	}
+	app.Stdout = &bytes.Buffer{}
+	if err := app.Run([]string{"migrate", "okf"}); err != nil {
+		t.Fatalf("Run(migrate okf no-op) error = %v", err)
+	}
+	var summary struct {
+		SchemaVersion int  `json:"schema_version"`
+		Migrated      int  `json:"migrated"`
+		IndexFresh    bool `json:"index_fresh"`
+	}
+	decodeJSON(t, stdout(app), &summary)
+	if summary.SchemaVersion != 1 || summary.Migrated != 0 || !summary.IndexFresh {
+		t.Fatalf("migrate no-op summary = %#v", summary)
+	}
+	dirtyPath, err := (zruntime.IndexStore{Paths: app.Paths}).DirtyPath("research")
+	if err != nil {
+		t.Fatalf("DirtyPath() error = %v", err)
+	}
+	if _, err := os.Stat(dirtyPath); !os.IsNotExist(err) {
+		t.Fatalf("no-op migration created dirty marker: err = %v", err)
+	}
+}
+
+func TestRunMigrateOKFFailsBeforeWriteWhenDirtyMarkerCannotBeWritten(t *testing.T) {
+	app, _ := testApp(t)
+	if err := app.Run([]string{"setup"}); err != nil {
+		t.Fatalf("Run(setup) error = %v", err)
+	}
+	if err := app.Run([]string{"workspace", "create", "research"}); err != nil {
+		t.Fatalf("Run(workspace create) error = %v", err)
+	}
+	id := "clm_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	claimPath := filepath.Join(app.Paths.WorkspacesDir, "research", "wiki", "projects", id+".md")
+	legacy := []byte("---\nschema: zbrain.claim/v1\nid: " + id + "\nstatus: draft\ntitle: Legacy Claim\nbasis: owner\ncreated_at: 2026-07-30T09:00:00Z\ncreated_by: owner\n---\n\nLegacy body\n")
+	if err := os.WriteFile(claimPath, legacy, 0o644); err != nil {
+		t.Fatalf("WriteFile(legacy claim) error = %v", err)
+	}
+	if err := os.WriteFile(app.Paths.IndexesDir, []byte("not a directory"), 0o644); err != nil {
+		t.Fatalf("WriteFile(indexes dir blocker) error = %v", err)
+	}
+
+	if err := app.Run([]string{"migrate", "okf"}); err == nil {
+		t.Fatalf("Run(migrate okf with unwritable dirty marker) error = nil")
+	}
+	migrated, err := os.ReadFile(claimPath)
+	if err != nil {
+		t.Fatalf("ReadFile(legacy claim after failed migration) error = %v", err)
+	}
+	if !bytes.Equal(migrated, legacy) {
+		t.Fatalf("migration rewrote claim despite dirty marker failure:\n%s", migrated)
+	}
+}
+
 func TestRunClaimDraftFailsBeforeWriteWhenDirtyMarkerCannotBeWritten(t *testing.T) {
 	app, _ := testApp(t)
 	if err := app.Run([]string{"setup"}); err != nil {
@@ -205,6 +265,102 @@ func TestRunClaimDraftFailsBeforeWriteWhenDirtyMarkerCannotBeWritten(t *testing.
 		t.Fatalf("ReadDir(projects) error = %v", err)
 	} else if len(entries) != 0 {
 		t.Fatalf("claim draft wrote files despite dirty marker failure: %v", entries)
+	}
+}
+
+func TestRunMutationsRejectTraversalAndNonexistentWorkspaceBeforeMutation(t *testing.T) {
+	app, tmp := testApp(t)
+	if err := app.Run([]string{"setup"}); err != nil {
+		t.Fatalf("Run(setup) error = %v", err)
+	}
+	if err := app.Run([]string{"workspace", "create", "research"}); err != nil {
+		t.Fatalf("Run(workspace create) error = %v", err)
+	}
+	source := filepath.Join(tmp, "source.txt")
+	if err := os.WriteFile(source, []byte("source bytes"), 0o644); err != nil {
+		t.Fatalf("WriteFile(source) error = %v", err)
+	}
+
+	workspaces := []string{"../../outside/pwn", "missing"}
+	for _, workspace := range workspaces {
+		workspace := workspace
+		t.Run(strings.ReplaceAll(workspace, "/", "_"), func(t *testing.T) {
+			mutations := []struct {
+				name  string
+				args  []string
+				stdin string
+			}{
+				{
+					name: "evidence add",
+					args: []string{"evidence", "add", "--workspace", workspace, "--file", source, "--origin", "file://source.txt"},
+				},
+				{
+					name:  "claim draft",
+					args:  []string{"claim", "draft", "--workspace", workspace, "--tier", "projects", "--title", "Invalid workspace", "--basis", "owner"},
+					stdin: "Claim body\n",
+				},
+				{
+					name: "claim approve",
+					args: []string{"claim", "approve", "--workspace", workspace, "clm_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},
+				},
+				{
+					name:  "claim supersede",
+					args:  []string{"claim", "supersede", "--workspace", workspace, "clm_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "--tier", "projects", "--title", "Invalid workspace", "--basis", "owner"},
+					stdin: "Replacement body\n",
+				},
+				{
+					name: "claim revoke",
+					args: []string{"claim", "revoke", "--workspace", workspace, "clm_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "--reason", "invalid workspace"},
+				},
+			}
+			for _, mutation := range mutations {
+				t.Run(mutation.name, func(t *testing.T) {
+					app.Stdout = &bytes.Buffer{}
+					app.Stdin = strings.NewReader(mutation.stdin)
+					if err := app.Run(mutation.args); err == nil {
+						t.Fatalf("Run(%s) error = nil", mutation.name)
+					}
+				})
+			}
+		})
+	}
+
+	if _, err := os.Stat(filepath.Join(tmp, "outside")); !os.IsNotExist(err) {
+		t.Fatalf("unsafe workspace created external path: err = %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(app.Paths.WorkspacesDir, "missing")); !os.IsNotExist(err) {
+		t.Fatalf("missing workspace was created: err = %v", err)
+	}
+	if _, err := os.Stat(app.Paths.IndexesDir); !os.IsNotExist(err) {
+		t.Fatalf("invalid workspace created indexes directory: err = %v", err)
+	}
+}
+
+func TestRunClaimMutationRejectsUnsafeCurrentWorkspaceBeforeMutation(t *testing.T) {
+	app, tmp := testApp(t)
+	if err := app.Run([]string{"setup"}); err != nil {
+		t.Fatalf("Run(setup) error = %v", err)
+	}
+	if err := app.Run([]string{"workspace", "create", "research"}); err != nil {
+		t.Fatalf("Run(workspace create) error = %v", err)
+	}
+	outside := filepath.Join(tmp, "outside", "pwn")
+	if err := os.MkdirAll(outside, 0o755); err != nil {
+		t.Fatalf("MkdirAll(outside) error = %v", err)
+	}
+	if err := os.WriteFile(app.Paths.ConfigFile, []byte("default_workspace: ../../outside/pwn\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile(config) error = %v", err)
+	}
+
+	app.Stdin = strings.NewReader("Claim body\n")
+	if err := app.Run([]string{"claim", "draft", "--tier", "projects", "--title", "Unsafe current", "--basis", "owner"}); err == nil {
+		t.Fatalf("Run(claim draft with unsafe current workspace) error = nil")
+	}
+	if _, err := os.Stat(filepath.Join(tmp, "outside", "pwn.dirty")); !os.IsNotExist(err) {
+		t.Fatalf("unsafe current workspace created external dirty marker: err = %v", err)
+	}
+	if _, err := os.Stat(app.Paths.IndexesDir); !os.IsNotExist(err) {
+		t.Fatalf("unsafe current workspace created indexes directory: err = %v", err)
 	}
 }
 
@@ -233,11 +389,15 @@ func TestRunReindexAndAskTrustedContext(t *testing.T) {
 		t.Fatalf("Run(reindex) error = %v", err)
 	}
 	var summary struct {
-		SchemaVersion int `json:"schema_version"`
-		Approved      int `json:"approved"`
+		SchemaVersion  int    `json:"schema_version"`
+		Approved       int    `json:"approved"`
+		RebuildState   string `json:"rebuild_state"`
+		InvalidCount   int    `json:"invalid_count"`
+		ManifestDigest string `json:"manifest_digest"`
+		RebuiltAt      string `json:"rebuilt_at"`
 	}
 	decodeJSON(t, stdout(app), &summary)
-	if summary.SchemaVersion != 1 || summary.Approved != 1 {
+	if summary.SchemaVersion != 1 || summary.Approved != 1 || summary.RebuildState != "clean" || summary.InvalidCount != 0 || len(summary.ManifestDigest) != 64 || summary.RebuiltAt == "" {
 		t.Fatalf("reindex summary = %#v", summary)
 	}
 	app.Stdout = &bytes.Buffer{}
@@ -294,15 +454,18 @@ func TestRunReindexReportsTamperedApprovedClaim(t *testing.T) {
 		t.Fatalf("Run(reindex) error = %v", err)
 	}
 	var summary struct {
-		Approved      int `json:"approved"`
-		Invalid       int `json:"invalid"`
-		InvalidClaims []struct {
+		Approved       int    `json:"approved"`
+		Invalid        int    `json:"invalid"`
+		InvalidCount   int    `json:"invalid_count"`
+		RebuildState   string `json:"rebuild_state"`
+		ManifestDigest string `json:"manifest_digest"`
+		InvalidClaims  []struct {
 			Path  string `json:"path"`
 			Error string `json:"error"`
 		} `json:"invalid_claims"`
 	}
 	decodeJSON(t, stdout(app), &summary)
-	if summary.Approved != 0 || summary.Invalid != 1 || len(summary.InvalidClaims) != 1 {
+	if summary.Approved != 0 || summary.Invalid != 1 || summary.InvalidCount != 1 || summary.RebuildState != "rejected" || len(summary.ManifestDigest) != 64 || len(summary.InvalidClaims) != 1 {
 		t.Fatalf("reindex summary = %#v", summary)
 	}
 	if summary.InvalidClaims[0].Path != "projects/"+draft.ID+".md" || !strings.Contains(summary.InvalidClaims[0].Error, "verification digest mismatch") {
@@ -310,18 +473,83 @@ func TestRunReindexReportsTamperedApprovedClaim(t *testing.T) {
 	}
 
 	app.Stdout = &bytes.Buffer{}
-	if err := app.Run([]string{"ask", "trusted", "canonical"}); err != nil {
-		t.Fatalf("Run(ask) error = %v", err)
+	if err := app.Run([]string{"ask", "trusted", "canonical"}); err == nil || !strings.Contains(err.Error(), "rejected") {
+		t.Fatalf("Run(ask) error = %v, want rejected error", err)
 	}
-	var response struct {
-		Status string `json:"status"`
-		Claims []struct {
-			ID string `json:"id"`
-		} `json:"claims"`
+	if stdout(app) != "" {
+		t.Fatalf("ask wrote output for rejected index: %q", stdout(app))
 	}
-	decodeJSON(t, stdout(app), &response)
-	if response.Status != "gap" || len(response.Claims) != 0 {
-		t.Fatalf("ask response = %#v", response)
+}
+
+func TestRunAskReportsFreshnessErrors(t *testing.T) {
+	t.Run("missing", func(t *testing.T) {
+		app, _ := testApp(t)
+		setupResearchApp(t, &app)
+		app.Stdout = &bytes.Buffer{}
+		err := app.Run([]string{"ask", "anything"})
+		if err == nil || !strings.Contains(err.Error(), "does not exist") {
+			t.Fatalf("Run(ask) error = %v, want missing error", err)
+		}
+	})
+
+	t.Run("dirty", func(t *testing.T) {
+		app, _ := testApp(t)
+		setupResearchApp(t, &app)
+		if err := app.Run([]string{"reindex"}); err != nil {
+			t.Fatalf("Run(reindex) error = %v", err)
+		}
+		if err := (zruntime.IndexStore{Paths: app.Paths}).MarkDirty("research"); err != nil {
+			t.Fatalf("MarkDirty() error = %v", err)
+		}
+		app.Stdout = &bytes.Buffer{}
+		err := app.Run([]string{"ask", "anything"})
+		if err == nil || !strings.Contains(err.Error(), "dirty") {
+			t.Fatalf("Run(ask) error = %v, want dirty error", err)
+		}
+	})
+
+	t.Run("stale", func(t *testing.T) {
+		app, _ := testApp(t)
+		setupResearchApp(t, &app)
+		if err := app.Run([]string{"reindex"}); err != nil {
+			t.Fatalf("Run(reindex) error = %v", err)
+		}
+		stalePath := filepath.Join(app.Paths.WorkspacesDir, "research", "wiki", "projects", "outside-edit.md")
+		if err := os.WriteFile(stalePath, []byte("outside edit\n"), 0o644); err != nil {
+			t.Fatalf("WriteFile(stale input) error = %v", err)
+		}
+		app.Stdout = &bytes.Buffer{}
+		err := app.Run([]string{"ask", "anything"})
+		if err == nil || !strings.Contains(err.Error(), "stale") {
+			t.Fatalf("Run(ask) error = %v, want stale error", err)
+		}
+	})
+
+	t.Run("rejected", func(t *testing.T) {
+		app, _ := testApp(t)
+		setupResearchApp(t, &app)
+		legacyPath := filepath.Join(app.Paths.WorkspacesDir, "research", "wiki", "projects", "legacy.md")
+		if err := os.WriteFile(legacyPath, []byte("legacy input\n"), 0o644); err != nil {
+			t.Fatalf("WriteFile(legacy) error = %v", err)
+		}
+		if err := app.Run([]string{"reindex"}); err != nil {
+			t.Fatalf("Run(reindex) error = %v", err)
+		}
+		app.Stdout = &bytes.Buffer{}
+		err := app.Run([]string{"ask", "anything"})
+		if err == nil || !strings.Contains(err.Error(), "rejected") {
+			t.Fatalf("Run(ask) error = %v, want rejected error", err)
+		}
+	})
+}
+
+func setupResearchApp(t *testing.T, app *App) {
+	t.Helper()
+	if err := app.Run([]string{"setup"}); err != nil {
+		t.Fatalf("Run(setup) error = %v", err)
+	}
+	if err := app.Run([]string{"workspace", "create", "research"}); err != nil {
+		t.Fatalf("Run(workspace create) error = %v", err)
 	}
 }
 

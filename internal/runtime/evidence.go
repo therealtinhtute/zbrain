@@ -37,8 +37,8 @@ func NewEvidenceID() (string, error) {
 }
 
 func (store EvidenceStore) AddFile(workspace string, sourcePath string, origin string, mediaType string) (Evidence, error) {
-	if !IsSafeWorkspaceName(workspace) {
-		return Evidence{}, fmt.Errorf("workspace name must use lowercase letters, numbers, or hyphens only")
+	if _, err := ValidateWorkspace(store.Paths, workspace); err != nil {
+		return Evidence{}, err
 	}
 	if strings.TrimSpace(origin) == "" {
 		return Evidence{}, fmt.Errorf("evidence origin is required")
@@ -46,14 +46,26 @@ func (store EvidenceStore) AddFile(workspace string, sourcePath string, origin s
 	if strings.TrimSpace(mediaType) == "" {
 		mediaType = "application/octet-stream"
 	}
+	source, err := os.Open(sourcePath)
+	if err != nil {
+		return Evidence{}, err
+	}
+	defer source.Close()
+
 	id, err := NewEvidenceID()
 	if err != nil {
 		return Evidence{}, err
 	}
-	root := store.evidenceRoot(workspace, id)
+	root, err := store.evidenceRoot(workspace, id)
+	if err != nil {
+		return Evidence{}, err
+	}
 	if _, err := os.Stat(root); err == nil {
 		return Evidence{}, fmt.Errorf("evidence %s already exists", id)
 	} else if !os.IsNotExist(err) {
+		return Evidence{}, err
+	}
+	if err := store.markDirty(workspace); err != nil {
 		return Evidence{}, err
 	}
 	if err := os.MkdirAll(root, 0o755); err != nil {
@@ -66,13 +78,10 @@ func (store EvidenceStore) AddFile(workspace string, sourcePath string, origin s
 		}
 	}()
 
-	source, err := os.Open(sourcePath)
+	rawPath, err := store.evidenceFilePath(workspace, id, "raw")
 	if err != nil {
 		return Evidence{}, err
 	}
-	defer source.Close()
-
-	rawPath := filepath.Join(root, "raw")
 	raw, err := os.OpenFile(rawPath, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o444)
 	if err != nil {
 		return Evidence{}, err
@@ -106,7 +115,11 @@ func (store EvidenceStore) AddFile(workspace string, sourcePath string, origin s
 	if err != nil {
 		return Evidence{}, err
 	}
-	if err := os.WriteFile(filepath.Join(root, "source.yaml"), metadata, 0o444); err != nil {
+	metadataPath, err := store.evidenceFilePath(workspace, id, "source.yaml")
+	if err != nil {
+		return Evidence{}, err
+	}
+	if err := os.WriteFile(metadataPath, metadata, 0o444); err != nil {
 		return Evidence{}, err
 	}
 	created = true
@@ -117,7 +130,11 @@ func (store EvidenceStore) Read(workspace string, id string) (Evidence, error) {
 	if !evidenceIDPattern.MatchString(id) {
 		return Evidence{}, fmt.Errorf("evidence id must match evd_<32 lowercase hex chars>")
 	}
-	contents, err := os.ReadFile(filepath.Join(store.evidenceRoot(workspace, id), "source.yaml"))
+	metadataPath, err := store.evidenceFilePath(workspace, id, "source.yaml")
+	if err != nil {
+		return Evidence{}, err
+	}
+	contents, err := os.ReadFile(metadataPath)
 	if err != nil {
 		return Evidence{}, err
 	}
@@ -136,7 +153,10 @@ func (store EvidenceStore) Verify(workspace string, id string) error {
 	if err != nil {
 		return err
 	}
-	rawPath := filepath.Join(store.evidenceRoot(workspace, id), "raw")
+	rawPath, err := store.evidenceFilePath(workspace, id, "raw")
+	if err != nil {
+		return err
+	}
 	raw, err := os.Open(rawPath)
 	if err != nil {
 		return err
@@ -157,6 +177,23 @@ func (store EvidenceStore) Verify(workspace string, id string) error {
 	return nil
 }
 
-func (store EvidenceStore) evidenceRoot(workspace string, id string) string {
-	return filepath.Join(store.Paths.WorkspacesDir, workspace, "evidence", "sources", id)
+func (store EvidenceStore) evidenceRoot(workspace string, id string) (string, error) {
+	if !evidenceIDPattern.MatchString(id) {
+		return "", fmt.Errorf("evidence id must match evd_<32 lowercase hex chars>")
+	}
+	return ResolveWorkspacePath(store.Paths, workspace, filepath.ToSlash(filepath.Join("evidence", "sources", id)))
+}
+
+func (store EvidenceStore) evidenceFilePath(workspace string, id string, name string) (string, error) {
+	if !evidenceIDPattern.MatchString(id) {
+		return "", fmt.Errorf("evidence id must match evd_<32 lowercase hex chars>")
+	}
+	return ResolveWorkspacePath(store.Paths, workspace, filepath.ToSlash(filepath.Join("evidence", "sources", id, name)))
+}
+
+func (store EvidenceStore) markDirty(workspace string) error {
+	if _, err := ValidateWorkspace(store.Paths, workspace); err != nil {
+		return err
+	}
+	return (IndexStore{Paths: store.Paths}).MarkDirty(workspace)
 }

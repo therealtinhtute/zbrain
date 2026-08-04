@@ -109,6 +109,72 @@ func fixedEvidenceNow() time.Time {
 	return time.Date(2026, 7, 30, 10, 0, 0, 0, time.UTC)
 }
 
+func TestEvidenceWorkspaceBoundaryRejectsSymlinkEscape(t *testing.T) {
+	paths := evidenceTestPaths(t)
+	store := EvidenceStore{Paths: paths, Now: fixedEvidenceNow}
+	id := "evd_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+	outside := t.TempDir()
+	outsidePath := filepath.Join(outside, "source.yaml")
+	if err := os.WriteFile(outsidePath, []byte("id: "+id+"\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile(outside) error = %v", err)
+	}
+	root := filepath.Join(paths.WorkspacesDir, "research", "evidence", "sources", id)
+	if err := os.Symlink(outside, root); err != nil {
+		t.Fatalf("Symlink(escape) error = %v", err)
+	}
+	if _, err := store.Read("research", id); err == nil {
+		t.Fatalf("Read(symlink escape) error = nil")
+	}
+}
+
+func TestEvidenceDirtyBarrierLeavesCanonicalTreeUnchanged(t *testing.T) {
+	paths := evidenceTestPaths(t)
+	dirtyPaths := paths
+	dirtyPaths.IndexesDir = filepath.Join(t.TempDir(), "indexes-blocker")
+	if err := os.WriteFile(dirtyPaths.IndexesDir, []byte("not a directory"), 0o644); err != nil {
+		t.Fatalf("WriteFile(indexes blocker) error = %v", err)
+	}
+	source := filepath.Join(t.TempDir(), "source.txt")
+	if err := os.WriteFile(source, []byte("evidence"), 0o644); err != nil {
+		t.Fatalf("WriteFile(source) error = %v", err)
+	}
+	sourcesDir := filepath.Join(paths.WorkspacesDir, "research", "evidence", "sources")
+	before, err := os.ReadDir(sourcesDir)
+	if err != nil {
+		t.Fatalf("ReadDir(before) error = %v", err)
+	}
+	if _, err := (EvidenceStore{Paths: dirtyPaths, Now: fixedEvidenceNow}).AddFile("research", source, "file://source.txt", "text/plain"); err == nil {
+		t.Fatalf("AddFile(dirty failure) error = nil")
+	}
+	after, err := os.ReadDir(sourcesDir)
+	if err != nil {
+		t.Fatalf("ReadDir(after) error = %v", err)
+	}
+	if len(after) != len(before) {
+		t.Fatalf("evidence tree changed after dirty failure: before=%v after=%v", before, after)
+	}
+	if _, err := os.Stat(filepath.Join(dirtyPaths.IndexesDir, "research.dirty")); err == nil {
+		t.Fatalf("dirty marker exists after dirty failure")
+	}
+}
+
+func TestEvidenceAddRejectsUnsafeAndMissingWorkspaceWithoutMutation(t *testing.T) {
+	paths := evidenceTestPaths(t)
+	source := filepath.Join(t.TempDir(), "source.txt")
+	if err := os.WriteFile(source, []byte("evidence"), 0o644); err != nil {
+		t.Fatalf("WriteFile(source) error = %v", err)
+	}
+	store := EvidenceStore{Paths: paths, Now: fixedEvidenceNow}
+	for _, workspace := range []string{"../outside", "missing"} {
+		if _, err := store.AddFile(workspace, source, "file://source.txt", "text/plain"); err == nil {
+			t.Fatalf("AddFile(%q) error = nil", workspace)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(paths.WorkspacesDir, "outside")); !os.IsNotExist(err) {
+		t.Fatalf("outside workspace error = %v, want absent", err)
+	}
+}
+
 func sha256String(input string) string {
 	sum := sha256.Sum256([]byte(input))
 	return hex.EncodeToString(sum[:])

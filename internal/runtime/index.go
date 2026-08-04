@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	_ "modernc.org/sqlite"
 )
@@ -15,12 +16,16 @@ type IndexStore struct {
 }
 
 type IndexSummary struct {
-	Workspace     string         `json:"workspace"`
-	Approved      int            `json:"approved"`
-	Draft         int            `json:"draft"`
-	Invalid       int            `json:"invalid"`
-	InvalidClaims []InvalidClaim `json:"invalid_claims,omitempty"`
-	Legacy        int            `json:"legacy"`
+	Workspace      string         `json:"workspace"`
+	Approved       int            `json:"approved"`
+	Draft          int            `json:"draft"`
+	Invalid        int            `json:"invalid"`
+	InvalidCount   int            `json:"invalid_count"`
+	InvalidClaims  []InvalidClaim `json:"invalid_claims,omitempty"`
+	Legacy         int            `json:"legacy"`
+	RebuildState   RebuildStatus  `json:"rebuild_state"`
+	ManifestDigest string         `json:"manifest_digest"`
+	RebuiltAt      string         `json:"rebuilt_at"`
 }
 
 type SearchOptions struct {
@@ -41,12 +46,82 @@ type IndexedClaim struct {
 	Score       float64     `json:"score"`
 }
 
-func (store IndexStore) DatabasePath(workspace string) string {
+func (store IndexStore) DatabasePath(workspace string) (string, error) {
+	if _, err := ValidateWorkspace(store.Paths, workspace); err != nil {
+		return "", err
+	}
+	return store.databasePath(workspace), nil
+}
+
+func (store IndexStore) DirtyPath(workspace string) (string, error) {
+	if _, err := ValidateWorkspace(store.Paths, workspace); err != nil {
+		return "", err
+	}
+	return store.dirtyPath(workspace), nil
+}
+
+func (store IndexStore) databasePath(workspace string) string {
 	return filepath.Join(store.Paths.IndexesDir, workspace+".sqlite")
 }
 
-func (store IndexStore) DirtyPath(workspace string) string {
+func (store IndexStore) dirtyPath(workspace string) string {
 	return filepath.Join(store.Paths.IndexesDir, workspace+".dirty")
+}
+
+func (store IndexStore) validatedIndexPaths(workspace string) (string, string, error) {
+	if _, err := ValidateWorkspace(store.Paths, workspace); err != nil {
+		return "", "", err
+	}
+	databasePath := store.databasePath(workspace)
+	dirtyPath := store.dirtyPath(workspace)
+	if err := validateIndexBoundaryPath(store.Paths.IndexesDir, true); err != nil {
+		return "", "", fmt.Errorf("validate index directory: %w", err)
+	}
+	for _, path := range []string{databasePath, dirtyPath} {
+		if err := validateIndexBoundaryPath(path, false); err != nil {
+			return "", "", fmt.Errorf("validate index path %q: %w", path, err)
+		}
+	}
+	return databasePath, dirtyPath, nil
+}
+
+func validateIndexBoundaryPath(path string, directory bool) error {
+	clean, err := filepath.Abs(filepath.Clean(path))
+	if err != nil {
+		return err
+	}
+	candidate := clean
+	for {
+		info, err := os.Lstat(candidate)
+		if err == nil {
+			if info.Mode()&os.ModeSymlink != 0 {
+				return fmt.Errorf("%q must not be a symlink", candidate)
+			}
+			resolved, err := filepath.EvalSymlinks(candidate)
+			if err != nil {
+				return err
+			}
+			resolved, err = filepath.Abs(resolved)
+			if err != nil {
+				return err
+			}
+			if resolved != candidate {
+				return fmt.Errorf("%q contains a symlink", path)
+			}
+			if candidate == clean && directory && !info.IsDir() {
+				return fmt.Errorf("%q is not a directory", path)
+			}
+			return nil
+		}
+		if !os.IsNotExist(err) {
+			return err
+		}
+		parent := filepath.Dir(candidate)
+		if parent == candidate {
+			return fmt.Errorf("%q has no existing ancestor", path)
+		}
+		candidate = parent
+	}
 }
 
 func (store IndexStore) AssertFTS5() error {
@@ -69,30 +144,63 @@ func (store IndexStore) AssertFTS5() error {
 }
 
 func (store IndexStore) MarkDirty(workspace string) error {
+	_, dirtyPath, err := store.validatedIndexPaths(workspace)
+	if err != nil {
+		return err
+	}
 	if err := os.MkdirAll(store.Paths.IndexesDir, 0o755); err != nil {
 		return err
 	}
-	return os.WriteFile(store.DirtyPath(workspace), []byte("dirty\n"), 0o644)
+	return os.WriteFile(dirtyPath, []byte("dirty\n"), 0o644)
 }
 
 func (store IndexStore) CheckFresh(workspace string) error {
-	if _, err := os.Stat(store.DirtyPath(workspace)); err == nil {
+	databasePath, dirtyPath, err := store.validatedIndexPaths(workspace)
+	if err != nil {
+		return err
+	}
+	if _, err := os.Stat(dirtyPath); err == nil {
 		return fmt.Errorf("workspace %q index is dirty; run zbrain reindex", workspace)
 	} else if !os.IsNotExist(err) {
 		return err
 	}
-	if _, err := os.Stat(store.DatabasePath(workspace)); err != nil {
+	if _, err := os.Stat(databasePath); err != nil {
 		if os.IsNotExist(err) {
 			return fmt.Errorf("workspace %q index does not exist; run zbrain reindex", workspace)
 		}
 		return err
 	}
+
+	db, err := sql.Open("sqlite", databasePath)
+	if err != nil {
+		return fmt.Errorf("workspace %q index cannot be opened: %w", workspace, err)
+	}
+	defer db.Close()
+	manifest, state, err := ReadIndexState(db)
+	if err != nil {
+		return fmt.Errorf("workspace %q index state is malformed or missing: %w", workspace, err)
+	}
+	if state.Status == RebuildStatusRejected {
+		return fmt.Errorf("workspace %q index is rejected: %d invalid trust inputs; run zbrain reindex", workspace, state.InvalidCount)
+	}
+	if state.Status != RebuildStatusClean {
+		return fmt.Errorf("workspace %q index state is malformed: unsupported rebuild status %q", workspace, state.Status)
+	}
+
+	currentManifest, err := BuildTrustInputManifest(store.Paths, workspace)
+	if err != nil {
+		return fmt.Errorf("workspace %q index is stale: recompute trust inputs: %w", workspace, err)
+	}
+	if !sameTrustInputManifest(manifest, currentManifest) {
+		return fmt.Errorf("workspace %q index is stale; run zbrain reindex", workspace)
+	}
 	return nil
 }
 
 func (store IndexStore) Rebuild(workspace string) (IndexSummary, error) {
-	if !IsSafeWorkspaceName(workspace) {
-		return IndexSummary{}, fmt.Errorf("workspace name must use lowercase letters, numbers, or hyphens only")
+	databasePath, dirtyPath, err := store.validatedIndexPaths(workspace)
+	if err != nil {
+		return IndexSummary{}, err
 	}
 	if err := store.AssertFTS5(); err != nil {
 		return IndexSummary{}, err
@@ -103,8 +211,10 @@ func (store IndexStore) Rebuild(workspace string) (IndexSummary, error) {
 	if err := store.MarkDirty(workspace); err != nil {
 		return IndexSummary{}, err
 	}
-	tmpPath := store.DatabasePath(workspace) + ".tmp"
-	_ = os.Remove(tmpPath)
+	tmpPath := databasePath + ".tmp"
+	if err := os.Remove(tmpPath); err != nil && !os.IsNotExist(err) {
+		return IndexSummary{}, err
+	}
 	db, err := sql.Open("sqlite", tmpPath)
 	if err != nil {
 		return IndexSummary{}, err
@@ -114,15 +224,37 @@ func (store IndexStore) Rebuild(workspace string) (IndexSummary, error) {
 		return IndexSummary{}, err
 	}
 
+	manifestBefore, err := BuildTrustInputManifest(store.Paths, workspace)
+	if err != nil {
+		return IndexSummary{}, err
+	}
 	scan, err := (ClaimStore{Paths: store.Paths}).ScanWorkspace(workspace)
 	if err != nil {
 		return IndexSummary{}, err
 	}
+	manifest, err := BuildTrustInputManifest(store.Paths, workspace)
+	if err != nil {
+		return IndexSummary{}, err
+	}
+	if !sameTrustInputManifest(manifestBefore, manifest) {
+		return IndexSummary{}, fmt.Errorf("trust inputs changed during rebuild")
+	}
+
+	invalidCount := len(scan.Invalid) + len(scan.LegacyUnindexed)
+	rebuildStatus := RebuildStatusClean
+	if invalidCount > 0 {
+		rebuildStatus = RebuildStatusRejected
+	}
+	rebuiltAt := time.Now().UTC().Format(time.RFC3339)
 	summary := IndexSummary{
-		Workspace:     workspace,
-		Invalid:       len(scan.Invalid),
-		InvalidClaims: scan.Invalid,
-		Legacy:        len(scan.LegacyUnindexed),
+		Workspace:      workspace,
+		Invalid:        len(scan.Invalid),
+		InvalidCount:   invalidCount,
+		InvalidClaims:  scan.Invalid,
+		Legacy:         len(scan.LegacyUnindexed),
+		RebuildState:   rebuildStatus,
+		ManifestDigest: manifest.Digest,
+		RebuiltAt:      rebuiltAt,
 	}
 	tx, err := db.Begin()
 	if err != nil {
@@ -139,6 +271,16 @@ func (store IndexStore) Rebuild(workspace string) (IndexSummary, error) {
 			return IndexSummary{}, err
 		}
 	}
+	state := RebuildState{
+		Status:         rebuildStatus,
+		InvalidCount:   invalidCount,
+		ManifestDigest: manifest.Digest,
+		RebuiltAt:      rebuiltAt,
+	}
+	if err := WriteIndexState(tx, manifest, state); err != nil {
+		_ = tx.Rollback()
+		return IndexSummary{}, err
+	}
 	if err := tx.Commit(); err != nil {
 		return IndexSummary{}, err
 	}
@@ -148,16 +290,32 @@ func (store IndexStore) Rebuild(workspace string) (IndexSummary, error) {
 	if err := db.Close(); err != nil {
 		return IndexSummary{}, err
 	}
-	if err := os.Rename(tmpPath, store.DatabasePath(workspace)); err != nil {
+	if err := os.Rename(tmpPath, databasePath); err != nil {
 		return IndexSummary{}, err
 	}
-	if err := os.Remove(store.DirtyPath(workspace)); err != nil && !os.IsNotExist(err) {
+	if err := os.Remove(dirtyPath); err != nil && !os.IsNotExist(err) {
 		return IndexSummary{}, err
 	}
 	return summary, nil
 }
 
+func sameTrustInputManifest(left TrustInputManifest, right TrustInputManifest) bool {
+	if left.Digest != right.Digest || len(left.Entries) != len(right.Entries) {
+		return false
+	}
+	for i := range left.Entries {
+		if left.Entries[i] != right.Entries[i] {
+			return false
+		}
+	}
+	return true
+}
+
 func (store IndexStore) Search(workspace string, options SearchOptions) ([]IndexedClaim, error) {
+	databasePath, _, err := store.validatedIndexPaths(workspace)
+	if err != nil {
+		return nil, err
+	}
 	if options.Limit <= 0 {
 		options.Limit = 10
 	}
@@ -170,7 +328,7 @@ func (store IndexStore) Search(workspace string, options SearchOptions) ([]Index
 	if err := store.CheckFresh(workspace); err != nil {
 		return nil, err
 	}
-	db, err := sql.Open("sqlite", store.DatabasePath(workspace))
+	db, err := sql.Open("sqlite", databasePath)
 	if err != nil {
 		return nil, err
 	}
@@ -262,7 +420,24 @@ end;
 create trigger claims_au after update on claims begin
   insert into claims_fts(claims_fts, rowid, title, description, tags, body) values ('delete', old.rowid, old.title, old.description, old.tags, old.body);
   insert into claims_fts(rowid, title, description, tags, body) values (new.rowid, new.title, new.description, new.tags, new.body);
-end;`)
+end;
+create table trust_inputs (
+  path text not null primary key,
+  kind text not null,
+  byte_length integer not null,
+  sha256 text not null
+);
+create table rebuild_state (
+  id integer not null primary key default 1 check (id = 1),
+  status text not null,
+  invalid_count integer not null,
+  manifest_digest text not null,
+  rebuilt_at text not null
+);`)
+	if err != nil {
+		return err
+	}
+	_, err = db.Exec("pragma user_version = 1")
 	return err
 }
 

@@ -303,14 +303,26 @@ func (app App) runMigrate(args []string) error {
 	if err != nil {
 		return err
 	}
-	summary, err := (zruntime.ClaimStore{Paths: app.Paths, Now: app.Now}).MigrateOKF(workspace)
+	claimStore := zruntime.ClaimStore{Paths: app.Paths, Now: app.Now}
+	scan, err := claimStore.ScanWorkspace(workspace)
 	if err != nil {
 		return err
 	}
-	if summary.Migrated > 0 {
+	needsMigration := false
+	for _, claim := range scan.Claims {
+		if claim.Schema == zruntime.ClaimSchemaVersion {
+			needsMigration = true
+			break
+		}
+	}
+	if needsMigration {
 		if err := (zruntime.IndexStore{Paths: app.Paths}).MarkDirty(workspace); err != nil {
 			return err
 		}
+	}
+	summary, err := claimStore.MigrateOKF(workspace)
+	if err != nil {
+		return err
 	}
 	return writeJSON(app.Stdout, struct {
 		SchemaVersion int  `json:"schema_version"`
@@ -364,14 +376,17 @@ func (app App) runWorkspace(args []string) error {
 }
 
 func (app App) resolveWorkspace(workspace string) (string, error) {
-	if workspace != "" {
-		return workspace, nil
+	if workspace == "" {
+		current, err := zruntime.ResolveCurrentWorkspace(app.Paths)
+		if err != nil {
+			return "", err
+		}
+		workspace = current.Workspace
 	}
-	current, err := zruntime.ResolveCurrentWorkspace(app.Paths)
-	if err != nil {
+	if _, err := zruntime.ValidateWorkspace(app.Paths, workspace); err != nil {
 		return "", err
 	}
-	return current.Workspace, nil
+	return workspace, nil
 }
 
 func writeJSON(writer io.Writer, value any) error {

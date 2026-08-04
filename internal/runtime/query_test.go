@@ -1,7 +1,9 @@
 package runtime
 
 import (
+	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -20,6 +22,134 @@ func TestResolveScopesUsesCurrentAndExplicitIncludes(t *testing.T) {
 	}
 	if len(scopes.Includes) != 1 || scopes.Includes[0] != "personal" {
 		t.Fatalf("Includes = %v", scopes.Includes)
+	}
+}
+
+func TestResolveQueryScopesRejectsUnsafeMissingAndSymlinkScopes(t *testing.T) {
+	paths := queryTestPaths(t)
+	if err := CreateWorkspace(paths, "personal", fixedQueryNow()); err != nil {
+		t.Fatalf("CreateWorkspace(personal) error = %v", err)
+	}
+
+	for _, options := range []QueryScopeOptions{
+		{Workspace: "../outside"},
+		{Workspace: "missing"},
+		{Includes: []string{""}},
+		{Includes: []string{"../outside"}},
+		{Includes: []string{"missing"}},
+	} {
+		if _, err := ResolveQueryScopes(paths, options); err == nil {
+			t.Fatalf("ResolveQueryScopes(%#v) error = nil", options)
+		}
+	}
+
+	outside := t.TempDir()
+	if err := os.Symlink(outside, filepath.Join(paths.WorkspacesDir, "linked")); err != nil {
+		t.Fatalf("Symlink() error = %v", err)
+	}
+	for _, options := range []QueryScopeOptions{
+		{Workspace: "linked"},
+		{Includes: []string{"linked"}},
+	} {
+		if _, err := ResolveQueryScopes(paths, options); err == nil {
+			t.Fatalf("ResolveQueryScopes(symlink %#v) error = nil", options)
+		}
+	}
+
+	if _, err := TrustedQuery(paths, TrustedQueryOptions{Includes: []string{"missing"}, Query: "anything", Limit: 10}); err == nil {
+		t.Fatalf("TrustedQuery(missing include) error = nil")
+	}
+	if _, err := os.Stat(paths.IndexesDir); !os.IsNotExist(err) {
+		t.Fatalf("invalid query scope created indexes directory: stat error = %v", err)
+	}
+}
+
+func TestTrustedQueryFailsClosedWhenIndexIsStale(t *testing.T) {
+	paths := queryTestPaths(t)
+	store := ClaimStore{Paths: paths, Now: fixedQueryNow}
+	claim := queryClaim("clm_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "Stale Query Claim", ClaimBasisOwner)
+	claim.Body = "stale query body\n"
+	if _, err := store.WriteDraft("research", claim); err != nil {
+		t.Fatalf("WriteDraft() error = %v", err)
+	}
+	if _, err := store.Approve("research", claim.ID); err != nil {
+		t.Fatalf("Approve() error = %v", err)
+	}
+	idx := IndexStore{Paths: paths}
+	if _, err := idx.Rebuild("research"); err != nil {
+		t.Fatalf("Rebuild() error = %v", err)
+	}
+	claimPath := filepath.Join(paths.WorkspacesDir, "research", "wiki", "projects", claim.ID+".md")
+	contents, err := os.ReadFile(claimPath)
+	if err != nil {
+		t.Fatalf("ReadFile(claim) error = %v", err)
+	}
+	contents = []byte(strings.Replace(string(contents), "stale query body", "changed stale query body", 1))
+	if err := os.WriteFile(claimPath, contents, 0o644); err != nil {
+		t.Fatalf("WriteFile(changed claim) error = %v", err)
+	}
+	if _, err := TrustedQuery(paths, TrustedQueryOptions{Query: "stale query", Limit: 10}); err == nil || !strings.Contains(err.Error(), "stale") {
+		t.Fatalf("TrustedQuery() error = %v, want explicit stale error", err)
+	}
+}
+
+func TestTrustedQueryFailsClosedWhenIndexIsRejected(t *testing.T) {
+	paths := queryTestPaths(t)
+	legacyPath := filepath.Join(paths.WorkspacesDir, "research", "wiki", "projects", "legacy.md")
+	if err := os.WriteFile(legacyPath, []byte("legacy rejected input\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile(legacy) error = %v", err)
+	}
+	idx := IndexStore{Paths: paths}
+	if _, err := idx.Rebuild("research"); err != nil {
+		t.Fatalf("Rebuild() error = %v", err)
+	}
+	if _, err := TrustedQuery(paths, TrustedQueryOptions{Query: "anything", Limit: 10}); err == nil || !strings.Contains(err.Error(), "rejected") {
+		t.Fatalf("TrustedQuery() error = %v, want rejected error", err)
+	}
+}
+
+func TestUnrelatedValidClaimRejected(t *testing.T) {
+	paths := queryTestPaths(t)
+	store := ClaimStore{Paths: paths, Now: fixedQueryNow}
+	claim := queryClaim("clm_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "Valid Unrelated Claim", ClaimBasisOwner)
+	claim.Body = "valid unrelated trusted token\n"
+	if _, err := store.WriteDraft("research", claim); err != nil {
+		t.Fatalf("WriteDraft() error = %v", err)
+	}
+	if _, err := store.Approve("research", claim.ID); err != nil {
+		t.Fatalf("Approve() error = %v", err)
+	}
+	legacyPath := filepath.Join(paths.WorkspacesDir, "research", "wiki", "projects", "unrelated-legacy.md")
+	if err := os.WriteFile(legacyPath, []byte("unrelated invalid token\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile(legacy) error = %v", err)
+	}
+	idx := IndexStore{Paths: paths}
+	if _, err := idx.Rebuild("research"); err != nil {
+		t.Fatalf("Rebuild() error = %v", err)
+	}
+	if _, err := TrustedQuery(paths, TrustedQueryOptions{Query: "valid unrelated", Limit: 10}); err == nil || !strings.Contains(err.Error(), "rejected") {
+		t.Fatalf("TrustedQuery() error = %v, want rejected error for unrelated valid claim", err)
+	}
+}
+
+func TestTrustedQueryFailsClosedWhenIndexIsDirty(t *testing.T) {
+	paths := queryTestPaths(t)
+	idx := IndexStore{Paths: paths}
+	if _, err := idx.Rebuild("research"); err != nil {
+		t.Fatalf("Rebuild() error = %v", err)
+	}
+	if err := idx.MarkDirty("research"); err != nil {
+		t.Fatalf("MarkDirty() error = %v", err)
+	}
+	if _, err := TrustedQuery(paths, TrustedQueryOptions{Query: "anything", Limit: 10}); err == nil || !strings.Contains(err.Error(), "dirty") {
+		t.Fatalf("TrustedQuery() error = %v, want dirty error", err)
+	}
+}
+
+func TestTrustedQueryFailsClosedWhenIndexIsMissing(t *testing.T) {
+	paths := queryTestPaths(t)
+	if _, err := TrustedQuery(paths, TrustedQueryOptions{Query: "anything", Limit: 10}); err == nil || !strings.Contains(err.Error(), "does not exist") {
+		t.Fatalf("TrustedQuery() error = %v, want missing error", err)
 	}
 }
 

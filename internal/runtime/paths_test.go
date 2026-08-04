@@ -34,7 +34,7 @@ func TestIsSafeWorkspaceName(t *testing.T) {
 		}
 	}
 
-	invalid := []string{"", "Research", "../x", "a_b", "a/b", "x y"}
+	invalid := []string{"", " Research", "research ", "Research", "../x", "a_b", "a/b", "x y"}
 	for _, name := range invalid {
 		if IsSafeWorkspaceName(name) {
 			t.Fatalf("expected %q to be unsafe", name)

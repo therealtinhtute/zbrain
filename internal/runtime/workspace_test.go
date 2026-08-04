@@ -66,6 +66,37 @@ func TestCreateWorkspaceRejectsExistingWorkspace(t *testing.T) {
 	}
 }
 
+func TestResolveCurrentWorkspaceRejectsUnsafeMissingAndSymlinkWorkspace(t *testing.T) {
+	tmp := t.TempDir()
+	paths, err := ResolvePaths(Options{CWD: filepath.Join(tmp, "project"), HomeDir: tmp, RuntimeDir: filepath.Join(tmp, ".zbrain")})
+	if err != nil {
+		t.Fatalf("ResolvePaths() error = %v", err)
+	}
+	if err := CreateWorkspace(paths, "research", time.Now()); err != nil {
+		t.Fatalf("CreateWorkspace() error = %v", err)
+	}
+
+	for _, workspace := range []string{"../outside", "missing"} {
+		if err := WriteConfig(paths.ConfigFile, Config{DefaultWorkspace: workspace}); err != nil {
+			t.Fatalf("WriteConfig(%q) error = %v", workspace, err)
+		}
+		if _, err := ResolveCurrentWorkspace(paths); err == nil {
+			t.Fatalf("ResolveCurrentWorkspace(%q) error = nil", workspace)
+		}
+	}
+
+	outside := t.TempDir()
+	if err := os.Symlink(outside, filepath.Join(paths.WorkspacesDir, "linked")); err != nil {
+		t.Fatalf("Symlink() error = %v", err)
+	}
+	if err := WriteConfig(paths.ConfigFile, Config{DefaultWorkspace: "linked"}); err != nil {
+		t.Fatalf("WriteConfig(linked) error = %v", err)
+	}
+	if _, err := ResolveCurrentWorkspace(paths); err == nil {
+		t.Fatalf("ResolveCurrentWorkspace(symlink) error = nil")
+	}
+}
+
 func TestResolveCurrentWorkspaceReturnsJSONShape(t *testing.T) {
 	tmp := t.TempDir()
 	paths, err := ResolvePaths(Options{CWD: filepath.Join(tmp, "project"), HomeDir: tmp, RuntimeDir: filepath.Join(tmp, ".zbrain")})

@@ -1,9 +1,6 @@
 package runtime
 
 import (
-	"fmt"
-	"os"
-	"path/filepath"
 	"sort"
 )
 
@@ -87,7 +84,7 @@ func ResolveQueryScopes(paths Paths, options QueryScopeOptions) (QueryScopes, er
 	seen := map[string]bool{primary: true}
 	includes := []string{}
 	for _, include := range options.Includes {
-		if include == "" || seen[include] {
+		if seen[include] {
 			continue
 		}
 		if err := validateWorkspaceExists(paths, include); err != nil {
@@ -115,11 +112,14 @@ func TrustedQuery(paths Paths, options TrustedQueryOptions) (TrustedQueryRespons
 		Scopes:        scopes,
 	}
 	idx := IndexStore{Paths: paths}
-	for _, workspace := range append([]string{scopes.Primary}, scopes.Includes...) {
+	workspaces := append([]string{scopes.Primary}, scopes.Includes...)
+	for _, workspace := range workspaces {
 		if err := idx.CheckFresh(workspace); err != nil {
 			return TrustedQueryResponse{}, err
 		}
 		response.Index = append(response.Index, QueryIndexMetadata{Workspace: workspace, Fresh: true})
+	}
+	for _, workspace := range workspaces {
 		approved, err := idx.Search(workspace, SearchOptions{Query: options.Query, Statuses: []ClaimStatus{ClaimStatusApproved}, Limit: limit})
 		if err != nil {
 			return TrustedQueryResponse{}, err
@@ -215,14 +215,6 @@ func findQueryConflicts(paths Paths, claims []QueryClaim) ([]QueryConflict, erro
 }
 
 func validateWorkspaceExists(paths Paths, workspace string) error {
-	if !IsSafeWorkspaceName(workspace) {
-		return fmt.Errorf("workspace name must use lowercase letters, numbers, or hyphens only")
-	}
-	if _, err := os.Stat(filepath.Join(paths.WorkspacesDir, workspace)); err != nil {
-		if os.IsNotExist(err) {
-			return fmt.Errorf("workspace %q does not exist", workspace)
-		}
-		return err
-	}
-	return nil
+	_, err := ValidateWorkspace(paths, workspace)
+	return err
 }
