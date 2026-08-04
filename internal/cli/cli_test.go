@@ -520,8 +520,8 @@ func TestRunAskReportsFreshnessErrors(t *testing.T) {
 		}
 		app.Stdout = &bytes.Buffer{}
 		err := app.Run([]string{"ask", "anything"})
-		if err == nil || !strings.Contains(err.Error(), "stale") {
-			t.Fatalf("Run(ask) error = %v, want stale error", err)
+		if err == nil || !strings.Contains(err.Error(), "stale") || !strings.Contains(err.Error(), stalePath) || !strings.Contains(err.Error(), "run zbrain reindex") {
+			t.Fatalf("Run(ask) error = %v, want stale error naming %q and reindex recovery", err, stalePath)
 		}
 	})
 

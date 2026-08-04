@@ -175,8 +175,118 @@ func TestCheckFreshReportsStaleAfterCoveredInputEdit(t *testing.T) {
 	if err := os.WriteFile(claimPath, contents, 0o644); err != nil {
 		t.Fatalf("WriteFile(changed claim) error = %v", err)
 	}
-	if err := idx.CheckFresh("research"); err == nil || !strings.Contains(err.Error(), "stale") {
-		t.Fatalf("CheckFresh() error = %v, want explicit stale error", err)
+	freshErr := idx.CheckFresh("research")
+	if freshErr == nil || !strings.Contains(freshErr.Error(), "stale") || !strings.Contains(freshErr.Error(), claimPath) || !strings.Contains(freshErr.Error(), "run zbrain reindex") {
+		t.Fatalf("CheckFresh() error = %v, want stale error naming %q and reindex recovery", freshErr, claimPath)
+	}
+}
+
+func TestCheckFreshReportsStaleAfterNewWikiClaimAndReindex(t *testing.T) {
+	paths := indexTestPaths(t)
+	idx := IndexStore{Paths: paths}
+	if _, err := idx.Rebuild("research"); err != nil {
+		t.Fatalf("initial Rebuild() error = %v", err)
+	}
+	databasePath := indexDatabasePath(t, idx, "research")
+	databaseInfo, err := os.Stat(databasePath)
+	if err != nil {
+		t.Fatalf("Stat(database) error = %v", err)
+	}
+	claim := indexClaim("clm_eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee", "Hand Authored Claim", ClaimBasisOwner)
+	contents, err := RenderClaimMarkdown(claim)
+	if err != nil {
+		t.Fatalf("RenderClaimMarkdown() error = %v", err)
+	}
+	claimPath := filepath.Join(paths.WorkspacesDir, "research", "wiki", "projects", claim.ID+".md")
+	if err := os.WriteFile(claimPath, contents, 0o644); err != nil {
+		t.Fatalf("WriteFile(claim) error = %v", err)
+	}
+	newer := databaseInfo.ModTime().Add(time.Second)
+	if err := os.Chtimes(claimPath, newer, newer); err != nil {
+		t.Fatalf("Chtimes(claim) error = %v", err)
+	}
+
+	freshErr := idx.CheckFresh("research")
+	if freshErr == nil || !strings.Contains(freshErr.Error(), claimPath) || !strings.Contains(freshErr.Error(), "run zbrain reindex") {
+		t.Fatalf("CheckFresh() error = %v, want stale error naming %q and reindex recovery", freshErr, claimPath)
+	}
+
+	if _, err := idx.Rebuild("research"); err != nil {
+		t.Fatalf("recovery Rebuild() error = %v", err)
+	}
+	if err := idx.CheckFresh("research"); err != nil {
+		t.Fatalf("CheckFresh() error = %v after reindex", err)
+	}
+}
+
+func TestCheckFreshReportsStaleAfterTrustInputDeletion(t *testing.T) {
+	paths := indexTestPaths(t)
+	store := ClaimStore{Paths: paths, Now: fixedIndexNow}
+	claim := indexClaim("clm_ffffffffffffffffffffffffffffffff", "Deleted Claim", ClaimBasisOwner)
+	if _, err := store.WriteDraft("research", claim); err != nil {
+		t.Fatalf("WriteDraft() error = %v", err)
+	}
+	if _, err := store.Approve("research", claim.ID); err != nil {
+		t.Fatalf("Approve() error = %v", err)
+	}
+	idx := IndexStore{Paths: paths}
+	if _, err := idx.Rebuild("research"); err != nil {
+		t.Fatalf("Rebuild() error = %v", err)
+	}
+	claimPath := filepath.Join(paths.WorkspacesDir, "research", "wiki", "projects", claim.ID+".md")
+	if err := os.Remove(claimPath); err != nil {
+		t.Fatalf("Remove(claim) error = %v", err)
+	}
+	freshErr := idx.CheckFresh("research")
+	if freshErr == nil || !strings.Contains(freshErr.Error(), claimPath) || !strings.Contains(freshErr.Error(), "run zbrain reindex") {
+		t.Fatalf("CheckFresh() error = %v, want stale deletion error naming %q", freshErr, claimPath)
+	}
+}
+
+func TestCheckFreshReportsStaleAfterEvidenceEdit(t *testing.T) {
+	paths := indexTestPaths(t)
+	sourceRoot := filepath.Join(paths.WorkspacesDir, "research", "evidence", "sources", "evd_test")
+	if err := os.MkdirAll(sourceRoot, 0o755); err != nil {
+		t.Fatalf("MkdirAll(source) error = %v", err)
+	}
+	metadataPath := filepath.Join(sourceRoot, "source.yaml")
+	rawPath := filepath.Join(sourceRoot, "raw")
+	if err := os.WriteFile(metadataPath, []byte("id: evd_test\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile(metadata) error = %v", err)
+	}
+	if err := os.WriteFile(rawPath, []byte("original evidence\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile(raw) error = %v", err)
+	}
+	idx := IndexStore{Paths: paths}
+	if _, err := idx.Rebuild("research"); err != nil {
+		t.Fatalf("Rebuild() error = %v", err)
+	}
+	if err := os.WriteFile(rawPath, []byte("changed evidence\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile(changed raw) error = %v", err)
+	}
+	freshErr := idx.CheckFresh("research")
+	if freshErr == nil || !strings.Contains(freshErr.Error(), rawPath) || !strings.Contains(freshErr.Error(), "run zbrain reindex") {
+		t.Fatalf("CheckFresh() error = %v, want stale evidence error naming %q", freshErr, rawPath)
+	}
+}
+
+func TestCheckFreshRejectsNewWikiSymlink(t *testing.T) {
+	paths := indexTestPaths(t)
+	idx := IndexStore{Paths: paths}
+	if _, err := idx.Rebuild("research"); err != nil {
+		t.Fatalf("Rebuild() error = %v", err)
+	}
+	outsidePath := filepath.Join(t.TempDir(), "outside.md")
+	if err := os.WriteFile(outsidePath, []byte("outside\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile(outside) error = %v", err)
+	}
+	linkPath := filepath.Join(paths.WorkspacesDir, "research", "wiki", "projects", "linked.md")
+	if err := os.Symlink(outsidePath, linkPath); err != nil {
+		t.Fatalf("Symlink(linked claim) error = %v", err)
+	}
+	freshErr := idx.CheckFresh("research")
+	if freshErr == nil || !strings.Contains(freshErr.Error(), "symlink") || !strings.Contains(freshErr.Error(), linkPath) {
+		t.Fatalf("CheckFresh() error = %v, want symlink error naming %q", freshErr, linkPath)
 	}
 }
 
