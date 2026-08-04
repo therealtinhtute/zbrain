@@ -13,6 +13,13 @@ The current implementation is intentionally minimal:
 - `zbrain setup`
 - `zbrain workspace create <name>`
 - `zbrain workspace current`
+- `zbrain evidence add`
+- `zbrain claim draft`
+- `zbrain claim approve <id>`
+- `zbrain claim supersede <id>`
+- `zbrain claim revoke <id>`
+- `zbrain migrate okf`
+- `zbrain reindex`
 - `zbrain ask <query>`
 - `zbrain version`
 
