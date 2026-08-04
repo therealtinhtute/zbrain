@@ -202,6 +202,12 @@ needed for lexical retrieval.
 - the index is stale relative to workspace Markdown; or
 - a claim was rejected during the most recent rebuild.
 
+`zbrain reindex` reports rejected claim paths and reasons. Any outside edit,
+addition, deletion, or symlink under canonical wiki or evidence inputs makes
+the next `zbrain ask` fail closed with the offending path and instructs the
+operator to run `zbrain reindex`; retrieval is restored only after a clean
+rebuild.
+
 The digest check belongs at the index boundary, so normal queries do not need
 to reopen and rehash every returned claim. The outside-edit freshness check is
 a separate invariant: it prevents an already-built index from serving content

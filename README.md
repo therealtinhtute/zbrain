@@ -6,18 +6,18 @@ The current slice stores canonical OKF-style Markdown claim concepts, immutable 
 
 ## Current command surface
 
-```bash
+```text
 zbrain setup
 zbrain workspace create <name>
 zbrain workspace current
-zbrain evidence add --file <path> --origin <uri-or-path> [--media-type <type>]
-zbrain claim draft --tier <tier> --title <title> --basis <owner|evidence|derived>
+zbrain evidence add
+zbrain claim draft
 zbrain claim approve <id>
 zbrain claim supersede <id>
-zbrain claim revoke <id> --reason <reason>
-zbrain migrate okf [--workspace <name>]
-zbrain reindex [--workspace <name>]
-zbrain ask [--workspace <name>] [--include <name>] <query>
+zbrain claim revoke <id>
+zbrain migrate okf
+zbrain reindex
+zbrain ask <query>
 zbrain version
 ```
 
@@ -87,6 +87,8 @@ After `zbrain setup` and `zbrain workspace create research`:
 - Drafts appear only as `promotion_candidates`.
 - External factual claims need local immutable evidence snapshots.
 - Approval verifies referenced evidence hashes and records OKF `sources` plus `verified` metadata.
+- `zbrain reindex` rejects approved claims whose canonical content no longer matches `verified.digest` and reports the offending path.
+- `zbrain ask` fails closed when the index is dirty, missing, stale after an outside edit, or contains rejected claims.
 - Approved claims are replaced through superseding claims, not in-place mutation.
 - Explicit conflicts make `zbrain ask` fail closed with `status: "blocked"`.
 - Missing approved memory returns `status: "gap"`.
