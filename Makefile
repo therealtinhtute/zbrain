@@ -14,8 +14,9 @@ test: ## Run the Go test suite
 
 smoke: build ## Run smoke checks against dist/zbrain
 	./dist/zbrain --help
-	@tmp_home=$$(mktemp -d /tmp/zbrain-smoke.XXXXXX); \
-	source_file=$$(mktemp /tmp/zbrain-source.XXXXXX); \
+	@tmp_root=$$(cd "$${TMPDIR:-/tmp}" && pwd -P); \
+	tmp_home=$$(mktemp -d "$$tmp_root/zbrain-smoke.XXXXXX"); \
+	source_file=$$(mktemp "$$tmp_root/zbrain-source.XXXXXX"); \
 	printf 'trusted source bytes\n' > "$$source_file"; \
 	ZBRAIN_HOME="$$tmp_home" ./dist/zbrain setup; \
 	ZBRAIN_HOME="$$tmp_home" ./dist/zbrain workspace create research; \
