@@ -35,9 +35,18 @@ type ClaimMigrationSummary struct {
 }
 
 func (store ClaimStore) WriteDraft(workspace string, claim Claim) (Claim, error) {
-	if err := RecoverPendingTransitionForMutation(store.Paths, workspace); err != nil {
+	lock, err := acquireWorkspaceLock(store.Paths, workspace, true)
+	if err != nil {
 		return Claim{}, err
 	}
+	defer func() { _ = lock.Close() }()
+	if err := recoverPendingTransitionForMutationUnlocked(store.Paths, workspace); err != nil {
+		return Claim{}, err
+	}
+	return store.writeDraftUnlocked(workspace, claim)
+}
+
+func (store ClaimStore) writeDraftUnlocked(workspace string, claim Claim) (Claim, error) {
 	claim.Schema = ""
 	claim.Type = OKFClaimType
 	claim.Status = ClaimStatusDraft
@@ -61,9 +70,10 @@ func (store ClaimStore) WriteDraft(workspace string, claim Claim) (Claim, error)
 	} else if !os.IsNotExist(err) {
 		return Claim{}, err
 	}
-	if err := store.markDirty(workspace); err != nil {
+	if _, err := beginCanonicalMutationUnlocked(store.Paths, workspace); err != nil {
 		return Claim{}, err
 	}
+	runWorkspaceGenerationTestHook(workspaceGenerationHookBeforeCanonicalWrite)
 	if err := writeClaimAtomic(path, claim); err != nil {
 		return Claim{}, err
 	}
@@ -72,9 +82,18 @@ func (store ClaimStore) WriteDraft(workspace string, claim Claim) (Claim, error)
 }
 
 func (store ClaimStore) Approve(workspace string, id string) (Claim, error) {
-	if err := RecoverPendingTransitionForMutation(store.Paths, workspace); err != nil {
+	lock, err := acquireWorkspaceLock(store.Paths, workspace, true)
+	if err != nil {
 		return Claim{}, err
 	}
+	defer func() { _ = lock.Close() }()
+	if err := recoverPendingTransitionForMutationUnlocked(store.Paths, workspace); err != nil {
+		return Claim{}, err
+	}
+	return store.approveUnlocked(workspace, id)
+}
+
+func (store ClaimStore) approveUnlocked(workspace string, id string) (Claim, error) {
 	claim, err := store.Read(workspace, id)
 	if err != nil {
 		return Claim{}, err
@@ -152,18 +171,20 @@ func (store ClaimStore) Approve(workspace string, id string) (Claim, error) {
 		}
 		pending = &prepared
 	}
-	if err := store.markDirty(workspace); err != nil {
+	if _, err := beginCanonicalMutationUnlocked(store.Paths, workspace); err != nil {
 		return Claim{}, err
 	}
 	if pending != nil {
-		if err := WritePendingTransition(store.Paths, workspace, *pending); err != nil {
+		if err := writePendingTransitionUnlocked(store.Paths, workspace, *pending); err != nil {
 			return Claim{}, err
 		}
-		if err := RecoverPendingTransition(store.Paths, workspace); err != nil {
+		runWorkspaceGenerationTestHook(workspaceGenerationHookBeforeCanonicalWrite)
+		if err := recoverPendingTransitionUnlocked(store.Paths, workspace); err != nil {
 			return Claim{}, err
 		}
 		return claim, nil
 	}
+	runWorkspaceGenerationTestHook(workspaceGenerationHookBeforeCanonicalWrite)
 	if err := store.writeExisting(workspace, claim); err != nil {
 		return Claim{}, err
 	}
@@ -171,7 +192,12 @@ func (store ClaimStore) Approve(workspace string, id string) (Claim, error) {
 }
 
 func (store ClaimStore) WriteSupersedingDraft(workspace string, currentID string, replacement Claim) (Claim, error) {
-	if err := RecoverPendingTransitionForMutation(store.Paths, workspace); err != nil {
+	lock, err := acquireWorkspaceLock(store.Paths, workspace, true)
+	if err != nil {
+		return Claim{}, err
+	}
+	defer func() { _ = lock.Close() }()
+	if err := recoverPendingTransitionForMutationUnlocked(store.Paths, workspace); err != nil {
 		return Claim{}, err
 	}
 	current, err := store.Read(workspace, currentID)
@@ -182,11 +208,16 @@ func (store ClaimStore) WriteSupersedingDraft(workspace string, currentID string
 		return Claim{}, fmt.Errorf("claim %s is %s; only approved claims can be superseded", currentID, current.Status)
 	}
 	replacement.Supersedes = appendUniqueClaimID(replacement.Supersedes, currentID)
-	return store.WriteDraft(workspace, replacement)
+	return store.writeDraftUnlocked(workspace, replacement)
 }
 
 func (store ClaimStore) Revoke(workspace string, id string, reason string) (Claim, error) {
-	if err := RecoverPendingTransitionForMutation(store.Paths, workspace); err != nil {
+	lock, err := acquireWorkspaceLock(store.Paths, workspace, true)
+	if err != nil {
+		return Claim{}, err
+	}
+	defer func() { _ = lock.Close() }()
+	if err := recoverPendingTransitionForMutationUnlocked(store.Paths, workspace); err != nil {
 		return Claim{}, err
 	}
 	claim, err := store.Read(workspace, id)
@@ -208,9 +239,10 @@ func (store ClaimStore) Revoke(workspace string, id string, reason string) (Clai
 		RelatedClaimIDs:         []string{id},
 		PriorVerificationDigest: claim.VerifiedDigest,
 	})
-	if err := store.markDirty(workspace); err != nil {
+	if _, err := beginCanonicalMutationUnlocked(store.Paths, workspace); err != nil {
 		return Claim{}, err
 	}
+	runWorkspaceGenerationTestHook(workspaceGenerationHookBeforeCanonicalWrite)
 	if err := store.writeExisting(workspace, claim); err != nil {
 		return Claim{}, err
 	}
@@ -315,10 +347,15 @@ func (store ClaimStore) scanWorkspace(workspace string, verifyDigests bool) (Cla
 }
 
 func (store ClaimStore) MigrateOKF(workspace string) (ClaimMigrationSummary, error) {
-	if err := RecoverPendingTransitionForMutation(store.Paths, workspace); err != nil {
+	lock, err := acquireWorkspaceLock(store.Paths, workspace, true)
+	if err != nil {
 		return ClaimMigrationSummary{}, err
 	}
-	scan, err := store.ScanWorkspace(workspace)
+	defer func() { _ = lock.Close() }()
+	if err := recoverPendingTransitionForMutationUnlocked(store.Paths, workspace); err != nil {
+		return ClaimMigrationSummary{}, err
+	}
+	scan, err := store.scanWorkspace(workspace, true)
 	if err != nil {
 		return ClaimMigrationSummary{}, err
 	}
@@ -336,9 +373,10 @@ func (store ClaimStore) MigrateOKF(workspace string) (ClaimMigrationSummary, err
 	if len(migrated) == 0 {
 		return summary, nil
 	}
-	if err := store.markDirty(workspace); err != nil {
+	if _, err := beginCanonicalMutationUnlocked(store.Paths, workspace); err != nil {
 		return ClaimMigrationSummary{}, err
 	}
+	runWorkspaceGenerationTestHook(workspaceGenerationHookBeforeCanonicalWrite)
 	for _, claim := range migrated {
 		if err := store.writeExisting(workspace, claim); err != nil {
 			return ClaimMigrationSummary{}, err
