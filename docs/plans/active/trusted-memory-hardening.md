@@ -556,4 +556,4 @@ updated: 2026-08-05
 - latest_handoff_id: 01KZ8QK3J8Q2T5PF0VAFRDH1QM
 - blockers: none
 - open_items: [execute the planned trust and skills phases; preserve all 8 story IDs; release proof remains gated on every prerequisite phase]
-- exact_next_action: commit and push workspace-generation-coordination, then start content-digest-evidence
+- exact_next_action: start content-digest-evidence wave 1 from commit a8e9eb8
