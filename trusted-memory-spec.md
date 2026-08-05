@@ -83,8 +83,12 @@ isolated tests and smoke runs.
 ~/.zbrain/
   config.yml
   assets/
+  indexes/
+    <workspace>.sqlite
+    <workspace>.dirty       # present while a rebuild is incomplete
   workspaces/<workspace>/
     workspace.md
+    agents/
     wiki/
       axioms/
       mental-models/
@@ -97,9 +101,6 @@ isolated tests and smoke runs.
       qa/
       applied/
       archive/
-    indexes/
-      <workspace>.sqlite
-      <workspace>.dirty   # present only while a rebuild is incomplete
 ```
 
 Markdown is canonical. SQLite is a disposable derived cache. A database row,
@@ -187,10 +188,10 @@ needed for lexical retrieval.
 
 `zbrain reindex` must:
 
-1. scan the workspace without mutating canonical Markdown;
-2. classify parse failures, digest failures, and legacy-unindexed documents;
+1. scan the workspace without mutating canonical Markdown or immutable evidence;
+2. classify parse failures, digest failures, invalid evidence, invalid supporting-claim closures, dependency cycles, and legacy-unindexed documents;
 3. insert only valid claims into the temporary index;
-4. publish the rebuilt database atomically;
+4. publish the rebuilt database and its `clean` or `rejected` state atomically;
 5. remove the dirty marker only after publication succeeds; and
 6. return counts plus enough path/reason data for an operator to repair
    invalid input.
@@ -213,14 +214,10 @@ to reopen and rehash every returned claim. The outside-edit freshness check is
 a separate invariant: it prevents an already-built index from serving content
 that changed after the rebuild.
 
-The active plan [`docs/plans/active/trusted-single-runtime.md`](docs/plans/active/trusted-single-runtime.md)
-closes the two remaining implementation gaps in order:
-
-1. `digest-verification` rejects mismatched approved claims during `reindex`.
-2. `index-staleness` rejects an index after Markdown changes outside the CLI.
-
-Until both are checked, the contract is authoritative but the implementation
-is incomplete; the gap must not be hidden by the query layer.
+Digest verification, recursive supporting-claim and evidence validation, and
+outside-edit freshness checks are enforced at the rebuild boundary. Rejected
+rebuild state remains fail-closed through `zbrain ask`; rebuilding never repairs,
+rewrites, deletes, or auto-revokes invalid canonical inputs.
 
 ## 9. Trusted Query Contract
 

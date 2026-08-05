@@ -64,23 +64,30 @@ assets/             source of truth for runtime assets embedded via Go embed
 
 Default runtime root: `~/.zbrain/`.
 
-Workspace layout:
+Runtime and workspace layout:
 
 ```text
-workspaces/<workspace>/
-  workspace.md
-  wiki/
-    axioms/
-    mental-models/
-    projects/
-    decisions/
-  evidence/
-    _index.md
-    sources/
-    analysis/
-    qa/
-    applied/
-    archive/
+~/.zbrain/
+  config.yml
+  assets/
+  indexes/
+    <workspace>.sqlite
+    <workspace>.dirty        # present while a rebuild is incomplete
+  workspaces/<workspace>/
+    workspace.md
+    agents/
+    wiki/
+      axioms/
+      mental-models/
+      projects/
+      decisions/
+    evidence/
+      _index.md
+      sources/
+      analysis/
+      qa/
+      applied/
+      archive/
 ```
 
-`zbrain workspace current` prints JSON and currently resolves from `config.yml` `default_workspace`.
+`zbrain workspace current` prints JSON and currently resolves from `config.yml` `default_workspace`. `ZBRAIN_HOME` replaces `~/.zbrain/` for isolated tests and smoke runs.
