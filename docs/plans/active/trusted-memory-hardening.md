@@ -464,7 +464,7 @@ updated: 2026-08-05
 - latest_run_id: none
 - latest_trace_ids: []
 - latest_check_id: none
-- latest_handoff_id: none
-- blockers: none
-- open_items: [execute the planned trust and skills phases; release proof remains gated on every prerequisite phase]
+- latest_handoff_id: 01KZ8QK3J8Q2T5PF0VAFRDH1QM
+- blockers: implementation run and phase check do not exist yet; unblock with `work full canonical-index-binding`, then `check full`.
+- open_items: [execute the planned trust and skills phases; preserve all 8 story IDs; release proof remains gated on every prerequisite phase]
 - exact_next_action: work full canonical-index-binding
