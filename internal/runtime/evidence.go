@@ -73,6 +73,14 @@ func NewEvidenceID() (string, error) {
 }
 
 func (store EvidenceStore) AddFile(workspace string, sourcePath string, origin string, mediaType string) (Evidence, error) {
+	lock, err := acquireWorkspaceLock(store.Paths, workspace, true)
+	if err != nil {
+		return Evidence{}, err
+	}
+	defer func() { _ = lock.Close() }()
+	if err := recoverPendingTransitionForMutationUnlocked(store.Paths, workspace); err != nil {
+		return Evidence{}, err
+	}
 	if _, err := ValidateWorkspace(store.Paths, workspace); err != nil {
 		return Evidence{}, err
 	}
@@ -101,7 +109,7 @@ func (store EvidenceStore) AddFile(workspace string, sourcePath string, origin s
 	} else if !os.IsNotExist(err) {
 		return Evidence{}, err
 	}
-	if err := store.markDirty(workspace); err != nil {
+	if _, err := beginCanonicalMutationUnlocked(store.Paths, workspace); err != nil {
 		return Evidence{}, err
 	}
 	if err := os.MkdirAll(root, 0o755); err != nil {
@@ -118,6 +126,7 @@ func (store EvidenceStore) AddFile(workspace string, sourcePath string, origin s
 	if err != nil {
 		return Evidence{}, err
 	}
+	runWorkspaceGenerationTestHook(workspaceGenerationHookBeforeCanonicalWrite)
 	raw, err := os.OpenFile(rawPath, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o444)
 	if err != nil {
 		return Evidence{}, err

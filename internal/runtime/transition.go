@@ -49,6 +49,15 @@ func PendingTransitionPath(paths Paths, workspace string) (string, error) {
 }
 
 func WritePendingTransition(paths Paths, workspace string, pending PendingTransition) error {
+	lock, err := acquireWorkspaceLock(paths, workspace, true)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = lock.Close() }()
+	return writePendingTransitionUnlocked(paths, workspace, pending)
+}
+
+func writePendingTransitionUnlocked(paths Paths, workspace string, pending PendingTransition) error {
 	journalPath, err := PendingTransitionPath(paths, workspace)
 	if err != nil {
 		return err
@@ -94,6 +103,15 @@ func WritePendingTransition(paths Paths, workspace string, pending PendingTransi
 }
 
 func ReadPendingTransition(paths Paths, workspace string) (PendingTransition, error) {
+	lock, err := acquireWorkspaceLock(paths, workspace, false)
+	if err != nil {
+		return PendingTransition{}, err
+	}
+	defer func() { _ = lock.Close() }()
+	return readPendingTransitionUnlocked(paths, workspace)
+}
+
+func readPendingTransitionUnlocked(paths Paths, workspace string) (PendingTransition, error) {
 	journalPath, err := PendingTransitionPath(paths, workspace)
 	if err != nil {
 		return PendingTransition{}, err
@@ -114,7 +132,16 @@ func ReadPendingTransition(paths Paths, workspace string) (PendingTransition, er
 
 // CheckPendingTransition is read-only and blocks trust while a journal exists.
 func CheckPendingTransition(paths Paths, workspace string) error {
-	pending, err := ReadPendingTransition(paths, workspace)
+	lock, err := acquireWorkspaceLock(paths, workspace, false)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = lock.Close() }()
+	return checkPendingTransitionUnlocked(paths, workspace)
+}
+
+func checkPendingTransitionUnlocked(paths Paths, workspace string) error {
+	pending, err := readPendingTransitionUnlocked(paths, workspace)
 	if os.IsNotExist(err) {
 		return nil
 	}
@@ -126,24 +153,42 @@ func CheckPendingTransition(paths Paths, workspace string) error {
 
 // RecoverPendingTransitionForMutation marks the index dirty before applying a pending journal.
 func RecoverPendingTransitionForMutation(paths Paths, workspace string) error {
-	pending, err := ReadPendingTransition(paths, workspace)
+	lock, err := acquireWorkspaceLock(paths, workspace, true)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = lock.Close() }()
+	return recoverPendingTransitionForMutationUnlocked(paths, workspace)
+}
+
+func recoverPendingTransitionForMutationUnlocked(paths Paths, workspace string) error {
+	pending, err := readPendingTransitionUnlocked(paths, workspace)
 	if os.IsNotExist(err) {
 		return nil
 	}
 	if err != nil {
 		return fmt.Errorf("workspace %q pending transition is invalid: %w", workspace, err)
 	}
-	if err := (IndexStore{Paths: paths}).MarkDirty(workspace); err != nil {
+	if _, err := beginCanonicalMutationUnlocked(paths, workspace); err != nil {
 		return fmt.Errorf("mark workspace dirty before pending transition recovery: %w", err)
 	}
-	if err := RecoverPendingTransition(paths, workspace); err != nil {
+	if err := recoverPendingTransitionUnlocked(paths, workspace); err != nil {
 		return fmt.Errorf("recover pending transition %q: %w", pending.OperationID, err)
 	}
 	return nil
 }
 
 func RecoverPendingTransition(paths Paths, workspace string) error {
-	pending, err := ReadPendingTransition(paths, workspace)
+	lock, err := acquireWorkspaceLock(paths, workspace, true)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = lock.Close() }()
+	return recoverPendingTransitionUnlocked(paths, workspace)
+}
+
+func recoverPendingTransitionUnlocked(paths Paths, workspace string) error {
+	pending, err := readPendingTransitionUnlocked(paths, workspace)
 	if os.IsNotExist(err) {
 		return nil
 	}

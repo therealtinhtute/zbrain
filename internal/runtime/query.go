@@ -117,14 +117,30 @@ func TrustedQuery(paths Paths, options TrustedQueryOptions) (TrustedQueryRespons
 	}
 	idx := IndexStore{Paths: paths}
 	workspaces := append([]string{scopes.Primary}, scopes.Includes...)
+	lockWorkspaces := append([]string(nil), workspaces...)
+	sort.Strings(lockWorkspaces)
+	locks := make([]*workspaceLock, 0, len(lockWorkspaces))
+	defer func() {
+		for i := len(locks) - 1; i >= 0; i-- {
+			_ = locks[i].Close()
+		}
+	}()
+	for _, workspace := range lockWorkspaces {
+		lock, err := acquireWorkspaceLock(paths, workspace, false)
+		if err != nil {
+			return TrustedQueryResponse{}, err
+		}
+		locks = append(locks, lock)
+	}
+	runWorkspaceGenerationTestHook(workspaceGenerationHookTrustedQueryAfterLocking)
 	for _, workspace := range workspaces {
-		if err := idx.CheckFresh(workspace); err != nil {
+		if err := idx.checkFreshUnlocked(workspace); err != nil {
 			return TrustedQueryResponse{}, err
 		}
 		response.Index = append(response.Index, QueryIndexMetadata{Workspace: workspace, Fresh: true})
 	}
 	for _, workspace := range workspaces {
-		approved, err := idx.Search(workspace, SearchOptions{Query: options.Query, Statuses: []ClaimStatus{ClaimStatusApproved}, Limit: limit})
+		approved, err := idx.searchUnlocked(workspace, SearchOptions{Query: options.Query, Statuses: []ClaimStatus{ClaimStatusApproved}, Limit: limit})
 		if err != nil {
 			return TrustedQueryResponse{}, err
 		}
@@ -134,7 +150,7 @@ func TrustedQuery(paths Paths, options TrustedQueryOptions) (TrustedQueryRespons
 			}
 			response.Claims = append(response.Claims, toQueryClaim(workspace, claim))
 		}
-		drafts, err := idx.Search(workspace, SearchOptions{Query: options.Query, Statuses: []ClaimStatus{ClaimStatusDraft}, Limit: limit})
+		drafts, err := idx.searchUnlocked(workspace, SearchOptions{Query: options.Query, Statuses: []ClaimStatus{ClaimStatusDraft}, Limit: limit})
 		if err != nil {
 			return TrustedQueryResponse{}, err
 		}

@@ -149,6 +149,15 @@ func (store IndexStore) AssertFTS5() error {
 }
 
 func (store IndexStore) MarkDirty(workspace string) error {
+	lock, err := acquireWorkspaceLock(store.Paths, workspace, true)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = lock.Close() }()
+	return store.markDirtyUnlocked(workspace)
+}
+
+func (store IndexStore) markDirtyUnlocked(workspace string) error {
 	_, dirtyPath, err := store.validatedIndexPaths(workspace)
 	if err != nil {
 		return err
@@ -160,11 +169,20 @@ func (store IndexStore) MarkDirty(workspace string) error {
 }
 
 func (store IndexStore) CheckFresh(workspace string) error {
+	lock, err := acquireWorkspaceLock(store.Paths, workspace, false)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = lock.Close() }()
+	return store.checkFreshUnlocked(workspace)
+}
+
+func (store IndexStore) checkFreshUnlocked(workspace string) error {
 	databasePath, dirtyPath, err := store.validatedIndexPaths(workspace)
 	if err != nil {
 		return err
 	}
-	if err := CheckPendingTransition(store.Paths, workspace); err != nil {
+	if err := checkPendingTransitionUnlocked(store.Paths, workspace); err != nil {
 		return err
 	}
 	if _, err := os.Stat(dirtyPath); err == nil {
@@ -193,6 +211,13 @@ func (store IndexStore) CheckFresh(workspace string) error {
 	}
 	if state.Status != RebuildStatusClean {
 		return fmt.Errorf("workspace %q index state is malformed: unsupported rebuild status %q", workspace, state.Status)
+	}
+	generation, err := readWorkspaceGeneration(store.Paths, workspace)
+	if err != nil {
+		return fmt.Errorf("workspace %q generation state is malformed or missing: %w; run zbrain reindex", workspace, err)
+	}
+	if generation.Current != generation.Published {
+		return fmt.Errorf("workspace %q index generation is unpublished; run zbrain reindex", workspace)
 	}
 
 	workspaceRoot, err := ValidateWorkspace(store.Paths, workspace)
@@ -584,27 +609,55 @@ func (store IndexStore) Rebuild(workspace string) (IndexSummary, error) {
 	if err != nil {
 		return IndexSummary{}, err
 	}
-	if err := RecoverPendingTransitionForMutation(store.Paths, workspace); err != nil {
+	startLock, err := acquireWorkspaceLock(store.Paths, workspace, true)
+	if err != nil {
 		return IndexSummary{}, err
 	}
+	startLockOpen := true
+	defer func() {
+		if startLockOpen {
+			_ = startLock.Close()
+		}
+	}()
+	if _, err := ensureWorkspaceGenerationUnlocked(store.Paths, workspace); err != nil {
+		return IndexSummary{}, fmt.Errorf("prepare workspace generation: %w", err)
+	}
+	if err := recoverPendingTransitionForMutationUnlocked(store.Paths, workspace); err != nil {
+		return IndexSummary{}, err
+	}
+	generation, err := readWorkspaceGeneration(store.Paths, workspace)
+	if err != nil {
+		return IndexSummary{}, fmt.Errorf("read workspace generation: %w", err)
+	}
+	if err := store.markDirtyUnlocked(workspace); err != nil {
+		return IndexSummary{}, err
+	}
+	observedGeneration := generation.Current
+	if err := startLock.Close(); err != nil {
+		return IndexSummary{}, err
+	}
+	startLockOpen = false
+
 	if err := store.AssertFTS5(); err != nil {
 		return IndexSummary{}, err
 	}
 	if err := os.MkdirAll(store.Paths.IndexesDir, 0o755); err != nil {
 		return IndexSummary{}, err
 	}
-	if err := store.MarkDirty(workspace); err != nil {
+	temporary, err := os.CreateTemp(store.Paths.IndexesDir, workspace+".sqlite.*.tmp")
+	if err != nil {
 		return IndexSummary{}, err
 	}
-	tmpPath := databasePath + ".tmp"
-	if err := os.Remove(tmpPath); err != nil && !os.IsNotExist(err) {
+	tmpPath := temporary.Name()
+	defer func() { _ = os.Remove(tmpPath) }()
+	if err := temporary.Close(); err != nil {
 		return IndexSummary{}, err
 	}
 	db, err := sql.Open("sqlite", tmpPath)
 	if err != nil {
 		return IndexSummary{}, err
 	}
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 	if err := createIndexSchema(db); err != nil {
 		return IndexSummary{}, err
 	}
@@ -617,6 +670,7 @@ func (store IndexStore) Rebuild(workspace string) (IndexSummary, error) {
 	if err != nil {
 		return IndexSummary{}, err
 	}
+	runWorkspaceGenerationTestHook(workspaceGenerationHookRebuildAfterScan)
 	manifest, err := BuildTrustInputManifest(store.Paths, workspace)
 	if err != nil {
 		return IndexSummary{}, err
@@ -703,6 +757,33 @@ func (store IndexStore) Rebuild(workspace string) (IndexSummary, error) {
 	if err := db.Close(); err != nil {
 		return IndexSummary{}, err
 	}
+	runWorkspaceGenerationTestHook(workspaceGenerationHookRebuildBeforePublication)
+
+	publicationLock, err := acquireWorkspaceLock(store.Paths, workspace, true)
+	if err != nil {
+		return IndexSummary{}, err
+	}
+	published := false
+	defer func() {
+		if !published {
+			_ = store.markDirtyUnlocked(workspace)
+		}
+		_ = publicationLock.Close()
+	}()
+	databasePath, dirtyPath, err = store.validatedIndexPaths(workspace)
+	if err != nil {
+		return IndexSummary{}, err
+	}
+	if err := checkPendingTransitionUnlocked(store.Paths, workspace); err != nil {
+		return IndexSummary{}, err
+	}
+	generation, err = readWorkspaceGeneration(store.Paths, workspace)
+	if err != nil {
+		return IndexSummary{}, fmt.Errorf("read workspace generation before publication: %w", err)
+	}
+	if generation.Current != observedGeneration {
+		return IndexSummary{}, fmt.Errorf("workspace %q changed during rebuild; run zbrain reindex", workspace)
+	}
 	if err := os.Rename(tmpPath, databasePath); err != nil {
 		return IndexSummary{}, err
 	}
@@ -710,9 +791,14 @@ func (store IndexStore) Rebuild(workspace string) (IndexSummary, error) {
 	if err := os.Chtimes(databasePath, publishedAt, publishedAt); err != nil {
 		return IndexSummary{}, fmt.Errorf("set index mtime: %w", err)
 	}
+	generation.Published = generation.Current
+	if err := writeWorkspaceGeneration(store.Paths, workspace, generation); err != nil {
+		return IndexSummary{}, fmt.Errorf("publish workspace generation: %w", err)
+	}
 	if err := os.Remove(dirtyPath); err != nil && !os.IsNotExist(err) {
 		return IndexSummary{}, err
 	}
+	published = true
 	return summary, nil
 }
 
@@ -729,6 +815,15 @@ func sameTrustInputManifest(left TrustInputManifest, right TrustInputManifest) b
 }
 
 func (store IndexStore) Search(workspace string, options SearchOptions) ([]IndexedClaim, error) {
+	lock, err := acquireWorkspaceLock(store.Paths, workspace, false)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = lock.Close() }()
+	return store.searchUnlocked(workspace, options)
+}
+
+func (store IndexStore) searchUnlocked(workspace string, options SearchOptions) ([]IndexedClaim, error) {
 	databasePath, _, err := store.validatedIndexPaths(workspace)
 	if err != nil {
 		return nil, err
@@ -742,7 +837,7 @@ func (store IndexStore) Search(workspace string, options SearchOptions) ([]Index
 	if len(options.Statuses) == 0 {
 		return nil, fmt.Errorf("at least one status filter is required")
 	}
-	if err := store.CheckFresh(workspace); err != nil {
+	if err := store.checkFreshUnlocked(workspace); err != nil {
 		return nil, err
 	}
 	db, err := sql.Open("sqlite", databasePath)

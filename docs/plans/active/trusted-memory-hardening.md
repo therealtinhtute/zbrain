@@ -135,7 +135,7 @@ updated: 2026-08-05
 
   - phase_slug: workspace-generation-coordination
     story_id: 01KZ962RJHNRTBPZCJVJGGBMEY
-    status: planned
+    status: checked
     goal: Coordinate mutation, rebuild, publication, and query freshness so concurrent work cannot publish or serve a stale clean index.
     depends_on: canonical-index-binding
     allowed_surfaces: [internal/runtime/index.go, internal/runtime/transition.go, internal/runtime/claim_store.go, internal/runtime/query.go, internal/runtime/*_test.go]
@@ -478,6 +478,36 @@ updated: 2026-08-05
   exact_verification: "TMPDIR=/private/tmp/zbrain-safe go test ./internal/runtime -run '^TestCanonicalIndexBinding' -count=1 -v -> pass; body, status, path, digest, and missing-target SQLite mutations fail closed while canonical bytes remain unchanged"
   changed_surfaces: [internal/runtime/query_test.go]
   blocker: none
+- timestamp: 2026-08-05T15:24:01Z
+  phase: workspace-generation-coordination
+  wave: phase-start
+  task: phase-start
+  task_status: in-progress
+  run_id: 01KZ98C82FGJ8K8FXP4QWX3STP
+  trace_id: none
+  verification: not-run
+  changed_surfaces: []
+  blocker: none
+- timestamp: 2026-08-05T23:49:53Z
+  phase: workspace-generation-coordination
+  wave: 1
+  task: wgc-1
+  task_status: DONE
+  run_id: 01KZ98C82FGJ8K8FXP4QWX3STP
+  trace_id: none
+  exact_verification: "TMPDIR=/private/tmp/zbrain-safe go test ./internal/runtime -run '^TestWorkspaceGeneration' -count=1 -v -> pass; workspace-local advisory locks, dirty-before-write, current/published generation state, recovery ownership, and generation-checked rebuild publication are implemented"
+  changed_surfaces: [internal/runtime/coordination.go, internal/runtime/index.go, internal/runtime/transition.go, internal/runtime/claim_store.go, internal/runtime/evidence.go, internal/runtime/query.go, go.mod]
+  blocker: none
+- timestamp: 2026-08-05T23:49:53Z
+  phase: workspace-generation-coordination
+  wave: 1
+  task: wgc-2
+  task_status: DONE
+  run_id: 01KZ98C82FGJ8K8FXP4QWX3STP
+  trace_id: 01KZA5AMWH7W8XCJCJ66CYMKTA
+  exact_verification: "TMPDIR=/private/tmp/zbrain-safe go test -race ./internal/runtime -run '^TestWorkspaceGeneration' -count=1 -v -> pass; deterministic interleavings cover mutation before canonical write, mutation during scan/publication, shared-query locking, pending recovery, and missing/malformed generation state"
+  changed_surfaces: [internal/runtime/workspace_generation_test.go]
+  blocker: none
 
 ## Decisions
 <!-- Append-only durable entries record timestamp, phase/task, decision, and rationale. -->
@@ -501,14 +531,29 @@ updated: 2026-08-05
   check_id: 01KZ97H6KYTC027KZ470B8XT3V
   verdict: APPROVED
   proof_gaps: same-session review; default macOS TMPDIR test invocation remains blocked by the existing /var/folders symlink boundary guard, while the canonical safe-temp invocation passes
+- timestamp: 2026-08-05T23:52:31Z
+  phase: workspace-generation-coordination
+  commands:
+    - TMPDIR=/private/tmp/zbrain-safe go test ./internal/runtime -run '^TestWorkspaceGeneration' -count=1 -v -> pass; 7 deterministic WGC tests passed
+    - TMPDIR=/private/tmp/zbrain-safe go test -race ./internal/runtime -run '^TestWorkspaceGeneration' -count=1 -v -> pass; all WGC race tests passed
+    - TMPDIR=/private/tmp/zbrain-safe go test ./... -> pass
+    - TMPDIR=/private/tmp/zbrain-safe go vet ./... -> pass
+    - TMPDIR=/private/tmp/zbrain-safe go test -race ./internal/runtime ./internal/cli -> pass
+    - TMPDIR=/private/tmp/zbrain-safe go test ./... && TMPDIR=/private/tmp/zbrain-safe make build && TMPDIR=/private/tmp/zbrain-safe make smoke -> pass; isolated setup, workspace creation, claim approval, reindex, and trusted ask completed
+    - git diff --check -> pass
+    - credential-pattern scan over changed lines -> pass
+  run_id: 01KZ98C82FGJ8K8FXP4QWX3STP
+  check_id: 01KZA5ERJS5V9H551MVYPHYPTA
+  verdict: APPROVED
+  proof_gaps: same-session review; lock behavior was not independently reviewed by a second agent; default macOS TMPDIR invocation remains blocked by the existing /var/folders symlink boundary guard, while safe-temp commands pass
 
 ## Current State and Next Action
-- active_phase: canonical-index-binding
+- active_phase: workspace-generation-coordination
 - lifecycle_status: checked
-- latest_run_id: 01KZ9659369MJDN0GWPB1QMH2Z
-- latest_trace_ids: [01KZ97BER63HT2S0GJ4FB7EYWZ]
-- latest_check_id: 01KZ97H6KYTC027KZ470B8XT3V
+- latest_run_id: 01KZ98C82FGJ8K8FXP4QWX3STP
+- latest_trace_ids: [01KZA5AMWH7W8XCJCJ66CYMKTA]
+- latest_check_id: 01KZA5ERJS5V9H551MVYPHYPTA
 - latest_handoff_id: 01KZ8QK3J8Q2T5PF0VAFRDH1QM
 - blockers: none
 - open_items: [execute the planned trust and skills phases; preserve all 8 story IDs; release proof remains gated on every prerequisite phase]
-- exact_next_action: handoff
+- exact_next_action: commit and push workspace-generation-coordination, then start content-digest-evidence
