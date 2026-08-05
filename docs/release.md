@@ -1,51 +1,67 @@
-# Release Notes
+# Release Proof
 
 ## Build
 
-Generate embedded runtime assets, then compile the standalone executable:
+zbrain is a standalone Go binary. Build it with the repository target:
 
 ```bash
-bun run build
+make build
 ```
 
-This produces `dist/zbrain`.
+This runs `go build -o dist/zbrain ./cmd/zbrain` and produces `dist/zbrain`.
+No JavaScript runtime, package manager, or external retrieval service is required.
 
 ## Packaging Strategy
 
-Validated in this repo:
+Build on the target platform with the same Go-native command. The binary embeds
+the runtime content from `assets/`; `zbrain setup` extracts that content into the
+selected runtime root.
 
-- standalone compile via `bun build --compile`
-- binary smoke checks with `./dist/zbrain --help`
-- binary runtime extraction with `ZBRAIN_HOME=/tmp/... ./dist/zbrain setup`
+## Acceptance and Smoke Checks
 
-Platform packaging guidance:
-
-- macOS arm64: run `bun run build` on a macOS arm64 runner
-- Linux x64: run `bun run build` on a Linux x64 runner
-- Windows x64: run `bun run build` on a Windows x64 runner
-
-Inference:
-
-- local `bun build --help` exposes `--compile` for standalone executables and Windows-specific compile flags
-- the local help output in this environment does not expose an explicit cross-platform target triple for standalone executables
-- the reproducible manual path is therefore one native build per target platform class
-
-## Binary Smoke Checks
+Verify the command surface and run the isolated smoke target:
 
 ```bash
-./dist/zbrain --help
-ZBRAIN_HOME=/tmp/zbrain-smoke ./dist/zbrain setup
+go run ./cmd/zbrain --help
+make smoke
 ```
 
-Expected outcomes:
+The smoke target builds the binary, checks help output, creates an isolated
+`ZBRAIN_HOME`, runs setup and workspace creation, captures evidence, drafts and
+approves a claim, rebuilds the index, and queries trusted context.
 
-- help output lists `setup`, `init`, `workspace`, and `update`
-- `setup` extracts `engine/`, `templates/`, `commands/`, `agents/`, and `workspaces/`
+## Trust Release Gates
+
+Run all quality and trust gates before release:
+
+```bash
+go test ./...
+go vet ./...
+go test -race ./internal/runtime ./internal/cli
+git diff --check
+```
+
+These tests cover freshness invalidation, dependency and evidence rejection,
+canonical-input preservation, rejected rebuild fail-closed behavior, and
+interrupted supersession recovery.
+
+## Scale Gate
+
+The 100k-claim query benchmark must keep p95 below two seconds:
+
+```bash
+ZBRAIN_BENCH_100K=1 go test ./internal/runtime -run '^TestAskP95At100K$' -count=1 -v
+```
+
+A benchmark result above two seconds is a release blocker.
 
 ## Release Checklist
 
-1. Run `bun test --run`
-2. Run `bunx tsc --noEmit`
-3. Run `bun run build`
-4. Run the binary smoke checks above
-5. Publish platform-native binaries from matching runners
+1. `go run ./cmd/zbrain --help` matches the documented command surface.
+2. `go test ./...` passes.
+3. `go vet ./...` passes.
+4. `go test -race ./internal/runtime ./internal/cli` passes.
+5. `make build` passes.
+6. `make smoke` passes with isolated `ZBRAIN_HOME`.
+7. The 100k-claim query p95 is at or below two seconds.
+8. `git diff --check` passes.
