@@ -5,8 +5,11 @@ import (
 	"encoding/hex"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
+
+	"gopkg.in/yaml.v3"
 )
 
 func TestEvidenceSnapshotStoresImmutableLocalCopy(t *testing.T) {
@@ -178,4 +181,227 @@ func TestEvidenceAddRejectsUnsafeAndMissingWorkspaceWithoutMutation(t *testing.T
 func sha256String(input string) string {
 	sum := sha256.Sum256([]byte(input))
 	return hex.EncodeToString(sum[:])
+}
+
+func TestEvidenceVerifyMetadata(t *testing.T) {
+	tests := []struct {
+		name   string
+		mutate func(*Evidence)
+		want   string
+	}{
+		{
+			name: "id mismatch",
+			mutate: func(evidence *Evidence) {
+				evidence.ID = "evd_cccccccccccccccccccccccccccccccc"
+			},
+			want: "metadata id",
+		},
+		{
+			name: "missing origin",
+			mutate: func(evidence *Evidence) {
+				evidence.Origin = ""
+			},
+			want: "metadata origin",
+		},
+		{
+			name: "invalid capture time",
+			mutate: func(evidence *Evidence) {
+				evidence.CapturedAt = "not-a-time"
+			},
+			want: "captured_at",
+		},
+		{
+			name: "invalid media type",
+			mutate: func(evidence *Evidence) {
+				evidence.MediaType = "not media"
+			},
+			want: "media_type",
+		},
+		{
+			name: "negative byte length",
+			mutate: func(evidence *Evidence) {
+				evidence.ByteLength = -1
+			},
+			want: "byte_length",
+		},
+		{
+			name: "invalid sha256",
+			mutate: func(evidence *Evidence) {
+				evidence.SHA256 = "not-a-sha256"
+			},
+			want: "sha256",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, store, evidence := evidenceVerificationFixture(t)
+			pathID := evidence.ID
+			tt.mutate(&evidence)
+			rewriteEvidenceMetadata(t, store, "research", pathID, evidence)
+			err := store.Verify("research", pathID)
+			if err == nil || !strings.Contains(err.Error(), tt.want) {
+				t.Fatalf("Verify() error = %v, want %q", err, tt.want)
+			}
+		})
+	}
+
+	t.Run("malformed yaml", func(t *testing.T) {
+		_, store, evidence := evidenceVerificationFixture(t)
+		metadataPath := filepath.Join(store.Paths.WorkspacesDir, "research", "evidence", "sources", evidence.ID, "source.yaml")
+		if err := os.Chmod(metadataPath, 0o644); err != nil {
+			t.Fatalf("Chmod(metadata) error = %v", err)
+		}
+		if err := os.WriteFile(metadataPath, []byte("id: [\n"), 0o644); err != nil {
+			t.Fatalf("WriteFile(metadata) error = %v", err)
+		}
+		if err := store.Verify("research", evidence.ID); err == nil || !strings.Contains(err.Error(), "parse metadata") {
+			t.Fatalf("Verify() error = %v, want parse metadata", err)
+		}
+	})
+}
+
+func TestEvidenceVerifyMissing(t *testing.T) {
+	t.Run("metadata", func(t *testing.T) {
+		_, store, evidence := evidenceVerificationFixture(t)
+		metadataPath := filepath.Join(store.Paths.WorkspacesDir, "research", "evidence", "sources", evidence.ID, "source.yaml")
+		if err := os.Rename(metadataPath, metadataPath+".missing"); err != nil {
+			t.Fatalf("Rename(metadata) error = %v", err)
+		}
+		if err := store.Verify("research", evidence.ID); err == nil || !strings.Contains(err.Error(), "source.yaml") {
+			t.Fatalf("Verify() error = %v, want missing metadata", err)
+		}
+	})
+
+	t.Run("raw", func(t *testing.T) {
+		_, store, evidence := evidenceVerificationFixture(t)
+		rawPath := filepath.Join(store.Paths.WorkspacesDir, "research", "evidence", "sources", evidence.ID, "raw")
+		if err := os.Rename(rawPath, rawPath+".missing"); err != nil {
+			t.Fatalf("Rename(raw) error = %v", err)
+		}
+		if err := store.Verify("research", evidence.ID); err == nil || !strings.Contains(err.Error(), "raw") {
+			t.Fatalf("Verify() error = %v, want missing raw", err)
+		}
+	})
+}
+
+func TestEvidenceVerifySize(t *testing.T) {
+	_, store, evidence := evidenceVerificationFixture(t)
+	evidence.ByteLength++
+	rewriteEvidenceMetadata(t, store, "research", evidence.ID, evidence)
+	if err := store.Verify("research", evidence.ID); err == nil || !strings.Contains(err.Error(), "byte length") {
+		t.Fatalf("Verify() error = %v, want byte length mismatch", err)
+	}
+}
+
+func TestEvidenceVerifyHash(t *testing.T) {
+	t.Run("raw bytes", func(t *testing.T) {
+		_, store, evidence := evidenceVerificationFixture(t)
+		rawPath := filepath.Join(store.Paths.WorkspacesDir, "research", "evidence", "sources", evidence.ID, "raw")
+		if err := os.Chmod(rawPath, 0o644); err != nil {
+			t.Fatalf("Chmod(raw) error = %v", err)
+		}
+		if err := os.WriteFile(rawPath, []byte(strings.Repeat("x", int(evidence.ByteLength))), 0o644); err != nil {
+			t.Fatalf("WriteFile(raw) error = %v", err)
+		}
+		if err := store.Verify("research", evidence.ID); err == nil || !strings.Contains(err.Error(), "sha256") {
+			t.Fatalf("Verify() error = %v, want sha256 mismatch", err)
+		}
+	})
+
+	t.Run("metadata hash", func(t *testing.T) {
+		_, store, evidence := evidenceVerificationFixture(t)
+		evidence.SHA256 = strings.Repeat("0", 64)
+		rewriteEvidenceMetadata(t, store, "research", evidence.ID, evidence)
+		if err := store.Verify("research", evidence.ID); err == nil || !strings.Contains(err.Error(), "sha256") {
+			t.Fatalf("Verify() error = %v, want sha256 mismatch", err)
+		}
+	})
+}
+
+func TestEvidenceVerifyWorkspace(t *testing.T) {
+	paths := evidenceTestPaths(t)
+	if err := CreateWorkspace(paths, "personal", fixedEvidenceNow()); err != nil {
+		t.Fatalf("CreateWorkspace(personal) error = %v", err)
+	}
+	source := filepath.Join(t.TempDir(), "source.txt")
+	if err := os.WriteFile(source, []byte("workspace scoped"), 0o644); err != nil {
+		t.Fatalf("WriteFile(source) error = %v", err)
+	}
+	store := EvidenceStore{Paths: paths, Now: fixedEvidenceNow}
+	evidence, err := store.AddFile("research", source, source, "text/plain")
+	if err != nil {
+		t.Fatalf("AddFile() error = %v", err)
+	}
+	validator, err := NewEvidenceValidator(store, "personal")
+	if err != nil {
+		t.Fatalf("NewEvidenceValidator() error = %v", err)
+	}
+	if err := validator.Verify(evidence.ID); err == nil || !strings.Contains(err.Error(), "source.yaml") {
+		t.Fatalf("Verify(cross workspace) error = %v, want missing metadata", err)
+	}
+	if _, err := NewEvidenceValidator(store, "../outside"); err == nil {
+		t.Fatalf("NewEvidenceValidator(unsafe workspace) error = nil")
+	}
+}
+
+func TestEvidenceVerifyCache(t *testing.T) {
+	_, store, evidence := evidenceVerificationFixture(t)
+	validator, err := NewEvidenceValidator(store, "research")
+	if err != nil {
+		t.Fatalf("NewEvidenceValidator() error = %v", err)
+	}
+	if err := validator.Verify(evidence.ID); err != nil {
+		t.Fatalf("first Verify() error = %v", err)
+	}
+	rawPath := filepath.Join(store.Paths.WorkspacesDir, "research", "evidence", "sources", evidence.ID, "raw")
+	if err := os.Chmod(rawPath, 0o644); err != nil {
+		t.Fatalf("Chmod(raw) error = %v", err)
+	}
+	if err := os.WriteFile(rawPath, []byte(strings.Repeat("x", int(evidence.ByteLength))), 0o644); err != nil {
+		t.Fatalf("WriteFile(raw) error = %v", err)
+	}
+	if err := validator.Verify(evidence.ID); err != nil {
+		t.Fatalf("cached Verify() error = %v, want cached success", err)
+	}
+	if got := validator.verifyCount[evidence.ID]; got != 1 {
+		t.Fatalf("verify count = %d, want 1", got)
+	}
+
+	freshValidator, err := NewEvidenceValidator(store, "research")
+	if err != nil {
+		t.Fatalf("NewEvidenceValidator(fresh) error = %v", err)
+	}
+	if err := freshValidator.Verify(evidence.ID); err == nil {
+		t.Fatalf("fresh Verify() error = nil, want tamper error")
+	}
+}
+
+func evidenceVerificationFixture(t *testing.T) (Paths, EvidenceStore, Evidence) {
+	t.Helper()
+	paths := evidenceTestPaths(t)
+	source := filepath.Join(t.TempDir(), "source.txt")
+	if err := os.WriteFile(source, []byte("trusted evidence"), 0o644); err != nil {
+		t.Fatalf("WriteFile(source) error = %v", err)
+	}
+	store := EvidenceStore{Paths: paths, Now: fixedEvidenceNow}
+	evidence, err := store.AddFile("research", source, source, "text/plain")
+	if err != nil {
+		t.Fatalf("AddFile() error = %v", err)
+	}
+	return paths, store, evidence
+}
+
+func rewriteEvidenceMetadata(t *testing.T, store EvidenceStore, workspace string, pathID string, evidence Evidence) {
+	t.Helper()
+	path := filepath.Join(store.Paths.WorkspacesDir, workspace, "evidence", "sources", pathID, "source.yaml")
+	if err := os.Chmod(path, 0o644); err != nil {
+		t.Fatalf("Chmod(metadata) error = %v", err)
+	}
+	contents, err := yaml.Marshal(evidence)
+	if err != nil {
+		t.Fatalf("yaml.Marshal(evidence) error = %v", err)
+	}
+	if err := os.WriteFile(path, contents, 0o644); err != nil {
+		t.Fatalf("WriteFile(metadata) error = %v", err)
+	}
 }

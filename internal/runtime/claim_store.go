@@ -35,6 +35,9 @@ type ClaimMigrationSummary struct {
 }
 
 func (store ClaimStore) WriteDraft(workspace string, claim Claim) (Claim, error) {
+	if err := RecoverPendingTransitionForMutation(store.Paths, workspace); err != nil {
+		return Claim{}, err
+	}
 	claim.Schema = ""
 	claim.Type = OKFClaimType
 	claim.Status = ClaimStatusDraft
@@ -69,6 +72,9 @@ func (store ClaimStore) WriteDraft(workspace string, claim Claim) (Claim, error)
 }
 
 func (store ClaimStore) Approve(workspace string, id string) (Claim, error) {
+	if err := RecoverPendingTransitionForMutation(store.Paths, workspace); err != nil {
+		return Claim{}, err
+	}
 	claim, err := store.Read(workspace, id)
 	if err != nil {
 		return Claim{}, err
@@ -86,47 +92,88 @@ func (store ClaimStore) Approve(workspace string, id string) (Claim, error) {
 	if err != nil {
 		return Claim{}, err
 	}
+
+	seenOldIDs := make(map[string]struct{}, len(claim.Supersedes))
 	oldClaims := make([]Claim, 0, len(claim.Supersedes))
 	for _, oldID := range claim.Supersedes {
+		if _, ok := seenOldIDs[oldID]; ok {
+			return Claim{}, fmt.Errorf("claim %s supersedes duplicate claim %s", id, oldID)
+		}
+		seenOldIDs[oldID] = struct{}{}
 		old, err := store.Read(workspace, oldID)
 		if err != nil {
 			return Claim{}, err
 		}
-		if old.Status == ClaimStatusApproved {
-			old.Status = ClaimStatusSuperseded
-			old.VerifiedAt = ""
-			old.VerifiedBy = ""
-			old.VerifiedDigest = ""
-			oldClaims = append(oldClaims, old)
+		if old.Status != ClaimStatusApproved {
+			return Claim{}, fmt.Errorf("claim %s is %s; only approved claims can be superseded", oldID, old.Status)
 		}
+		oldClaims = append(oldClaims, old)
 	}
+
+	verifiedAt := store.now().UTC().Format(time.RFC3339)
 	claim.Schema = ""
 	claim.Type = OKFClaimType
 	claim.Status = ClaimStatusApproved
 	claim.Sources = sources
-	claim.VerifiedAt = store.now().UTC().Format(time.RFC3339)
+	claim.VerifiedAt = verifiedAt
 	claim.VerifiedBy = "owner"
 	claim.VerifiedDigest = ""
+	transitionKind := ClaimTransitionApprove
+	if len(oldClaims) > 0 {
+		transitionKind = ClaimTransitionSupersede
+	}
+	claim.Transitions = appendClaimTransition(claim, ClaimTransition{
+		Kind:            transitionKind,
+		At:              verifiedAt,
+		By:              claim.VerifiedBy,
+		RelatedClaimIDs: append([]string(nil), claim.Supersedes...),
+	})
 	digest, err := ClaimVerificationDigest(claim)
 	if err != nil {
 		return Claim{}, err
 	}
 	claim.VerifiedDigest = digest
+
+	for i := range oldClaims {
+		oldClaims[i].Status = ClaimStatusSuperseded
+		oldClaims[i].Transitions = appendClaimTransition(oldClaims[i], ClaimTransition{
+			Kind:                    ClaimTransitionSupersede,
+			At:                      verifiedAt,
+			By:                      claim.VerifiedBy,
+			RelatedClaimIDs:         []string{claim.ID},
+			PriorVerificationDigest: oldClaims[i].VerifiedDigest,
+		})
+	}
+	var pending *PendingTransition
+	if len(oldClaims) > 0 {
+		prepared, err := store.pendingSupersession(workspace, claim, oldClaims)
+		if err != nil {
+			return Claim{}, err
+		}
+		pending = &prepared
+	}
 	if err := store.markDirty(workspace); err != nil {
 		return Claim{}, err
 	}
-	if err := store.writeExisting(workspace, claim); err != nil {
-		return Claim{}, err
-	}
-	for _, old := range oldClaims {
-		if err := store.writeExisting(workspace, old); err != nil {
+	if pending != nil {
+		if err := WritePendingTransition(store.Paths, workspace, *pending); err != nil {
 			return Claim{}, err
 		}
+		if err := RecoverPendingTransition(store.Paths, workspace); err != nil {
+			return Claim{}, err
+		}
+		return claim, nil
+	}
+	if err := store.writeExisting(workspace, claim); err != nil {
+		return Claim{}, err
 	}
 	return claim, nil
 }
 
 func (store ClaimStore) WriteSupersedingDraft(workspace string, currentID string, replacement Claim) (Claim, error) {
+	if err := RecoverPendingTransitionForMutation(store.Paths, workspace); err != nil {
+		return Claim{}, err
+	}
 	current, err := store.Read(workspace, currentID)
 	if err != nil {
 		return Claim{}, err
@@ -139,6 +186,9 @@ func (store ClaimStore) WriteSupersedingDraft(workspace string, currentID string
 }
 
 func (store ClaimStore) Revoke(workspace string, id string, reason string) (Claim, error) {
+	if err := RecoverPendingTransitionForMutation(store.Paths, workspace); err != nil {
+		return Claim{}, err
+	}
 	claim, err := store.Read(workspace, id)
 	if err != nil {
 		return Claim{}, err
@@ -146,14 +196,18 @@ func (store ClaimStore) Revoke(workspace string, id string, reason string) (Clai
 	if strings.TrimSpace(reason) == "" {
 		return Claim{}, fmt.Errorf("revoke reason is required")
 	}
-	if claim.Status == ClaimStatusRevoked {
-		return Claim{}, fmt.Errorf("claim %s is already revoked", id)
+	if claim.Status != ClaimStatusApproved {
+		return Claim{}, fmt.Errorf("claim %s is %s; only approved claims can be revoked", id, claim.Status)
 	}
 	claim.Status = ClaimStatusRevoked
-	claim.VerifiedAt = ""
-	claim.VerifiedBy = ""
-	claim.VerifiedDigest = ""
-	claim.Body = strings.TrimRight(claim.Body, "\n") + "\n\nRevoked: " + strings.TrimSpace(reason) + "\n"
+	claim.Transitions = appendClaimTransition(claim, ClaimTransition{
+		Kind:                    ClaimTransitionRevoke,
+		At:                      store.now().UTC().Format(time.RFC3339),
+		By:                      "owner",
+		Reason:                  strings.TrimSpace(reason),
+		RelatedClaimIDs:         []string{id},
+		PriorVerificationDigest: claim.VerifiedDigest,
+	})
 	if err := store.markDirty(workspace); err != nil {
 		return Claim{}, err
 	}
@@ -185,6 +239,15 @@ func (store ClaimStore) Read(workspace string, id string) (Claim, error) {
 }
 
 func (store ClaimStore) ScanWorkspace(workspace string) (ClaimScan, error) {
+	return store.scanWorkspace(workspace, true)
+}
+
+// ScanWorkspaceForTrust parses every zbrain claim so rebuild can classify invalid approved roots.
+func (store ClaimStore) ScanWorkspaceForTrust(workspace string) (ClaimScan, error) {
+	return store.scanWorkspace(workspace, false)
+}
+
+func (store ClaimStore) scanWorkspace(workspace string, verifyDigests bool) (ClaimScan, error) {
 	workspaceRoot, err := ValidateWorkspace(store.Paths, workspace)
 	if err != nil {
 		return ClaimScan{}, err
@@ -233,9 +296,11 @@ func (store ClaimStore) ScanWorkspace(workspace string) (ClaimScan, error) {
 			scan.Invalid = append(scan.Invalid, InvalidClaim{Path: rel, Error: err.Error()})
 			return nil
 		}
-		if err := VerifyClaimDigest(claim); err != nil {
-			scan.Invalid = append(scan.Invalid, InvalidClaim{Path: rel, Error: err.Error()})
-			return nil
+		if verifyDigests {
+			if err := VerifyClaimDigest(claim); err != nil {
+				scan.Invalid = append(scan.Invalid, InvalidClaim{Path: rel, Error: err.Error()})
+				return nil
+			}
 		}
 		scan.Claims = append(scan.Claims, claim)
 		return nil
@@ -250,6 +315,9 @@ func (store ClaimStore) ScanWorkspace(workspace string) (ClaimScan, error) {
 }
 
 func (store ClaimStore) MigrateOKF(workspace string) (ClaimMigrationSummary, error) {
+	if err := RecoverPendingTransitionForMutation(store.Paths, workspace); err != nil {
+		return ClaimMigrationSummary{}, err
+	}
 	scan, err := store.ScanWorkspace(workspace)
 	if err != nil {
 		return ClaimMigrationSummary{}, err
@@ -303,6 +371,46 @@ func (store ClaimStore) writeExisting(workspace string, claim Claim) error {
 	return writeClaimAtomic(path, claim)
 }
 
+func (store ClaimStore) pendingSupersession(workspace string, replacement Claim, oldClaims []Claim) (PendingTransition, error) {
+	workspaceRoot, err := ValidateWorkspace(store.Paths, workspace)
+	if err != nil {
+		return PendingTransition{}, err
+	}
+	operationID, err := NewPendingTransitionID()
+	if err != nil {
+		return PendingTransition{}, err
+	}
+	claims := make([]Claim, 0, len(oldClaims)+1)
+	claims = append(claims, replacement)
+	claims = append(claims, oldClaims...)
+	targets := make([]PendingTransitionTarget, 0, len(claims))
+	for _, claim := range claims {
+		path, err := store.claimFilePath(workspace, claim)
+		if err != nil {
+			return PendingTransition{}, err
+		}
+		contents, err := RenderClaimMarkdown(claim)
+		if err != nil {
+			return PendingTransition{}, err
+		}
+		preimage, err := os.ReadFile(path)
+		if err != nil {
+			return PendingTransition{}, fmt.Errorf("read supersession preimage %q: %w", path, err)
+		}
+		relative, err := filepath.Rel(workspaceRoot, path)
+		if err != nil {
+			return PendingTransition{}, err
+		}
+		targets = append(targets, PendingTransitionTarget{
+			Path:           filepath.ToSlash(relative),
+			PreimageSHA256: transitionSHA256(preimage),
+			TargetSHA256:   transitionSHA256(contents),
+			TargetBytes:    contents,
+		})
+	}
+	return PendingTransition{OperationID: operationID, Kind: ClaimTransitionSupersede, Workspace: workspace, Targets: targets}, nil
+}
+
 func (store ClaimStore) markDirty(workspace string) error {
 	if _, err := ValidateWorkspace(store.Paths, workspace); err != nil {
 		return err
@@ -346,21 +454,32 @@ func appendUniqueClaimID(ids []string, id string) []string {
 	return append(ids, id)
 }
 
+func appendClaimTransition(claim Claim, transition ClaimTransition) []ClaimTransition {
+	transitions := append([]ClaimTransition(nil), claim.Transitions...)
+	transition.RelatedClaimIDs = append([]string(nil), transition.RelatedClaimIDs...)
+	return append(transitions, transition)
+}
+
 func (store ClaimStore) validateApprovalReferences(workspace string, claim Claim) error {
-	evidenceStore := EvidenceStore{Paths: store.Paths}
-	for _, evidenceID := range claim.EvidenceIDs {
-		if err := evidenceStore.Verify(workspace, evidenceID); err != nil {
-			return fmt.Errorf("verify evidence %s: %w", evidenceID, err)
-		}
+	evidenceValidator, err := NewEvidenceValidator(EvidenceStore{Paths: store.Paths}, workspace)
+	if err != nil {
+		return err
 	}
-	for _, supportID := range claim.SupportingClaimIDs {
-		support, err := store.Read(workspace, supportID)
-		if err != nil {
-			return fmt.Errorf("read supporting claim %s: %w", supportID, err)
-		}
-		if support.Status != ClaimStatusApproved {
-			return fmt.Errorf("supporting claim %s is %s; derived claims require approved support", supportID, support.Status)
-		}
+	if err := validateClaimEvidence(evidenceValidator, claim); err != nil {
+		return fmt.Errorf("verify claim evidence: %w", err)
+	}
+	if len(claim.SupportingClaimIDs) == 0 {
+		return nil
+	}
+	validator, err := NewTrustValidatorFromStore(store, workspace)
+	if err != nil {
+		return err
+	}
+	validator.validateSupporting = func(support Claim) error {
+		return validateClaimEvidence(evidenceValidator, support)
+	}
+	if err := validator.ValidateClaim(claim); err != nil {
+		return fmt.Errorf("validate supporting claims for %s: %w", claim.ID, err)
 	}
 	return nil
 }

@@ -60,6 +60,87 @@ func TestReindexPublishesRejectedStateForLegacyAndEvidence(t *testing.T) {
 	}
 }
 
+func TestRebuildRecoversPendingTransition(t *testing.T) {
+	paths := indexTestPaths(t)
+	store := ClaimStore{Paths: paths, Now: fixedIndexNow}
+	draft := indexClaim("clm_99999999999999999999999999999999", "Recovered Claim", ClaimBasisOwner)
+	if _, err := store.WriteDraft("research", draft); err != nil {
+		t.Fatalf("WriteDraft() error = %v", err)
+	}
+	claimPath := filepath.Join(paths.WorkspacesDir, "research", "wiki", "projects", draft.ID+".md")
+	preimage, err := os.ReadFile(claimPath)
+	if err != nil {
+		t.Fatalf("ReadFile(preimage) error = %v", err)
+	}
+	approved := draft
+	approved.Status = ClaimStatusApproved
+	approved.VerifiedAt = fixedIndexNow().Format(time.RFC3339)
+	approved.VerifiedBy = "owner"
+	approved.Transitions = []ClaimTransition{{Kind: ClaimTransitionApprove, At: approved.VerifiedAt, By: approved.VerifiedBy}}
+	approved.VerifiedDigest, err = ClaimVerificationDigest(approved)
+	if err != nil {
+		t.Fatalf("ClaimVerificationDigest() error = %v", err)
+	}
+	target, err := RenderClaimMarkdown(approved)
+	if err != nil {
+		t.Fatalf("RenderClaimMarkdown() error = %v", err)
+	}
+	if err := WritePendingTransition(paths, "research", PendingTransition{
+		OperationID: "txn_rebuild",
+		Kind:        ClaimTransitionSupersede,
+		Workspace:   "research",
+		Targets: []PendingTransitionTarget{{
+			Path:           "wiki/projects/" + draft.ID + ".md",
+			PreimageSHA256: transitionSHA256(preimage),
+			TargetSHA256:   transitionSHA256(target),
+			TargetBytes:    target,
+		}},
+	}); err != nil {
+		t.Fatalf("WritePendingTransition() error = %v", err)
+	}
+
+	idx := IndexStore{Paths: paths}
+	summary, err := idx.Rebuild("research")
+	if err != nil {
+		t.Fatalf("Rebuild() error = %v", err)
+	}
+	if summary.Approved != 1 || summary.RebuildState != RebuildStatusClean {
+		t.Fatalf("summary = %#v", summary)
+	}
+	if err := idx.CheckFresh("research"); err != nil {
+		t.Fatalf("CheckFresh() error = %v", err)
+	}
+	if _, err := ReadPendingTransition(paths, "research"); !os.IsNotExist(err) {
+		t.Fatalf("ReadPendingTransition() error = %v, want missing journal", err)
+	}
+}
+
+func TestRecoveryLeavesDirty(t *testing.T) {
+	paths := indexTestPaths(t)
+	path := filepath.Join(paths.WorkspacesDir, "research", "wiki", "projects", "recovery.md")
+	before := []byte("before\n")
+	target := []byte("after\n")
+	if err := os.WriteFile(path, before, 0o644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+	if err := WritePendingTransition(paths, "research", PendingTransition{
+		OperationID: "txn_dirty",
+		Kind:        ClaimTransitionSupersede,
+		Workspace:   "research",
+		Targets:     []PendingTransitionTarget{pendingTransitionTarget("wiki/projects/recovery.md", before, target)},
+	}); err != nil {
+		t.Fatalf("WritePendingTransition() error = %v", err)
+	}
+	if err := RecoverPendingTransitionForMutation(paths, "research"); err != nil {
+		t.Fatalf("RecoverPendingTransitionForMutation() error = %v", err)
+	}
+	assertFileBytes(t, path, target)
+	if _, err := os.Stat(indexDirtyPath(t, IndexStore{Paths: paths}, "research")); err != nil {
+		t.Fatalf("dirty marker error = %v", err)
+	}
+	assertNoPendingTransition(t, paths, "research")
+}
+
 func TestReindexExcludesTamperedApprovedClaim(t *testing.T) {
 	paths := indexTestPaths(t)
 	store := ClaimStore{Paths: paths, Now: fixedIndexNow}
@@ -93,6 +174,205 @@ func TestReindexExcludesTamperedApprovedClaim(t *testing.T) {
 	manifest, state := readPublishedIndexState(t, idx, "research")
 	if state.Status != RebuildStatusRejected || state.InvalidCount != 1 || state.ManifestDigest != manifest.Digest {
 		t.Fatalf("published state = %#v, manifest = %#v", state, manifest)
+	}
+}
+
+func TestRebuildDependencyCanonicalUnchanged(t *testing.T) {
+	paths := indexTestPaths(t)
+	store := ClaimStore{Paths: paths, Now: fixedIndexNow}
+	support := indexClaim("clm_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "Revoked Support", ClaimBasisOwner)
+	if _, err := store.WriteDraft("research", support); err != nil {
+		t.Fatalf("WriteDraft(support) error = %v", err)
+	}
+	if _, err := store.Approve("research", support.ID); err != nil {
+		t.Fatalf("Approve(support) error = %v", err)
+	}
+	dependent := indexClaim("clm_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", "Dependent Claim", ClaimBasisDerived)
+	dependent.SupportingClaimIDs = []string{support.ID}
+	if _, err := store.WriteDraft("research", dependent); err != nil {
+		t.Fatalf("WriteDraft(dependent) error = %v", err)
+	}
+	if _, err := store.Approve("research", dependent.ID); err != nil {
+		t.Fatalf("Approve(dependent) error = %v", err)
+	}
+	unrelated := indexClaim("clm_cccccccccccccccccccccccccccccccc", "Unrelated Claim", ClaimBasisOwner)
+	if _, err := store.WriteDraft("research", unrelated); err != nil {
+		t.Fatalf("WriteDraft(unrelated) error = %v", err)
+	}
+	if _, err := store.Approve("research", unrelated.ID); err != nil {
+		t.Fatalf("Approve(unrelated) error = %v", err)
+	}
+	if _, err := store.Revoke("research", support.ID, "no longer trusted"); err != nil {
+		t.Fatalf("Revoke(support) error = %v", err)
+	}
+
+	dependentPath := filepath.Join(paths.WorkspacesDir, "research", "wiki", "projects", dependent.ID+".md")
+	unrelatedPath := filepath.Join(paths.WorkspacesDir, "research", "wiki", "projects", unrelated.ID+".md")
+	dependentBefore := sha256Hex(t, dependentPath)
+	unrelatedBefore := sha256Hex(t, unrelatedPath)
+	summary, err := (IndexStore{Paths: paths}).Rebuild("research")
+	if err != nil {
+		t.Fatalf("Rebuild() error = %v", err)
+	}
+	if summary.RebuildState != RebuildStatusRejected || summary.Approved != 1 || summary.Invalid != 1 || summary.InvalidCount != 1 {
+		t.Fatalf("summary = %#v, want one rejected dependent and one approved unrelated claim", summary)
+	}
+	if len(summary.InvalidClaims) != 1 || summary.InvalidClaims[0].Path != "projects/"+dependent.ID+".md" || !strings.Contains(summary.InvalidClaims[0].Error, dependent.ID) || !strings.Contains(summary.InvalidClaims[0].Error, support.ID) || !strings.Contains(summary.InvalidClaims[0].Error, "revoked") {
+		t.Fatalf("InvalidClaims = %#v, want deterministic dependency path", summary.InvalidClaims)
+	}
+	indexed := indexedClaimStatuses(t, paths, "research")
+	if _, ok := indexed[dependent.ID]; ok {
+		t.Fatalf("invalid dependent was indexed: %#v", indexed)
+	}
+	if indexed[unrelated.ID] != ClaimStatusApproved {
+		t.Fatalf("unrelated indexed status = %q, want approved", indexed[unrelated.ID])
+	}
+	if after := sha256Hex(t, dependentPath); after != dependentBefore {
+		t.Fatalf("dependent canonical bytes changed: before %s after %s", dependentBefore, after)
+	}
+	if after := sha256Hex(t, unrelatedPath); after != unrelatedBefore {
+		t.Fatalf("unrelated canonical bytes changed: before %s after %s", unrelatedBefore, after)
+	}
+}
+
+func TestRebuildEvidenceRejectedState(t *testing.T) {
+	paths := indexTestPaths(t)
+	evidence := addStoreEvidence(t, paths, "evidence bytes")
+	store := ClaimStore{Paths: paths, Now: fixedIndexNow}
+	claim := indexClaim("clm_dddddddddddddddddddddddddddddddd", "Tampered Evidence Claim", ClaimBasisEvidence)
+	claim.EvidenceIDs = []string{evidence.ID}
+	if _, err := store.WriteDraft("research", claim); err != nil {
+		t.Fatalf("WriteDraft() error = %v", err)
+	}
+	if _, err := store.Approve("research", claim.ID); err != nil {
+		t.Fatalf("Approve() error = %v", err)
+	}
+	claimPath := filepath.Join(paths.WorkspacesDir, "research", "wiki", "projects", claim.ID+".md")
+	claimBefore := sha256Hex(t, claimPath)
+	rawPath := filepath.Join(paths.WorkspacesDir, "research", "evidence", "sources", evidence.ID, "raw")
+	if err := os.Chmod(rawPath, 0o644); err != nil {
+		t.Fatalf("Chmod(raw) error = %v", err)
+	}
+	if err := os.WriteFile(rawPath, []byte(strings.Repeat("x", int(evidence.ByteLength))), 0o644); err != nil {
+		t.Fatalf("WriteFile(raw) error = %v", err)
+	}
+
+	summary, err := (IndexStore{Paths: paths}).Rebuild("research")
+	if err != nil {
+		t.Fatalf("Rebuild() error = %v", err)
+	}
+	if summary.RebuildState != RebuildStatusRejected || summary.Approved != 0 || summary.Invalid != 1 || summary.InvalidCount != 1 {
+		t.Fatalf("summary = %#v, want rejected evidence claim", summary)
+	}
+	if len(summary.InvalidClaims) != 1 || !strings.Contains(summary.InvalidClaims[0].Error, evidence.ID) || !strings.Contains(summary.InvalidClaims[0].Error, "raw") {
+		t.Fatalf("InvalidClaims = %#v, want evidence path/reason", summary.InvalidClaims)
+	}
+	if after := sha256Hex(t, claimPath); after != claimBefore {
+		t.Fatalf("claim canonical bytes changed: before %s after %s", claimBefore, after)
+	}
+	if indexed := indexedClaimStatuses(t, paths, "research"); len(indexed) != 0 {
+		t.Fatalf("invalid evidence claim was indexed: %#v", indexed)
+	}
+}
+
+func TestRebuildRejectsDependentWhenSupportingEvidenceInvalid(t *testing.T) {
+	paths := indexTestPaths(t)
+	evidence := addStoreEvidence(t, paths, "support evidence bytes")
+	store := ClaimStore{Paths: paths, Now: fixedIndexNow}
+	support := indexClaim("clm_eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee", "Evidence Support", ClaimBasisEvidence)
+	support.EvidenceIDs = []string{evidence.ID}
+	if _, err := store.WriteDraft("research", support); err != nil {
+		t.Fatalf("WriteDraft(support) error = %v", err)
+	}
+	if _, err := store.Approve("research", support.ID); err != nil {
+		t.Fatalf("Approve(support) error = %v", err)
+	}
+	dependent := indexClaim("clm_ffffffffffffffffffffffffffffffff", "Evidence Dependent", ClaimBasisDerived)
+	dependent.SupportingClaimIDs = []string{support.ID}
+	if _, err := store.WriteDraft("research", dependent); err != nil {
+		t.Fatalf("WriteDraft(dependent) error = %v", err)
+	}
+	if _, err := store.Approve("research", dependent.ID); err != nil {
+		t.Fatalf("Approve(dependent) error = %v", err)
+	}
+	idx := IndexStore{Paths: paths}
+	if summary, err := idx.Rebuild("research"); err != nil {
+		t.Fatalf("initial Rebuild() error = %v", err)
+	} else if summary.RebuildState != RebuildStatusClean {
+		t.Fatalf("initial rebuild summary = %#v, want clean", summary)
+	}
+
+	supportPath := filepath.Join(paths.WorkspacesDir, "research", "wiki", "projects", support.ID+".md")
+	dependentPath := filepath.Join(paths.WorkspacesDir, "research", "wiki", "projects", dependent.ID+".md")
+	supportBefore := sha256Hex(t, supportPath)
+	dependentBefore := sha256Hex(t, dependentPath)
+	rawPath := filepath.Join(paths.WorkspacesDir, "research", "evidence", "sources", evidence.ID, "raw")
+	if err := os.Chmod(rawPath, 0o644); err != nil {
+		t.Fatalf("Chmod(raw) error = %v", err)
+	}
+	if err := os.WriteFile(rawPath, []byte(strings.Repeat("x", int(evidence.ByteLength))), 0o644); err != nil {
+		t.Fatalf("WriteFile(raw) error = %v", err)
+	}
+
+	summary, err := idx.Rebuild("research")
+	if err != nil {
+		t.Fatalf("invalidating Rebuild() error = %v", err)
+	}
+	if summary.RebuildState != RebuildStatusRejected || summary.Approved != 0 || summary.Invalid != 2 || summary.InvalidCount != 2 {
+		t.Fatalf("summary = %#v, want support and dependent rejected", summary)
+	}
+	if len(summary.InvalidClaims) != 2 || summary.InvalidClaims[0].Path != "projects/"+support.ID+".md" || summary.InvalidClaims[1].Path != "projects/"+dependent.ID+".md" {
+		t.Fatalf("InvalidClaims = %#v, want deterministic support/dependent paths", summary.InvalidClaims)
+	}
+	for _, invalid := range summary.InvalidClaims {
+		if !strings.Contains(invalid.Error, evidence.ID) || !strings.Contains(invalid.Error, "raw") {
+			t.Fatalf("invalid claim = %#v, want supporting evidence path/reason", invalid)
+		}
+	}
+	if indexed := indexedClaimStatuses(t, paths, "research"); len(indexed) != 0 {
+		t.Fatalf("invalid support closure was indexed: %#v", indexed)
+	}
+	if after := sha256Hex(t, supportPath); after != supportBefore {
+		t.Fatalf("support canonical bytes changed: before %s after %s", supportBefore, after)
+	}
+	if after := sha256Hex(t, dependentPath); after != dependentBefore {
+		t.Fatalf("dependent canonical bytes changed: before %s after %s", dependentBefore, after)
+	}
+}
+
+func TestRebuildCycleRejectedState(t *testing.T) {
+	paths := indexTestPaths(t)
+	first := indexClaim("clm_eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee", "Cycle First", ClaimBasisDerived)
+	second := indexClaim("clm_ffffffffffffffffffffffffffffffff", "Cycle Second", ClaimBasisDerived)
+	first.SupportingClaimIDs = []string{second.ID}
+	second.SupportingClaimIDs = []string{first.ID}
+	first = finalizeApprovedStoreClaim(t, first)
+	second = finalizeApprovedStoreClaim(t, second)
+	writeCanonicalStoreClaim(t, paths, first)
+	writeCanonicalStoreClaim(t, paths, second)
+	firstPath := filepath.Join(paths.WorkspacesDir, "research", "wiki", "projects", first.ID+".md")
+	secondPath := filepath.Join(paths.WorkspacesDir, "research", "wiki", "projects", second.ID+".md")
+	firstBefore := sha256Hex(t, firstPath)
+	secondBefore := sha256Hex(t, secondPath)
+
+	summary, err := (IndexStore{Paths: paths}).Rebuild("research")
+	if err != nil {
+		t.Fatalf("Rebuild() error = %v", err)
+	}
+	if summary.RebuildState != RebuildStatusRejected || summary.Approved != 0 || summary.Invalid != 2 || summary.InvalidCount != 2 {
+		t.Fatalf("summary = %#v, want two cyclic roots rejected", summary)
+	}
+	if len(summary.InvalidClaims) != 2 || !strings.Contains(summary.InvalidClaims[0].Error, "dependency cycle detected") || !strings.Contains(summary.InvalidClaims[1].Error, "dependency cycle detected") {
+		t.Fatalf("InvalidClaims = %#v, want cycle reasons", summary.InvalidClaims)
+	}
+	if indexed := indexedClaimStatuses(t, paths, "research"); len(indexed) != 0 {
+		t.Fatalf("cyclic claims were indexed: %#v", indexed)
+	}
+	if after := sha256Hex(t, firstPath); after != firstBefore {
+		t.Fatalf("first cycle claim changed: before %s after %s", firstBefore, after)
+	}
+	if after := sha256Hex(t, secondPath); after != secondBefore {
+		t.Fatalf("second cycle claim changed: before %s after %s", secondBefore, after)
 	}
 }
 
@@ -728,6 +1008,37 @@ func indexClaim(id string, title string, basis ClaimBasis) Claim {
 
 func fixedIndexNow() time.Time {
 	return time.Date(2026, 7, 30, 10, 0, 0, 0, time.UTC)
+}
+
+func indexedClaimStatuses(t *testing.T, paths Paths, workspace string) map[string]ClaimStatus {
+	t.Helper()
+	dbPath, err := (IndexStore{Paths: paths}).DatabasePath(workspace)
+	if err != nil {
+		t.Fatalf("DatabasePath(%q) error = %v", workspace, err)
+	}
+	db, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		t.Fatalf("sql.Open() error = %v", err)
+	}
+	defer db.Close()
+	rows, err := db.Query("select id, status from claims order by id")
+	if err != nil {
+		t.Fatalf("Query(claims) error = %v", err)
+	}
+	defer rows.Close()
+	statuses := make(map[string]ClaimStatus)
+	for rows.Next() {
+		var id string
+		var status ClaimStatus
+		if err := rows.Scan(&id, &status); err != nil {
+			t.Fatalf("Scan(claim) error = %v", err)
+		}
+		statuses[id] = status
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("rows.Err() = %v", err)
+	}
+	return statuses
 }
 
 func readPublishedIndexState(t *testing.T, idx IndexStore, workspace string) (TrustInputManifest, RebuildState) {

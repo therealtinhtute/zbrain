@@ -2,6 +2,8 @@ package cli
 
 import (
 	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -123,6 +125,72 @@ func TestRunEvidenceAddAndClaimLifecycleJSON(t *testing.T) {
 	decodeJSON(t, stdout(app), &approved)
 	if approved.ID != draft.ID || approved.Status != "approved" {
 		t.Fatalf("approved output = %#v", approved)
+	}
+}
+
+func TestRunClaimApproveSupersedeRevokeTransitions(t *testing.T) {
+	app, _ := testApp(t)
+	if err := app.Run([]string{"setup"}); err != nil {
+		t.Fatalf("Run(setup) error = %v", err)
+	}
+	if err := app.Run([]string{"workspace", "create", "research"}); err != nil {
+		t.Fatalf("Run(workspace create) error = %v", err)
+	}
+
+	originalBody := "Original body\n"
+	app.Stdout = &bytes.Buffer{}
+	app.Stdin = strings.NewReader(originalBody)
+	if err := app.Run([]string{"claim", "draft", "--tier", "projects", "--title", "Original", "--basis", "owner"}); err != nil {
+		t.Fatalf("Run(claim draft) error = %v", err)
+	}
+	var draft struct {
+		ID string `json:"id"`
+	}
+	decodeJSON(t, stdout(app), &draft)
+	app.Stdout = &bytes.Buffer{}
+	if err := app.Run([]string{"claim", "approve", draft.ID}); err != nil {
+		t.Fatalf("Run(claim approve) error = %v", err)
+	}
+	if err := app.Run([]string{"claim", "approve", draft.ID}); err == nil {
+		t.Fatalf("Run(claim approve twice) error = nil")
+	}
+
+	app.Stdout = &bytes.Buffer{}
+	app.Stdin = strings.NewReader("Replacement body\n")
+	if err := app.Run([]string{"claim", "supersede", draft.ID, "--tier", "projects", "--title", "Replacement", "--basis", "owner"}); err != nil {
+		t.Fatalf("Run(claim supersede) error = %v", err)
+	}
+	var replacement struct {
+		ID string `json:"id"`
+	}
+	decodeJSON(t, stdout(app), &replacement)
+	app.Stdout = &bytes.Buffer{}
+	if err := app.Run([]string{"claim", "approve", replacement.ID}); err != nil {
+		t.Fatalf("Run(claim approve replacement) error = %v", err)
+	}
+
+	store := zruntime.ClaimStore{Paths: app.Paths, Now: app.Now}
+	old, err := store.Read("research", draft.ID)
+	if err != nil {
+		t.Fatalf("Read(old) error = %v", err)
+	}
+	if old.Status != zruntime.ClaimStatusSuperseded || old.Body != originalBody || len(old.Transitions) != 2 {
+		t.Fatalf("old lifecycle state = %#v", old)
+	}
+	replacementBefore, err := store.Read("research", replacement.ID)
+	if err != nil {
+		t.Fatalf("Read(replacement) error = %v", err)
+	}
+	app.Stdout = &bytes.Buffer{}
+	if err := app.Run([]string{"claim", "revoke", replacement.ID, "--reason", "withdrawn"}); err != nil {
+		t.Fatalf("Run(claim revoke) error = %v", err)
+	}
+	revoked, err := store.Read("research", replacement.ID)
+	if err != nil {
+		t.Fatalf("Read(revoked) error = %v", err)
+	}
+	if revoked.Status != zruntime.ClaimStatusRevoked || revoked.Body != replacementBefore.Body || revoked.VerifiedDigest != replacementBefore.VerifiedDigest || len(revoked.Transitions) != 2 || revoked.Transitions[1].Kind != zruntime.ClaimTransitionRevoke {
+		t.Fatalf("replacement lifecycle state = %#v", revoked)
 	}
 }
 
@@ -481,6 +549,112 @@ func TestRunReindexReportsTamperedApprovedClaim(t *testing.T) {
 	}
 }
 
+func TestRunReindexDependencyInvalidation(t *testing.T) {
+	app, _ := testApp(t)
+	setupResearchApp(t, &app)
+	store := zruntime.ClaimStore{Paths: app.Paths, Now: app.Now}
+	makeClaim := func(id string, title string, basis zruntime.ClaimBasis) zruntime.Claim {
+		return zruntime.Claim{
+			Type:      zruntime.OKFClaimType,
+			ID:        id,
+			Tier:      "projects",
+			Status:    zruntime.ClaimStatusDraft,
+			Title:     title,
+			Basis:     basis,
+			CreatedAt: app.Now().UTC().Format(time.RFC3339),
+			CreatedBy: "owner",
+			Tags:      []string{"memory"},
+			Body:      title + " trusted token\n",
+		}
+	}
+	base := makeClaim("clm_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "CLI Base Support", zruntime.ClaimBasisOwner)
+	middle := makeClaim("clm_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", "CLI Middle Support", zruntime.ClaimBasisDerived)
+	middle.SupportingClaimIDs = []string{base.ID}
+	dependent := makeClaim("clm_cccccccccccccccccccccccccccccccc", "CLI Deep Dependent", zruntime.ClaimBasisDerived)
+	dependent.SupportingClaimIDs = []string{middle.ID}
+	unrelated := makeClaim("clm_dddddddddddddddddddddddddddddddd", "CLI Unrelated Trusted", zruntime.ClaimBasisOwner)
+	for _, claim := range []zruntime.Claim{base, middle, dependent, unrelated} {
+		if _, err := store.WriteDraft("research", claim); err != nil {
+			t.Fatalf("WriteDraft(%s) error = %v", claim.ID, err)
+		}
+		if _, err := store.Approve("research", claim.ID); err != nil {
+			t.Fatalf("Approve(%s) error = %v", claim.ID, err)
+		}
+	}
+	middlePath := filepath.Join(app.Paths.WorkspacesDir, "research", "wiki", "projects", middle.ID+".md")
+	dependentPath := filepath.Join(app.Paths.WorkspacesDir, "research", "wiki", "projects", dependent.ID+".md")
+	middleBefore, err := os.ReadFile(middlePath)
+	if err != nil {
+		t.Fatalf("ReadFile(middle) error = %v", err)
+	}
+	dependentBefore, err := os.ReadFile(dependentPath)
+	if err != nil {
+		t.Fatalf("ReadFile(dependent) error = %v", err)
+	}
+
+	app.Stdout = &bytes.Buffer{}
+	if err := app.Run([]string{"reindex"}); err != nil {
+		t.Fatalf("Run(initial reindex) error = %v", err)
+	}
+	var initial struct {
+		RebuildState string `json:"rebuild_state"`
+		InvalidCount int    `json:"invalid_count"`
+	}
+	decodeJSON(t, stdout(app), &initial)
+	if initial.RebuildState != "clean" || initial.InvalidCount != 0 {
+		t.Fatalf("initial reindex = %#v, want clean", initial)
+	}
+
+	app.Stdout = &bytes.Buffer{}
+	if err := app.Run([]string{"claim", "revoke", base.ID, "--reason", "support withdrawn"}); err != nil {
+		t.Fatalf("Run(claim revoke) error = %v", err)
+	}
+	app.Stdout = &bytes.Buffer{}
+	if err := app.Run([]string{"reindex"}); err != nil {
+		t.Fatalf("Run(reindex) error = %v", err)
+	}
+	var summary struct {
+		Approved      int    `json:"approved"`
+		Invalid       int    `json:"invalid"`
+		InvalidCount  int    `json:"invalid_count"`
+		RebuildState  string `json:"rebuild_state"`
+		InvalidClaims []struct {
+			Path  string `json:"path"`
+			Error string `json:"error"`
+		} `json:"invalid_claims"`
+	}
+	decodeJSON(t, stdout(app), &summary)
+	if summary.RebuildState != "rejected" || summary.Invalid != 2 || summary.InvalidCount != 2 || len(summary.InvalidClaims) != 2 {
+		t.Fatalf("rejected reindex = %#v, want two dependent roots rejected", summary)
+	}
+	if summary.InvalidClaims[0].Path != "projects/"+middle.ID+".md" || summary.InvalidClaims[1].Path != "projects/"+dependent.ID+".md" {
+		t.Fatalf("invalid claims = %#v, want deterministic paths", summary.InvalidClaims)
+	}
+	for _, invalid := range summary.InvalidClaims {
+		if !strings.Contains(invalid.Error, base.ID) || !strings.Contains(invalid.Error, "revoked") {
+			t.Fatalf("invalid claim = %#v, want revoked base path/reason", invalid)
+		}
+	}
+	app.Stdout = &bytes.Buffer{}
+	if err := app.Run([]string{"ask", "CLI", "Unrelated"}); err == nil || !strings.Contains(err.Error(), "rejected") {
+		t.Fatalf("Run(ask) error = %v, want rejected error", err)
+	}
+	if stdout(app) != "" {
+		t.Fatalf("ask wrote output for rejected dependency index: %q", stdout(app))
+	}
+	middleAfter, err := os.ReadFile(middlePath)
+	if err != nil {
+		t.Fatalf("ReadFile(middle after) error = %v", err)
+	}
+	dependentAfter, err := os.ReadFile(dependentPath)
+	if err != nil {
+		t.Fatalf("ReadFile(dependent after) error = %v", err)
+	}
+	if !bytes.Equal(middleBefore, middleAfter) || !bytes.Equal(dependentBefore, dependentAfter) {
+		t.Fatalf("reindex changed dependent canonical bytes")
+	}
+}
+
 func TestRunAskReportsFreshnessErrors(t *testing.T) {
 	t.Run("missing", func(t *testing.T) {
 		app, _ := testApp(t)
@@ -541,6 +715,158 @@ func TestRunAskReportsFreshnessErrors(t *testing.T) {
 			t.Fatalf("Run(ask) error = %v, want rejected error", err)
 		}
 	})
+}
+
+func TestRunReindexRecoversPendingTransition(t *testing.T) {
+	app, _ := testApp(t)
+	setupResearchApp(t, &app)
+	app.Stdout = &bytes.Buffer{}
+	app.Stdin = strings.NewReader("Recovery claim\n")
+	if err := app.Run([]string{"claim", "draft", "--tier", "projects", "--title", "Recovery claim", "--basis", "owner"}); err != nil {
+		t.Fatalf("Run(claim draft) error = %v", err)
+	}
+	var draft struct {
+		ID string `json:"id"`
+	}
+	decodeJSON(t, stdout(app), &draft)
+	claimPath := filepath.Join(app.Paths.WorkspacesDir, "research", "wiki", "projects", draft.ID+".md")
+	before, err := os.ReadFile(claimPath)
+	if err != nil {
+		t.Fatalf("ReadFile(draft) error = %v", err)
+	}
+	app.Stdout = &bytes.Buffer{}
+	if err := app.Run([]string{"claim", "approve", draft.ID}); err != nil {
+		t.Fatalf("Run(claim approve) error = %v", err)
+	}
+	target, err := os.ReadFile(claimPath)
+	if err != nil {
+		t.Fatalf("ReadFile(approved) error = %v", err)
+	}
+	if err := os.WriteFile(claimPath, before, 0o644); err != nil {
+		t.Fatalf("WriteFile(preimage) error = %v", err)
+	}
+	if err := zruntime.WritePendingTransition(app.Paths, "research", zruntime.PendingTransition{
+		OperationID: "txn_cli_reindex",
+		Kind:        zruntime.ClaimTransitionApprove,
+		Workspace:   "research",
+		Targets:     []zruntime.PendingTransitionTarget{makePendingTransitionTarget("wiki/projects/"+draft.ID+".md", before, target)},
+	}); err != nil {
+		t.Fatalf("WritePendingTransition() error = %v", err)
+	}
+	app.Stdout = &bytes.Buffer{}
+	if err := app.Run([]string{"reindex"}); err != nil {
+		t.Fatalf("Run(reindex) error = %v", err)
+	}
+	var summary struct {
+		Approved     int    `json:"approved"`
+		RebuildState string `json:"rebuild_state"`
+		InvalidCount int    `json:"invalid_count"`
+	}
+	decodeJSON(t, stdout(app), &summary)
+	if summary.Approved != 1 || summary.RebuildState != "clean" || summary.InvalidCount != 0 {
+		t.Fatalf("reindex recovery summary = %#v", summary)
+	}
+	contents, err := os.ReadFile(claimPath)
+	if err != nil {
+		t.Fatalf("ReadFile(recovered claim) error = %v", err)
+	}
+	if !bytes.Equal(contents, target) {
+		t.Fatalf("reindex did not recover target bytes")
+	}
+	if _, err := zruntime.ReadPendingTransition(app.Paths, "research"); !os.IsNotExist(err) {
+		t.Fatalf("pending journal after reindex = %v, want missing", err)
+	}
+}
+
+func TestRunAskBlocksPendingTransition(t *testing.T) {
+	app, _ := testApp(t)
+	setupResearchApp(t, &app)
+	app.Stdout = &bytes.Buffer{}
+	app.Stdin = strings.NewReader("Pending ask claim\n")
+	if err := app.Run([]string{"claim", "draft", "--tier", "projects", "--title", "Pending ask claim", "--basis", "owner"}); err != nil {
+		t.Fatalf("Run(claim draft) error = %v", err)
+	}
+	var draft struct {
+		ID string `json:"id"`
+	}
+	decodeJSON(t, stdout(app), &draft)
+	if err := app.Run([]string{"claim", "approve", draft.ID}); err != nil {
+		t.Fatalf("Run(claim approve) error = %v", err)
+	}
+	if err := app.Run([]string{"reindex"}); err != nil {
+		t.Fatalf("Run(reindex) error = %v", err)
+	}
+	claimPath := filepath.Join(app.Paths.WorkspacesDir, "research", "wiki", "projects", draft.ID+".md")
+	before, err := os.ReadFile(claimPath)
+	if err != nil {
+		t.Fatalf("ReadFile(claim) error = %v", err)
+	}
+	target := append(append([]byte(nil), before...), []byte("pending\n")...)
+	if err := zruntime.WritePendingTransition(app.Paths, "research", zruntime.PendingTransition{
+		OperationID: "txn_cli_ask",
+		Kind:        zruntime.ClaimTransitionSupersede,
+		Workspace:   "research",
+		Targets:     []zruntime.PendingTransitionTarget{makePendingTransitionTarget("wiki/projects/"+draft.ID+".md", before, target)},
+	}); err != nil {
+		t.Fatalf("WritePendingTransition() error = %v", err)
+	}
+	app.Stdout = &bytes.Buffer{}
+	if err := app.Run([]string{"ask", "pending", "ask"}); err == nil || !strings.Contains(err.Error(), "pending transition") {
+		t.Fatalf("Run(ask) error = %v, want pending transition error", err)
+	}
+	if stdout(app) != "" {
+		t.Fatalf("ask wrote output while transition was pending: %q", stdout(app))
+	}
+	if _, err := zruntime.ReadPendingTransition(app.Paths, "research"); err != nil {
+		t.Fatalf("ReadPendingTransition() error = %v, want journal preserved", err)
+	}
+}
+
+func TestRunClaimMutationRecoversPendingTransition(t *testing.T) {
+	app, _ := testApp(t)
+	setupResearchApp(t, &app)
+	recoveryPath := filepath.Join(app.Paths.WorkspacesDir, "research", "wiki", "projects", "recovery.md")
+	before := []byte("before claim mutation\n")
+	target := []byte("recovered before claim mutation\n")
+	if err := os.WriteFile(recoveryPath, before, 0o644); err != nil {
+		t.Fatalf("WriteFile(before) error = %v", err)
+	}
+	if err := zruntime.WritePendingTransition(app.Paths, "research", zruntime.PendingTransition{
+		OperationID: "txn_cli_claim",
+		Kind:        zruntime.ClaimTransitionSupersede,
+		Workspace:   "research",
+		Targets:     []zruntime.PendingTransitionTarget{makePendingTransitionTarget("wiki/projects/recovery.md", before, target)},
+	}); err != nil {
+		t.Fatalf("WritePendingTransition() error = %v", err)
+	}
+	app.Stdout = &bytes.Buffer{}
+	app.Stdin = strings.NewReader("Claim after recovery\n")
+	if err := app.Run([]string{"claim", "draft", "--tier", "projects", "--title", "Claim after recovery", "--basis", "owner"}); err != nil {
+		t.Fatalf("Run(claim draft) error = %v", err)
+	}
+	recovered, err := os.ReadFile(recoveryPath)
+	if err != nil {
+		t.Fatalf("ReadFile(recovered) error = %v", err)
+	}
+	if !bytes.Equal(recovered, target) {
+		t.Fatalf("claim mutation did not recover target bytes")
+	}
+	if _, err := zruntime.ReadPendingTransition(app.Paths, "research"); !os.IsNotExist(err) {
+		t.Fatalf("pending journal after claim mutation = %v, want missing", err)
+	}
+}
+
+func makePendingTransitionTarget(path string, before []byte, target []byte) zruntime.PendingTransitionTarget {
+	hash := func(contents []byte) string {
+		sum := sha256.Sum256(contents)
+		return "sha256:" + hex.EncodeToString(sum[:])
+	}
+	return zruntime.PendingTransitionTarget{
+		Path:           path,
+		PreimageSHA256: hash(before),
+		TargetSHA256:   hash(target),
+		TargetBytes:    target,
+	}
 }
 
 func setupResearchApp(t *testing.T, app *App) {

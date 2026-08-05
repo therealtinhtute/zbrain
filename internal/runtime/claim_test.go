@@ -115,6 +115,169 @@ func TestClaimVerificationDigestRoundTrip(t *testing.T) {
 	}
 }
 
+func TestClaimTransitionRoundTrip(t *testing.T) {
+	claim := validOwnerClaim()
+	claim.Transitions = []ClaimTransition{
+		{
+			Kind: ClaimTransitionApprove,
+			At:   "2026-07-30T10:00:00Z",
+			By:   "owner",
+		},
+		{
+			Kind:                    ClaimTransitionSupersede,
+			At:                      "2026-07-30T11:00:00Z",
+			By:                      "owner",
+			Reason:                  "corrected scope",
+			RelatedClaimIDs:         []string{"clm_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"},
+			PriorVerificationDigest: "sha256:" + strings.Repeat("a", 64),
+		},
+		{
+			Kind:   ClaimTransitionRevoke,
+			At:     "2026-07-30T12:00:00Z",
+			By:     "owner",
+			Reason: "withdrawn",
+		},
+	}
+
+	rendered, err := RenderClaimMarkdown(claim)
+	if err != nil {
+		t.Fatalf("RenderClaimMarkdown() error = %v", err)
+	}
+	if !strings.Contains(string(rendered), "transitions:") || !strings.Contains(string(rendered), "prior_verification_digest:") {
+		t.Fatalf("rendered claim is missing transition history:\n%s", rendered)
+	}
+	parsed, err := ParseClaimMarkdown("projects", "projects/claim.md", rendered)
+	if err != nil {
+		t.Fatalf("ParseClaimMarkdown() error = %v", err)
+	}
+	if len(parsed.Transitions) != 3 {
+		t.Fatalf("len(Transitions) = %d, want 3", len(parsed.Transitions))
+	}
+	if parsed.Transitions[1].Kind != ClaimTransitionSupersede || parsed.Transitions[1].Reason != "corrected scope" || parsed.Transitions[1].RelatedClaimIDs[0] != "clm_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb" {
+		t.Fatalf("supersede transition = %#v", parsed.Transitions[1])
+	}
+	if parsed.Transitions[1].PriorVerificationDigest != "sha256:"+strings.Repeat("a", 64) {
+		t.Fatalf("prior verification digest = %q", parsed.Transitions[1].PriorVerificationDigest)
+	}
+
+	renderedAgain, err := RenderClaimMarkdown(parsed)
+	if err != nil {
+		t.Fatalf("RenderClaimMarkdown(parsed) error = %v", err)
+	}
+	if string(renderedAgain) != string(rendered) {
+		t.Fatalf("transition render is not deterministic:\nfirst:\n%s\nsecond:\n%s", rendered, renderedAgain)
+	}
+}
+
+func TestClaimVerificationDigestIncludesTransitionHistory(t *testing.T) {
+	claim := validOwnerClaim()
+	claim.Status = ClaimStatusApproved
+	without, err := ClaimVerificationDigest(claim)
+	if err != nil {
+		t.Fatalf("ClaimVerificationDigest(without transitions) error = %v", err)
+	}
+
+	claim.Transitions = []ClaimTransition{{
+		Kind: ClaimTransitionApprove,
+		At:   "2026-07-30T10:00:00Z",
+		By:   "owner",
+	}}
+	with, err := ClaimVerificationDigest(claim)
+	if err != nil {
+		t.Fatalf("ClaimVerificationDigest(with transition) error = %v", err)
+	}
+	if with == without {
+		t.Fatalf("transition history did not change verification digest: %q", with)
+	}
+
+	claim.VerifiedAt = "2026-07-30T10:01:00Z"
+	claim.VerifiedBy = "different-owner"
+	claim.VerifiedDigest = "sha256:" + strings.Repeat("b", 64)
+	withAttestation, err := ClaimVerificationDigest(claim)
+	if err != nil {
+		t.Fatalf("ClaimVerificationDigest(with attestation) error = %v", err)
+	}
+	if withAttestation != with {
+		t.Fatalf("verification attestation changed digest: got %q, want %q", withAttestation, with)
+	}
+}
+
+func TestLegacyApprovedClaimWithoutTransitions(t *testing.T) {
+	claim := validOwnerClaim()
+	claim.Status = ClaimStatusApproved
+	claim.VerifiedAt = "2026-07-30T10:00:00Z"
+	claim.VerifiedBy = "owner"
+	digest, err := ClaimVerificationDigest(claim)
+	if err != nil {
+		t.Fatalf("ClaimVerificationDigest() error = %v", err)
+	}
+	claim.VerifiedDigest = digest
+
+	rendered, err := RenderClaimMarkdown(claim)
+	if err != nil {
+		t.Fatalf("RenderClaimMarkdown() error = %v", err)
+	}
+	if strings.Contains(string(rendered), "transitions:") {
+		t.Fatalf("empty transition history was rendered:\n%s", rendered)
+	}
+	parsed, err := ParseClaimMarkdown("projects", "projects/"+claim.ID+".md", rendered)
+	if err != nil {
+		t.Fatalf("ParseClaimMarkdown() error = %v", err)
+	}
+	if len(parsed.Transitions) != 0 {
+		t.Fatalf("legacy transitions = %#v, want empty", parsed.Transitions)
+	}
+	if err := VerifyClaimDigest(parsed); err != nil {
+		t.Fatalf("VerifyClaimDigest(legacy) error = %v", err)
+	}
+}
+
+func TestClaimTransitionValidation(t *testing.T) {
+	base := ClaimTransition{
+		Kind: ClaimTransitionApprove,
+		At:   "2026-07-30T10:00:00Z",
+		By:   "owner",
+	}
+	tests := []struct {
+		name   string
+		mutate func(*ClaimTransition)
+	}{
+		{
+			name: "unknown kind",
+			mutate: func(transition *ClaimTransition) {
+				transition.Kind = "publish"
+			},
+		},
+		{
+			name: "invalid time",
+			mutate: func(transition *ClaimTransition) {
+				transition.At = "not-a-time"
+			},
+		},
+		{
+			name: "empty actor",
+			mutate: func(transition *ClaimTransition) {
+				transition.By = "  "
+			},
+		},
+		{
+			name: "unsafe related id",
+			mutate: func(transition *ClaimTransition) {
+				transition.RelatedClaimIDs = []string{"../outside"}
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			candidate := base
+			tt.mutate(&candidate)
+			if err := ValidateClaimTransition(candidate); err == nil {
+				t.Fatalf("ValidateClaimTransition() error = nil")
+			}
+		})
+	}
+}
+
 func TestVerifyClaimDigest(t *testing.T) {
 	claim := validOwnerClaim()
 	claim.Status = ClaimStatusApproved

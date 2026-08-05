@@ -3,6 +3,7 @@ package runtime
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -62,6 +63,7 @@ func TestClaimStoreDraftApproveSupersedeRevoke(t *testing.T) {
 		t.Fatalf("replacement status = %q", approvedReplacement.Status)
 	}
 
+	priorDigest := approvedReplacement.VerifiedDigest
 	revoked, err := store.Revoke("research", approvedReplacement.ID, "wrong scope")
 	if err != nil {
 		t.Fatalf("Revoke() error = %v", err)
@@ -69,8 +71,125 @@ func TestClaimStoreDraftApproveSupersedeRevoke(t *testing.T) {
 	if revoked.Status != ClaimStatusRevoked {
 		t.Fatalf("revoked status = %q", revoked.Status)
 	}
-	if !strings.Contains(revoked.Body, "Revoked: wrong scope") {
-		t.Fatalf("revocation reason missing from body: %q", revoked.Body)
+	if revoked.Body != replacement.Body {
+		t.Fatalf("revoked body changed: got %q, want %q", revoked.Body, replacement.Body)
+	}
+	if revoked.VerifiedDigest != priorDigest || len(revoked.Transitions) != 2 || revoked.Transitions[1].Kind != ClaimTransitionRevoke || revoked.Transitions[1].Reason != "wrong scope" {
+		t.Fatalf("revocation history not preserved: %#v", revoked)
+	}
+}
+
+func TestApproveTransitionGraph(t *testing.T) {
+	paths, _ := claimStoreTestPaths(t)
+	store := ClaimStore{Paths: paths, Now: fixedClaimStoreNow}
+	claim := validStoreClaim("clm_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", ClaimBasisOwner)
+	if _, err := store.WriteDraft("research", claim); err != nil {
+		t.Fatalf("WriteDraft() error = %v", err)
+	}
+	approved, err := store.Approve("research", claim.ID)
+	if err != nil {
+		t.Fatalf("Approve() error = %v", err)
+	}
+	if len(approved.Transitions) != 1 || approved.Transitions[0].Kind != ClaimTransitionApprove {
+		t.Fatalf("approval history = %#v", approved.Transitions)
+	}
+	if _, err := store.Approve("research", claim.ID); err == nil {
+		t.Fatalf("Approve(approved) error = nil")
+	}
+}
+
+func TestSupersedeTransitionGraph(t *testing.T) {
+	paths, _ := claimStoreTestPaths(t)
+	store := ClaimStore{Paths: paths, Now: fixedClaimStoreNow}
+	oldClaim := validStoreClaim("clm_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", ClaimBasisOwner)
+	if _, err := store.WriteDraft("research", oldClaim); err != nil {
+		t.Fatalf("WriteDraft(old) error = %v", err)
+	}
+	oldApproved, err := store.Approve("research", oldClaim.ID)
+	if err != nil {
+		t.Fatalf("Approve(old) error = %v", err)
+	}
+
+	replacement := validStoreClaim("clm_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", ClaimBasisOwner)
+	replacement.Body = "Replacement body\n"
+	draft, err := store.WriteSupersedingDraft("research", oldApproved.ID, replacement)
+	if err != nil {
+		t.Fatalf("WriteSupersedingDraft() error = %v", err)
+	}
+	approvedReplacement, err := store.Approve("research", draft.ID)
+	if err != nil {
+		t.Fatalf("Approve(replacement) error = %v", err)
+	}
+	if len(approvedReplacement.Transitions) != 1 || approvedReplacement.Transitions[0].Kind != ClaimTransitionSupersede || len(approvedReplacement.Transitions[0].RelatedClaimIDs) != 1 || approvedReplacement.Transitions[0].RelatedClaimIDs[0] != oldApproved.ID {
+		t.Fatalf("replacement history = %#v", approvedReplacement.Transitions)
+	}
+
+	old, err := store.Read("research", oldApproved.ID)
+	if err != nil {
+		t.Fatalf("Read(old) error = %v", err)
+	}
+	if old.Status != ClaimStatusSuperseded || old.Body != oldApproved.Body || old.VerifiedAt != oldApproved.VerifiedAt || old.VerifiedBy != oldApproved.VerifiedBy || old.VerifiedDigest != oldApproved.VerifiedDigest {
+		t.Fatalf("old approval history was not preserved: %#v", old)
+	}
+	if len(old.Transitions) != 2 || old.Transitions[1].Kind != ClaimTransitionSupersede || old.Transitions[1].PriorVerificationDigest != oldApproved.VerifiedDigest || old.Transitions[1].RelatedClaimIDs[0] != approvedReplacement.ID {
+		t.Fatalf("old supersession history = %#v", old.Transitions)
+	}
+	if _, err := store.Revoke("research", old.ID, "obsolete"); err == nil {
+		t.Fatalf("Revoke(superseded) error = nil")
+	}
+}
+
+func TestRevokeTransitionGraph(t *testing.T) {
+	paths, _ := claimStoreTestPaths(t)
+	store := ClaimStore{Paths: paths, Now: fixedClaimStoreNow}
+	claim := validStoreClaim("clm_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", ClaimBasisOwner)
+	if _, err := store.WriteDraft("research", claim); err != nil {
+		t.Fatalf("WriteDraft() error = %v", err)
+	}
+	if _, err := store.Revoke("research", claim.ID, "not ready"); err == nil {
+		t.Fatalf("Revoke(draft) error = nil")
+	}
+	approved, err := store.Approve("research", claim.ID)
+	if err != nil {
+		t.Fatalf("Approve() error = %v", err)
+	}
+	revoked, err := store.Revoke("research", approved.ID, "not ready")
+	if err != nil {
+		t.Fatalf("Revoke(approved) error = %v", err)
+	}
+	if revoked.Status != ClaimStatusRevoked || revoked.Body != approved.Body || revoked.VerifiedDigest != approved.VerifiedDigest || len(revoked.Transitions) != 2 || revoked.Transitions[1].Kind != ClaimTransitionRevoke || revoked.Transitions[1].Reason != "not ready" {
+		t.Fatalf("revocation history = %#v", revoked)
+	}
+	if _, err := store.Revoke("research", approved.ID, "again"); err == nil {
+		t.Fatalf("Revoke(revoked) error = nil")
+	}
+}
+
+func TestLifecycleHistoryPreserved(t *testing.T) {
+	paths, _ := claimStoreTestPaths(t)
+	store := ClaimStore{Paths: paths, Now: fixedClaimStoreNow}
+	claim := validStoreClaim("clm_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", ClaimBasisOwner)
+	claim.Body = "Original body\n"
+	if _, err := store.WriteDraft("research", claim); err != nil {
+		t.Fatalf("WriteDraft() error = %v", err)
+	}
+	approved, err := store.Approve("research", claim.ID)
+	if err != nil {
+		t.Fatalf("Approve() error = %v", err)
+	}
+	beforeBody, beforeAt, beforeBy, beforeDigest := approved.Body, approved.VerifiedAt, approved.VerifiedBy, approved.VerifiedDigest
+	if _, err := store.Revoke("research", approved.ID, "owner withdrew claim"); err != nil {
+		t.Fatalf("Revoke() error = %v", err)
+	}
+	revoked, err := store.Read("research", approved.ID)
+	if err != nil {
+		t.Fatalf("Read(revoked) error = %v", err)
+	}
+	if revoked.Body != beforeBody || revoked.VerifiedAt != beforeAt || revoked.VerifiedBy != beforeBy || revoked.VerifiedDigest != beforeDigest {
+		t.Fatalf("original representation changed: %#v", revoked)
+	}
+	if len(revoked.Transitions) != 2 || revoked.Transitions[1].PriorVerificationDigest != beforeDigest {
+		t.Fatalf("prior attestation missing: %#v", revoked.Transitions)
 	}
 }
 
@@ -147,6 +266,228 @@ func TestClaimStoreRejectsInvalidApprovalBasis(t *testing.T) {
 	}
 	if _, err := store.Approve("research", claim.ID); err == nil {
 		t.Fatalf("Approve() error = nil, want missing evidence error")
+	}
+}
+
+func TestClaimStoreApproveDeepSupport(t *testing.T) {
+	paths, _ := claimStoreTestPaths(t)
+	store := ClaimStore{Paths: paths, Now: fixedClaimStoreNow}
+
+	leaf := validStoreClaim(approvalTestClaimID(1), ClaimBasisOwner)
+	leaf = finalizeApprovedStoreClaim(t, leaf)
+	writeCanonicalStoreClaim(t, paths, leaf)
+	current := leaf
+	for number := 2; number <= 96; number++ {
+		next := validStoreClaim(approvalTestClaimID(number), ClaimBasisDerived)
+		next.SupportingClaimIDs = []string{current.ID}
+		next = finalizeApprovedStoreClaim(t, next)
+		writeCanonicalStoreClaim(t, paths, next)
+		current = next
+	}
+
+	root := validStoreClaim(approvalTestClaimID(1000), ClaimBasisDerived)
+	root.SupportingClaimIDs = []string{current.ID}
+	if _, err := store.WriteDraft("research", root); err != nil {
+		t.Fatalf("WriteDraft(root) error = %v", err)
+	}
+	approved, err := store.Approve("research", root.ID)
+	if err != nil {
+		t.Fatalf("Approve(deep support) error = %v", err)
+	}
+	if approved.Status != ClaimStatusApproved {
+		t.Fatalf("approved status = %q, want approved", approved.Status)
+	}
+}
+
+func TestClaimStoreApproveInvalidDigest(t *testing.T) {
+	paths, _ := claimStoreTestPaths(t)
+	store := ClaimStore{Paths: paths, Now: fixedClaimStoreNow}
+	support := validStoreClaim(approvalTestClaimID(1), ClaimBasisOwner)
+	support = finalizeApprovedStoreClaim(t, support)
+	writeCanonicalStoreClaim(t, paths, support)
+	supportPath := filepath.Join(paths.WorkspacesDir, "research", "wiki", "projects", support.ID+".md")
+	contents, err := os.ReadFile(supportPath)
+	if err != nil {
+		t.Fatalf("ReadFile(support) error = %v", err)
+	}
+	contents = []byte(strings.Replace(string(contents), "Store body", "Tampered body", 1))
+	if err := os.WriteFile(supportPath, contents, 0o644); err != nil {
+		t.Fatalf("WriteFile(tampered support) error = %v", err)
+	}
+
+	root := validStoreClaim(approvalTestClaimID(2), ClaimBasisDerived)
+	root.SupportingClaimIDs = []string{support.ID}
+	if _, err := store.WriteDraft("research", root); err != nil {
+		t.Fatalf("WriteDraft(root) error = %v", err)
+	}
+	rootPath := filepath.Join(paths.WorkspacesDir, "research", "wiki", "projects", root.ID+".md")
+	before := sha256Hex(t, rootPath)
+	if _, err := store.Approve("research", root.ID); err == nil || !strings.Contains(err.Error(), "verification digest mismatch") {
+		t.Fatalf("Approve(invalid digest) error = %v, want verification digest mismatch", err)
+	}
+	if after := sha256Hex(t, rootPath); after != before {
+		t.Fatalf("draft changed after invalid approval: before %s after %s", before, after)
+	}
+	unchanged, err := store.Read("research", root.ID)
+	if err != nil {
+		t.Fatalf("Read(root) error = %v", err)
+	}
+	if unchanged.Status != ClaimStatusDraft || unchanged.VerifiedAt != "" || unchanged.VerifiedBy != "" || unchanged.VerifiedDigest != "" || len(unchanged.Transitions) != 0 {
+		t.Fatalf("draft approval fields changed: %#v", unchanged)
+	}
+	journalPath, err := PendingTransitionPath(paths, "research")
+	if err != nil {
+		t.Fatalf("PendingTransitionPath() error = %v", err)
+	}
+	if _, err := os.Stat(journalPath); !os.IsNotExist(err) {
+		t.Fatalf("pending journal after invalid approval: %v", err)
+	}
+}
+
+func TestClaimStoreApproveRevoked(t *testing.T) {
+	paths, _ := claimStoreTestPaths(t)
+	store := ClaimStore{Paths: paths, Now: fixedClaimStoreNow}
+	support := validStoreClaim(approvalTestClaimID(1), ClaimBasisOwner)
+	if _, err := store.WriteDraft("research", support); err != nil {
+		t.Fatalf("WriteDraft(support) error = %v", err)
+	}
+	if _, err := store.Approve("research", support.ID); err != nil {
+		t.Fatalf("Approve(support) error = %v", err)
+	}
+	if _, err := store.Revoke("research", support.ID, "obsolete"); err != nil {
+		t.Fatalf("Revoke(support) error = %v", err)
+	}
+	root := validStoreClaim(approvalTestClaimID(2), ClaimBasisDerived)
+	root.SupportingClaimIDs = []string{support.ID}
+	if _, err := store.WriteDraft("research", root); err != nil {
+		t.Fatalf("WriteDraft(root) error = %v", err)
+	}
+	if _, err := store.Approve("research", root.ID); err == nil || !strings.Contains(err.Error(), "revoked") {
+		t.Fatalf("Approve(revoked support) error = %v, want revoked", err)
+	}
+}
+
+func TestClaimStoreApproveSuperseded(t *testing.T) {
+	paths, _ := claimStoreTestPaths(t)
+	store := ClaimStore{Paths: paths, Now: fixedClaimStoreNow}
+	old := validStoreClaim(approvalTestClaimID(1), ClaimBasisOwner)
+	if _, err := store.WriteDraft("research", old); err != nil {
+		t.Fatalf("WriteDraft(old) error = %v", err)
+	}
+	if _, err := store.Approve("research", old.ID); err != nil {
+		t.Fatalf("Approve(old) error = %v", err)
+	}
+	replacement := validStoreClaim(approvalTestClaimID(2), ClaimBasisOwner)
+	if _, err := store.WriteSupersedingDraft("research", old.ID, replacement); err != nil {
+		t.Fatalf("WriteSupersedingDraft() error = %v", err)
+	}
+	if _, err := store.Approve("research", replacement.ID); err != nil {
+		t.Fatalf("Approve(replacement) error = %v", err)
+	}
+	root := validStoreClaim(approvalTestClaimID(3), ClaimBasisDerived)
+	root.SupportingClaimIDs = []string{old.ID}
+	if _, err := store.WriteDraft("research", root); err != nil {
+		t.Fatalf("WriteDraft(root) error = %v", err)
+	}
+	if _, err := store.Approve("research", root.ID); err == nil || !strings.Contains(err.Error(), "superseded") {
+		t.Fatalf("Approve(superseded support) error = %v, want superseded", err)
+	}
+}
+
+func TestClaimStoreApproveMissingEvidence(t *testing.T) {
+	paths, _ := claimStoreTestPaths(t)
+	store := ClaimStore{Paths: paths, Now: fixedClaimStoreNow}
+	claim := validStoreClaim(approvalTestClaimID(1), ClaimBasisEvidence)
+	claim.EvidenceIDs = []string{"evd_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}
+	if _, err := store.WriteDraft("research", claim); err != nil {
+		t.Fatalf("WriteDraft() error = %v", err)
+	}
+	claimPath := filepath.Join(paths.WorkspacesDir, "research", "wiki", "projects", claim.ID+".md")
+	before := sha256Hex(t, claimPath)
+	if _, err := store.Approve("research", claim.ID); err == nil || !strings.Contains(err.Error(), "source.yaml") {
+		t.Fatalf("Approve(missing evidence) error = %v, want source.yaml", err)
+	}
+	if after := sha256Hex(t, claimPath); after != before {
+		t.Fatalf("draft changed after missing evidence: before %s after %s", before, after)
+	}
+}
+
+func TestClaimStoreApproveTamperedEvidenceNoWrite(t *testing.T) {
+	paths, _ := claimStoreTestPaths(t)
+	evidence := addStoreEvidence(t, paths, "trusted evidence")
+	rawPath := filepath.Join(paths.WorkspacesDir, "research", "evidence", "sources", evidence.ID, "raw")
+	if err := os.Chmod(rawPath, 0o644); err != nil {
+		t.Fatalf("Chmod(raw) error = %v", err)
+	}
+	if err := os.WriteFile(rawPath, []byte(strings.Repeat("x", int(evidence.ByteLength))), 0o644); err != nil {
+		t.Fatalf("WriteFile(raw) error = %v", err)
+	}
+	store := ClaimStore{Paths: paths, Now: fixedClaimStoreNow}
+	claim := validStoreClaim(approvalTestClaimID(1), ClaimBasisEvidence)
+	claim.EvidenceIDs = []string{evidence.ID}
+	if _, err := store.WriteDraft("research", claim); err != nil {
+		t.Fatalf("WriteDraft() error = %v", err)
+	}
+	claimPath := filepath.Join(paths.WorkspacesDir, "research", "wiki", "projects", claim.ID+".md")
+	before := sha256Hex(t, claimPath)
+	if _, err := store.Approve("research", claim.ID); err == nil || !strings.Contains(err.Error(), "sha256") {
+		t.Fatalf("Approve(tampered evidence) error = %v, want sha256", err)
+	}
+	if after := sha256Hex(t, claimPath); after != before {
+		t.Fatalf("draft changed after tampered evidence: before %s after %s", before, after)
+	}
+}
+
+func TestClaimStoreApproveRejectsSupportingClaimEvidence(t *testing.T) {
+	paths, _ := claimStoreTestPaths(t)
+	evidence := addStoreEvidence(t, paths, "support evidence")
+	store := ClaimStore{Paths: paths, Now: fixedClaimStoreNow}
+	support := validStoreClaim(approvalTestClaimID(1), ClaimBasisEvidence)
+	support.EvidenceIDs = []string{evidence.ID}
+	if _, err := store.WriteDraft("research", support); err != nil {
+		t.Fatalf("WriteDraft(support) error = %v", err)
+	}
+	if _, err := store.Approve("research", support.ID); err != nil {
+		t.Fatalf("Approve(support) error = %v", err)
+	}
+	rawPath := filepath.Join(paths.WorkspacesDir, "research", "evidence", "sources", evidence.ID, "raw")
+	if err := os.Chmod(rawPath, 0o644); err != nil {
+		t.Fatalf("Chmod(raw) error = %v", err)
+	}
+	if err := os.WriteFile(rawPath, []byte(strings.Repeat("x", int(evidence.ByteLength))), 0o644); err != nil {
+		t.Fatalf("WriteFile(raw) error = %v", err)
+	}
+	dependent := validStoreClaim(approvalTestClaimID(2), ClaimBasisDerived)
+	dependent.SupportingClaimIDs = []string{support.ID}
+	if _, err := store.WriteDraft("research", dependent); err != nil {
+		t.Fatalf("WriteDraft(dependent) error = %v", err)
+	}
+	claimPath := filepath.Join(paths.WorkspacesDir, "research", "wiki", "projects", dependent.ID+".md")
+	before := sha256Hex(t, claimPath)
+	if _, err := store.Approve("research", dependent.ID); err == nil || !strings.Contains(err.Error(), evidence.ID) || !strings.Contains(err.Error(), "sha256") {
+		t.Fatalf("Approve(dependent) error = %v, want supporting evidence hash failure", err)
+	}
+	if after := sha256Hex(t, claimPath); after != before {
+		t.Fatalf("dependent draft changed after supporting evidence failure: before %s after %s", before, after)
+	}
+}
+
+func TestClaimStoreApproveCycle(t *testing.T) {
+	paths, _ := claimStoreTestPaths(t)
+	store := ClaimStore{Paths: paths, Now: fixedClaimStoreNow}
+	first := validStoreClaim(approvalTestClaimID(1), ClaimBasisDerived)
+	second := validStoreClaim(approvalTestClaimID(2), ClaimBasisDerived)
+	first.SupportingClaimIDs = []string{second.ID}
+	second.SupportingClaimIDs = []string{first.ID}
+	writeCanonicalStoreClaim(t, paths, finalizeApprovedStoreClaim(t, first))
+	writeCanonicalStoreClaim(t, paths, finalizeApprovedStoreClaim(t, second))
+	root := validStoreClaim(approvalTestClaimID(3), ClaimBasisDerived)
+	root.SupportingClaimIDs = []string{first.ID}
+	if _, err := store.WriteDraft("research", root); err != nil {
+		t.Fatalf("WriteDraft(root) error = %v", err)
+	}
+	if _, err := store.Approve("research", root.ID); err == nil || !strings.Contains(err.Error(), "dependency cycle detected") {
+		t.Fatalf("Approve(cycle) error = %v, want dependency cycle detected", err)
 	}
 }
 
@@ -304,6 +645,32 @@ func validStoreClaim(id string, basis ClaimBasis) Claim {
 	}
 }
 
+func approvalTestClaimID(number int) string {
+	return fmt.Sprintf("clm_%032x", number)
+}
+
+func finalizeApprovedStoreClaim(t *testing.T, claim Claim) Claim {
+	t.Helper()
+	claim.Status = ClaimStatusApproved
+	claim.VerifiedAt = fixedClaimStoreNow().Format(time.RFC3339)
+	claim.VerifiedBy = "owner"
+	claim.VerifiedDigest = ""
+	digest, err := ClaimVerificationDigest(claim)
+	if err != nil {
+		t.Fatalf("ClaimVerificationDigest() error = %v", err)
+	}
+	claim.VerifiedDigest = digest
+	return claim
+}
+
+func writeCanonicalStoreClaim(t *testing.T, paths Paths, claim Claim) {
+	t.Helper()
+	path := filepath.Join(paths.WorkspacesDir, "research", "wiki", claim.Tier, claim.ID+".md")
+	if err := writeClaimAtomic(path, claim); err != nil {
+		t.Fatalf("writeClaimAtomic(%s) error = %v", claim.ID, err)
+	}
+}
+
 func fixedClaimStoreNow() time.Time {
 	return time.Date(2026, 7, 30, 9, 0, 0, 0, time.UTC)
 }
@@ -319,6 +686,34 @@ func addStoreEvidence(t *testing.T, paths Paths, body string) Evidence {
 		t.Fatalf("AddFile() error = %v", err)
 	}
 	return evidence
+}
+
+func TestMutationRecoversPendingTransition(t *testing.T) {
+	paths, _ := claimStoreTestPaths(t)
+	recoveryPath := filepath.Join(paths.WorkspacesDir, "research", "wiki", "projects", "recovery.md")
+	before := []byte("before mutation\n")
+	target := []byte("recovered mutation\n")
+	if err := os.WriteFile(recoveryPath, before, 0o644); err != nil {
+		t.Fatalf("WriteFile(before) error = %v", err)
+	}
+	if err := WritePendingTransition(paths, "research", PendingTransition{
+		OperationID: "txn_mutation",
+		Kind:        ClaimTransitionSupersede,
+		Workspace:   "research",
+		Targets:     []PendingTransitionTarget{pendingTransitionTarget("wiki/projects/recovery.md", before, target)},
+	}); err != nil {
+		t.Fatalf("WritePendingTransition() error = %v", err)
+	}
+	store := ClaimStore{Paths: paths, Now: fixedClaimStoreNow}
+	claim := validStoreClaim("clm_cccccccccccccccccccccccccccccccc", ClaimBasisOwner)
+	if _, err := store.WriteDraft("research", claim); err != nil {
+		t.Fatalf("WriteDraft() error = %v", err)
+	}
+	assertFileBytes(t, recoveryPath, target)
+	assertNoPendingTransition(t, paths, "research")
+	if _, err := store.Read("research", claim.ID); err != nil {
+		t.Fatalf("Read(new claim) error = %v", err)
+	}
 }
 
 func TestClaimStoreWorkspaceIsolationAndSymlinkBoundary(t *testing.T) {
