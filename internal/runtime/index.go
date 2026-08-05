@@ -37,15 +37,18 @@ type SearchOptions struct {
 }
 
 type IndexedClaim struct {
-	ID          string      `json:"id"`
-	Path        string      `json:"path"`
-	Tier        string      `json:"tier"`
-	Type        string      `json:"type"`
-	Status      ClaimStatus `json:"status"`
-	Title       string      `json:"title"`
-	Description string      `json:"description,omitempty"`
-	StaleAfter  string      `json:"stale_after,omitempty"`
-	Score       float64     `json:"score"`
+	ID                 string      `json:"id"`
+	Path               string      `json:"path"`
+	Tier               string      `json:"tier"`
+	Type               string      `json:"type"`
+	Status             ClaimStatus `json:"status"`
+	Title              string      `json:"title"`
+	Description        string      `json:"description,omitempty"`
+	StaleAfter         string      `json:"stale_after,omitempty"`
+	Score              float64     `json:"score"`
+	indexedTags        string
+	indexedBody        string
+	verificationDigest string
 }
 
 func (store IndexStore) DatabasePath(workspace string) (string, error) {
@@ -769,7 +772,7 @@ func (store IndexStore) Search(workspace string, options SearchOptions) ([]Index
 	}
 	args = append(args, options.Limit)
 	rows, err := db.Query(`
-select c.id, c.path, c.tier, c.type, c.status, c.title, c.description, c.stale_after, rank
+select c.id, c.path, c.tier, c.type, c.status, c.title, c.description, c.stale_after, c.tags, c.body, c.verification_digest, rank
 from claims_fts
 join claims c on c.rowid = claims_fts.rowid
 where claims_fts match ? and c.status in (`+placeholders+`)
@@ -782,7 +785,7 @@ limit ?`, args...)
 	results := []IndexedClaim{}
 	for rows.Next() {
 		var result IndexedClaim
-		if err := rows.Scan(&result.ID, &result.Path, &result.Tier, &result.Type, &result.Status, &result.Title, &result.Description, &result.StaleAfter, &result.Score); err != nil {
+		if err := rows.Scan(&result.ID, &result.Path, &result.Tier, &result.Type, &result.Status, &result.Title, &result.Description, &result.StaleAfter, &result.indexedTags, &result.indexedBody, &result.verificationDigest, &result.Score); err != nil {
 			return nil, err
 		}
 		results = append(results, result)
@@ -814,7 +817,8 @@ create table claims (
   description text not null,
   stale_after text not null,
   tags text not null,
-  body text not null
+  body text not null,
+  verification_digest text not null
 );
 create virtual table claims_fts using fts5(
   title,
@@ -863,7 +867,7 @@ create table rebuild_state (
 }
 
 func insertIndexedClaim(tx *sql.Tx, claim Claim) error {
-	_, err := tx.Exec(`insert into claims(id, path, tier, type, status, title, description, stale_after, tags, body) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+	_, err := tx.Exec(`insert into claims(id, path, tier, type, status, title, description, stale_after, tags, body, verification_digest) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		claim.ID,
 		claim.Path,
 		claim.Tier,
@@ -874,6 +878,7 @@ func insertIndexedClaim(tx *sql.Tx, claim Claim) error {
 		claim.StaleAfter,
 		strings.Join(claim.Tags, " "),
 		claim.Body,
+		claim.VerifiedDigest,
 	)
 	return err
 }
