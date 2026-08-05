@@ -58,7 +58,25 @@ type Claim struct {
 	Supersedes         []string
 	ConflictsWith      []string
 	Tags               []string
+	Transitions        []ClaimTransition
 	Body               string
+}
+
+type ClaimTransitionKind string
+
+const (
+	ClaimTransitionApprove   ClaimTransitionKind = "approve"
+	ClaimTransitionSupersede ClaimTransitionKind = "supersede"
+	ClaimTransitionRevoke    ClaimTransitionKind = "revoke"
+)
+
+type ClaimTransition struct {
+	Kind                    ClaimTransitionKind `yaml:"kind" json:"kind"`
+	At                      string              `yaml:"at" json:"at"`
+	By                      string              `yaml:"by" json:"by"`
+	Reason                  string              `yaml:"reason,omitempty" json:"reason,omitempty"`
+	RelatedClaimIDs         []string            `yaml:"related_claim_ids,omitempty" json:"related_claim_ids,omitempty"`
+	PriorVerificationDigest string              `yaml:"prior_verification_digest,omitempty" json:"prior_verification_digest,omitempty"`
 }
 
 type ClaimSource struct {
@@ -94,14 +112,15 @@ type claimFrontmatter struct {
 }
 
 type zbrainProfile struct {
-	Profile            string     `yaml:"profile"`
-	ID                 string     `yaml:"id"`
-	Tier               string     `yaml:"tier"`
-	Basis              ClaimBasis `yaml:"basis"`
-	EvidenceIDs        []string   `yaml:"evidence_ids,omitempty"`
-	SupportingClaimIDs []string   `yaml:"supporting_claim_ids,omitempty"`
-	Supersedes         []string   `yaml:"supersedes,omitempty"`
-	ConflictsWith      []string   `yaml:"conflicts_with,omitempty"`
+	Profile            string            `yaml:"profile"`
+	ID                 string            `yaml:"id"`
+	Tier               string            `yaml:"tier"`
+	Basis              ClaimBasis        `yaml:"basis"`
+	EvidenceIDs        []string          `yaml:"evidence_ids,omitempty"`
+	SupportingClaimIDs []string          `yaml:"supporting_claim_ids,omitempty"`
+	Supersedes         []string          `yaml:"supersedes,omitempty"`
+	ConflictsWith      []string          `yaml:"conflicts_with,omitempty"`
+	Transitions        []ClaimTransition `yaml:"transitions,omitempty"`
 }
 
 type legacyClaimFrontmatter struct {
@@ -193,6 +212,7 @@ func RenderClaimMarkdown(claim Claim) ([]byte, error) {
 			SupportingClaimIDs: append([]string(nil), claim.SupportingClaimIDs...),
 			Supersedes:         append([]string(nil), claim.Supersedes...),
 			ConflictsWith:      append([]string(nil), claim.ConflictsWith...),
+			Transitions:        append([]ClaimTransition(nil), claim.Transitions...),
 		},
 	}
 	if claim.CreatedAt != "" || claim.CreatedBy != "" {
@@ -275,6 +295,46 @@ func ValidateClaim(claim Claim) error {
 				return fmt.Errorf("related claim id %q must match clm_<32 lowercase hex chars>", id)
 			}
 		}
+	}
+	if err := ValidateClaimTransitions(claim.Transitions); err != nil {
+		return err
+	}
+	return nil
+}
+
+func ValidateClaimTransitions(transitions []ClaimTransition) error {
+	for index, transition := range transitions {
+		if err := ValidateClaimTransition(transition); err != nil {
+			return fmt.Errorf("claim transition %d: %w", index, err)
+		}
+	}
+	return nil
+}
+
+func ValidateClaimTransition(transition ClaimTransition) error {
+	switch transition.Kind {
+	case ClaimTransitionApprove, ClaimTransitionSupersede, ClaimTransitionRevoke:
+	default:
+		return fmt.Errorf("claim transition kind %q is not supported", transition.Kind)
+	}
+	if _, err := time.Parse(time.RFC3339, transition.At); err != nil {
+		return fmt.Errorf("claim transition at must be RFC3339: %w", err)
+	}
+	if strings.TrimSpace(transition.By) == "" {
+		return fmt.Errorf("claim transition by is required")
+	}
+	if transition.PriorVerificationDigest != "" && !strings.HasPrefix(transition.PriorVerificationDigest, "sha256:") {
+		return fmt.Errorf("claim transition prior_verification_digest must use sha256:<hex>")
+	}
+	seen := make(map[string]struct{}, len(transition.RelatedClaimIDs))
+	for _, id := range transition.RelatedClaimIDs {
+		if !claimIDPattern.MatchString(id) {
+			return fmt.Errorf("claim transition related claim id %q must match clm_<32 lowercase hex chars>", id)
+		}
+		if _, ok := seen[id]; ok {
+			return fmt.Errorf("claim transition related claim id %q is duplicated", id)
+		}
+		seen[id] = struct{}{}
 	}
 	return nil
 }
@@ -395,6 +455,7 @@ func parseOKFClaimFrontmatter(frontmatter []byte, tier string, relPath string, b
 		Supersedes:         append([]string(nil), metadata.Zbrain.Supersedes...),
 		ConflictsWith:      append([]string(nil), metadata.Zbrain.ConflictsWith...),
 		Tags:               append([]string(nil), metadata.Tags...),
+		Transitions:        append([]ClaimTransition(nil), metadata.Zbrain.Transitions...),
 		Body:               string(body),
 	}
 	if claim.Tier == "" {

@@ -161,6 +161,9 @@ func (store IndexStore) CheckFresh(workspace string) error {
 	if err != nil {
 		return err
 	}
+	if err := CheckPendingTransition(store.Paths, workspace); err != nil {
+		return err
+	}
 	if _, err := os.Stat(dirtyPath); err == nil {
 		return fmt.Errorf("workspace %q index is dirty; run zbrain reindex", workspace)
 	} else if !os.IsNotExist(err) {
@@ -531,9 +534,54 @@ func writeTrustDirectories(tx *sql.Tx, directories []trustDirectoryMtime) error 
 	return nil
 }
 
+func validateApprovedClaimsForRebuild(paths Paths, workspace string, claims []Claim) ([]Claim, []InvalidClaim, error) {
+	validator, err := NewTrustValidatorFromStore(ClaimStore{Paths: paths}, workspace)
+	if err != nil {
+		return nil, nil, err
+	}
+	evidenceValidator, err := NewEvidenceValidator(EvidenceStore{Paths: paths}, workspace)
+	if err != nil {
+		return nil, nil, err
+	}
+	validClaims := make([]Claim, 0, len(claims))
+	invalidClaims := make([]InvalidClaim, 0)
+	for _, claim := range claims {
+		if claim.Status != ClaimStatusApproved {
+			validClaims = append(validClaims, claim)
+			continue
+		}
+		if err := VerifyClaimDigest(claim); err != nil {
+			invalidClaims = append(invalidClaims, InvalidClaim{Path: claim.Path, Error: err.Error()})
+			continue
+		}
+		if err := validateClaimEvidence(evidenceValidator, claim); err != nil {
+			invalidClaims = append(invalidClaims, InvalidClaim{Path: claim.Path, Error: err.Error()})
+			continue
+		}
+		validator.validateSupporting = func(support Claim) error {
+			return validateClaimEvidence(evidenceValidator, support)
+		}
+		if err := validator.ValidateClaim(claim); err != nil {
+			invalidClaims = append(invalidClaims, InvalidClaim{Path: claim.Path, Error: err.Error()})
+			continue
+		}
+		validClaims = append(validClaims, claim)
+	}
+	sort.Slice(invalidClaims, func(i, j int) bool {
+		if invalidClaims[i].Path == invalidClaims[j].Path {
+			return invalidClaims[i].Error < invalidClaims[j].Error
+		}
+		return invalidClaims[i].Path < invalidClaims[j].Path
+	})
+	return validClaims, invalidClaims, nil
+}
+
 func (store IndexStore) Rebuild(workspace string) (IndexSummary, error) {
 	databasePath, dirtyPath, err := store.validatedIndexPaths(workspace)
 	if err != nil {
+		return IndexSummary{}, err
+	}
+	if err := RecoverPendingTransitionForMutation(store.Paths, workspace); err != nil {
 		return IndexSummary{}, err
 	}
 	if err := store.AssertFTS5(); err != nil {
@@ -562,7 +610,7 @@ func (store IndexStore) Rebuild(workspace string) (IndexSummary, error) {
 	if err != nil {
 		return IndexSummary{}, err
 	}
-	scan, err := (ClaimStore{Paths: store.Paths}).ScanWorkspace(workspace)
+	scan, err := (ClaimStore{Paths: store.Paths}).ScanWorkspaceForTrust(workspace)
 	if err != nil {
 		return IndexSummary{}, err
 	}
@@ -573,6 +621,18 @@ func (store IndexStore) Rebuild(workspace string) (IndexSummary, error) {
 	if !sameTrustInputManifest(manifestBefore, manifest) {
 		return IndexSummary{}, fmt.Errorf("trust inputs changed during rebuild")
 	}
+	validClaims, dependencyInvalid, err := validateApprovedClaimsForRebuild(store.Paths, workspace, scan.Claims)
+	if err != nil {
+		return IndexSummary{}, err
+	}
+	scan.Claims = validClaims
+	scan.Invalid = append(scan.Invalid, dependencyInvalid...)
+	sort.Slice(scan.Invalid, func(i, j int) bool {
+		if scan.Invalid[i].Path == scan.Invalid[j].Path {
+			return scan.Invalid[i].Error < scan.Invalid[j].Error
+		}
+		return scan.Invalid[i].Path < scan.Invalid[j].Path
+	})
 	inputMtimes, err := collectTrustInputMtimes(store.Paths, workspace, manifest)
 	if err != nil {
 		return IndexSummary{}, err

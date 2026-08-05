@@ -6,8 +6,10 @@ import (
 	"encoding/hex"
 	"fmt"
 	"io"
+	"mime"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -26,6 +28,40 @@ type Evidence struct {
 	MediaType  string `yaml:"media_type" json:"media_type"`
 	ByteLength int64  `yaml:"byte_length" json:"byte_length"`
 	SHA256     string `yaml:"sha256" json:"sha256"`
+}
+
+type EvidenceVerificationError struct {
+	ID     string
+	Path   string
+	Reason string
+	Err    error
+}
+
+func (err *EvidenceVerificationError) Error() string {
+	return fmt.Sprintf("evidence verification failed for %s at %s: %s", err.ID, err.Path, err.Reason)
+}
+
+func (err *EvidenceVerificationError) Unwrap() error {
+	return err.Err
+}
+
+type EvidenceValidator struct {
+	store       EvidenceStore
+	workspace   string
+	cache       map[string]error
+	verifyCount map[string]int
+}
+
+func NewEvidenceValidator(store EvidenceStore, workspace string) (*EvidenceValidator, error) {
+	if _, err := ValidateWorkspace(store.Paths, workspace); err != nil {
+		return nil, err
+	}
+	return &EvidenceValidator{
+		store:       store,
+		workspace:   workspace,
+		cache:       make(map[string]error),
+		verifyCount: make(map[string]int),
+	}, nil
 }
 
 func NewEvidenceID() (string, error) {
@@ -149,32 +185,126 @@ func (store EvidenceStore) Read(workspace string, id string) (Evidence, error) {
 }
 
 func (store EvidenceStore) Verify(workspace string, id string) error {
-	evidence, err := store.Read(workspace, id)
+	validator, err := NewEvidenceValidator(store, workspace)
 	if err != nil {
 		return err
 	}
-	rawPath, err := store.evidenceFilePath(workspace, id, "raw")
+	return validator.Verify(id)
+}
+
+func (validator *EvidenceValidator) Verify(id string) error {
+	if result, cached := validator.cache[id]; cached {
+		return result
+	}
+	validator.verifyCount[id]++
+	err := validator.verifyUncached(id)
+	validator.cache[id] = err
+	return err
+}
+
+func (validator *EvidenceValidator) verifyUncached(id string) error {
+	if !evidenceIDPattern.MatchString(id) {
+		return newEvidenceVerificationError(id, evidenceMetadataPath(id), "evidence id is unsafe", nil)
+	}
+	metadataPath, err := validator.store.evidenceFilePath(validator.workspace, id, "source.yaml")
 	if err != nil {
-		return err
+		return newEvidenceVerificationError(id, evidenceMetadataPath(id), "resolve metadata path: "+err.Error(), err)
+	}
+	contents, err := os.ReadFile(metadataPath)
+	if err != nil {
+		return newEvidenceVerificationError(id, evidenceMetadataPath(id), "read metadata: "+err.Error(), err)
+	}
+	var evidence Evidence
+	if err := yaml.Unmarshal(contents, &evidence); err != nil {
+		return newEvidenceVerificationError(id, evidenceMetadataPath(id), "parse metadata: "+err.Error(), err)
+	}
+	if err := validateEvidenceMetadata(id, evidence); err != nil {
+		return newEvidenceVerificationError(id, evidenceMetadataPath(id), err.Error(), err)
+	}
+
+	rawPath, err := validator.store.evidenceFilePath(validator.workspace, id, "raw")
+	if err != nil {
+		return newEvidenceVerificationError(id, evidenceRawPath(id), "resolve raw path: "+err.Error(), err)
 	}
 	raw, err := os.Open(rawPath)
 	if err != nil {
-		return err
+		return newEvidenceVerificationError(id, evidenceRawPath(id), "read raw bytes: "+err.Error(), err)
 	}
-	defer raw.Close()
 	hash := sha256.New()
-	length, err := io.Copy(hash, raw)
-	if err != nil {
-		return err
+	length, copyErr := io.Copy(hash, raw)
+	closeErr := raw.Close()
+	if copyErr != nil {
+		return newEvidenceVerificationError(id, evidenceRawPath(id), "read raw bytes: "+copyErr.Error(), copyErr)
+	}
+	if closeErr != nil {
+		return newEvidenceVerificationError(id, evidenceRawPath(id), "close raw bytes: "+closeErr.Error(), closeErr)
 	}
 	if length != evidence.ByteLength {
-		return fmt.Errorf("evidence %s byte length = %d, want %d", id, length, evidence.ByteLength)
+		err := fmt.Errorf("byte length = %d, want %d", length, evidence.ByteLength)
+		return newEvidenceVerificationError(id, evidenceRawPath(id), err.Error(), err)
 	}
 	actual := hex.EncodeToString(hash.Sum(nil))
 	if actual != evidence.SHA256 {
-		return fmt.Errorf("evidence %s sha256 = %s, want %s", id, actual, evidence.SHA256)
+		err := fmt.Errorf("sha256 = %s, want %s", actual, evidence.SHA256)
+		return newEvidenceVerificationError(id, evidenceRawPath(id), err.Error(), err)
 	}
 	return nil
+}
+
+func validateEvidenceMetadata(id string, evidence Evidence) error {
+	if !evidenceIDPattern.MatchString(evidence.ID) {
+		return fmt.Errorf("metadata id %q is unsafe", evidence.ID)
+	}
+	if evidence.ID != id {
+		return fmt.Errorf("metadata id %q does not match requested id %q", evidence.ID, id)
+	}
+	if strings.TrimSpace(evidence.Origin) == "" {
+		return fmt.Errorf("metadata origin is required")
+	}
+	if _, err := time.Parse(time.RFC3339, evidence.CapturedAt); err != nil {
+		return fmt.Errorf("metadata captured_at must be RFC3339: %w", err)
+	}
+	if _, _, err := mime.ParseMediaType(evidence.MediaType); err != nil {
+		return fmt.Errorf("metadata media_type is invalid: %w", err)
+	}
+	if evidence.ByteLength < 0 {
+		return fmt.Errorf("metadata byte_length must be non-negative")
+	}
+	if !isEvidenceSHA256(evidence.SHA256) {
+		return fmt.Errorf("metadata sha256 must be 64 lowercase hexadecimal characters")
+	}
+	return nil
+}
+
+func validateClaimEvidence(validator *EvidenceValidator, claim Claim) error {
+	ids := append([]string(nil), claim.EvidenceIDs...)
+	sort.Strings(ids)
+	for _, id := range ids {
+		if err := validator.Verify(id); err != nil {
+			return fmt.Errorf("evidence %s: %w", id, err)
+		}
+	}
+	return nil
+}
+
+func isEvidenceSHA256(value string) bool {
+	if len(value) != sha256.Size*2 || value != strings.ToLower(value) {
+		return false
+	}
+	_, err := hex.DecodeString(value)
+	return err == nil
+}
+
+func newEvidenceVerificationError(id string, path string, reason string, cause error) error {
+	return &EvidenceVerificationError{ID: id, Path: path, Reason: reason, Err: cause}
+}
+
+func evidenceMetadataPath(id string) string {
+	return filepath.ToSlash(filepath.Join("evidence", "sources", id, "source.yaml"))
+}
+
+func evidenceRawPath(id string) string {
+	return filepath.ToSlash(filepath.Join("evidence", "sources", id, "raw"))
 }
 
 func (store EvidenceStore) evidenceRoot(workspace string, id string) (string, error) {
