@@ -822,8 +822,7 @@ create virtual table claims_fts using fts5(
   tags,
   body,
   content='claims',
-  content_rowid='rowid',
-  prefix='2 3'
+  content_rowid='rowid'
 );
 create trigger claims_ai after insert on claims begin
   insert into claims_fts(rowid, title, description, tags, body) values (new.rowid, new.title, new.description, new.tags, new.body);
