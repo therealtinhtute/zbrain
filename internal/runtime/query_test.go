@@ -1,6 +1,7 @@
 package runtime
 
 import (
+	"database/sql"
 	"os"
 	"path/filepath"
 	"strings"
@@ -411,6 +412,103 @@ func TestTrustedQueryReturnsApprovedClaimsAndPromotionCandidatesSeparately(t *te
 	}
 	if response.Claims[0].Status != ClaimStatusApproved || response.PromotionCandidates[0].Status != ClaimStatusDraft {
 		t.Fatalf("draft leaked into trusted claims: %#v", response)
+	}
+}
+
+func TestCanonicalIndexBinding(t *testing.T) {
+	tests := []struct {
+		name     string
+		approved bool
+		query    string
+		mutate   func(*sql.DB, Claim) error
+	}{
+		{
+			name:     "body",
+			approved: true,
+			query:    "sqlite-only body",
+			mutate: func(db *sql.DB, claim Claim) error {
+				_, err := db.Exec("update claims set body = ? where id = ?", "sqlite-only body marker\n", claim.ID)
+				return err
+			},
+		},
+		{
+			name:  "status",
+			query: "canonical binding body",
+			mutate: func(db *sql.DB, claim Claim) error {
+				_, err := db.Exec("update claims set status = ? where id = ?", string(ClaimStatusApproved), claim.ID)
+				return err
+			},
+		},
+		{
+			name:     "path",
+			approved: true,
+			query:    "canonical binding body",
+			mutate: func(db *sql.DB, claim Claim) error {
+				_, err := db.Exec("update claims set path = ? where id = ?", "projects/forged.md", claim.ID)
+				return err
+			},
+		},
+		{
+			name:     "digest",
+			approved: true,
+			query:    "canonical binding body",
+			mutate: func(db *sql.DB, claim Claim) error {
+				_, err := db.Exec("update claims set verification_digest = ? where id = ?", "sha256:"+strings.Repeat("0", 64), claim.ID)
+				return err
+			},
+		},
+		{
+			name:     "missing canonical target",
+			approved: true,
+			query:    "canonical binding body",
+			mutate: func(db *sql.DB, claim Claim) error {
+				_, err := db.Exec("update claims set id = ? where id = ?", "clm_eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee", claim.ID)
+				return err
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			paths := queryTestPaths(t)
+			store := ClaimStore{Paths: paths, Now: fixedQueryNow}
+			claim := queryClaim("clm_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "Canonical Binding", ClaimBasisOwner)
+			claim.Body = "canonical binding body marker\n"
+			if _, err := store.WriteDraft("research", claim); err != nil {
+				t.Fatalf("WriteDraft() error = %v", err)
+			}
+			if tt.approved {
+				if _, err := store.Approve("research", claim.ID); err != nil {
+					t.Fatalf("Approve() error = %v", err)
+				}
+			}
+
+			idx := IndexStore{Paths: paths}
+			if _, err := idx.Rebuild("research"); err != nil {
+				t.Fatalf("Rebuild() error = %v", err)
+			}
+			claimPath := filepath.Join(paths.WorkspacesDir, "research", "wiki", "projects", claim.ID+".md")
+			before := sha256Hex(t, claimPath)
+			db, err := sql.Open("sqlite", indexDatabasePath(t, idx, "research"))
+			if err != nil {
+				t.Fatalf("sql.Open() error = %v", err)
+			}
+			if err := tt.mutate(db, claim); err != nil {
+				_ = db.Close()
+				t.Fatalf("SQLite mutation error = %v", err)
+			}
+			if err := db.Close(); err != nil {
+				t.Fatalf("db.Close() error = %v", err)
+			}
+
+			response, err := TrustedQuery(paths, TrustedQueryOptions{Query: tt.query, Limit: 10})
+			if err == nil {
+				t.Fatalf("TrustedQuery() response = %#v, error = nil; want fail-closed error", response)
+			}
+			if after := sha256Hex(t, claimPath); after != before {
+				t.Fatalf("canonical bytes changed: before %s after %s", before, after)
+			}
+		})
 	}
 }
 

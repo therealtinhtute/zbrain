@@ -1,7 +1,11 @@
 package runtime
 
 import (
+	"fmt"
+	"os"
+	"path/filepath"
 	"sort"
+	"strings"
 )
 
 type QueryStatus string
@@ -125,6 +129,9 @@ func TrustedQuery(paths Paths, options TrustedQueryOptions) (TrustedQueryRespons
 			return TrustedQueryResponse{}, err
 		}
 		for _, claim := range approved {
+			if err := validateIndexedClaimBinding(paths, workspace, claim); err != nil {
+				return TrustedQueryResponse{}, err
+			}
 			response.Claims = append(response.Claims, toQueryClaim(workspace, claim))
 		}
 		drafts, err := idx.Search(workspace, SearchOptions{Query: options.Query, Statuses: []ClaimStatus{ClaimStatusDraft}, Limit: limit})
@@ -132,6 +139,9 @@ func TrustedQuery(paths Paths, options TrustedQueryOptions) (TrustedQueryRespons
 			return TrustedQueryResponse{}, err
 		}
 		for _, claim := range drafts {
+			if err := validateIndexedClaimBinding(paths, workspace, claim); err != nil {
+				return TrustedQueryResponse{}, err
+			}
 			response.PromotionCandidates = append(response.PromotionCandidates, toQueryClaim(workspace, claim))
 		}
 	}
@@ -152,6 +162,46 @@ func TrustedQuery(paths Paths, options TrustedQueryOptions) (TrustedQueryRespons
 		return response, nil
 	}
 	return response, nil
+}
+
+func validateIndexedClaimBinding(paths Paths, workspace string, indexed IndexedClaim) error {
+	canonicalRelative := filepath.ToSlash(filepath.Join("wiki", filepath.FromSlash(indexed.Path)))
+	canonicalPath, err := ResolveWorkspacePath(paths, workspace, canonicalRelative)
+	if err != nil {
+		return fmt.Errorf("load canonical claim %q: %w", indexed.ID, err)
+	}
+	contents, err := os.ReadFile(canonicalPath)
+	if err != nil {
+		return fmt.Errorf("read canonical claim %q: %w", indexed.ID, err)
+	}
+	canonical, err := ParseClaimMarkdown(indexed.Tier, indexed.Path, contents)
+	if err != nil {
+		return fmt.Errorf("parse canonical claim %q: %w", indexed.ID, err)
+	}
+
+	fields := []struct {
+		name      string
+		canonical string
+		indexed   string
+	}{
+		{name: "id", canonical: canonical.ID, indexed: indexed.ID},
+		{name: "path", canonical: canonical.Path, indexed: indexed.Path},
+		{name: "tier", canonical: canonical.Tier, indexed: indexed.Tier},
+		{name: "type", canonical: canonical.Type, indexed: indexed.Type},
+		{name: "status", canonical: string(canonical.Status), indexed: string(indexed.Status)},
+		{name: "title", canonical: canonical.Title, indexed: indexed.Title},
+		{name: "description", canonical: canonical.Description, indexed: indexed.Description},
+		{name: "stale_after", canonical: canonical.StaleAfter, indexed: indexed.StaleAfter},
+		{name: "tags", canonical: strings.Join(canonical.Tags, " "), indexed: indexed.indexedTags},
+		{name: "body", canonical: canonical.Body, indexed: indexed.indexedBody},
+		{name: "verification_digest", canonical: canonical.VerifiedDigest, indexed: indexed.verificationDigest},
+	}
+	for _, field := range fields {
+		if field.canonical != field.indexed {
+			return fmt.Errorf("indexed claim %q %s does not match canonical claim", indexed.ID, field.name)
+		}
+	}
+	return nil
 }
 
 func toQueryClaim(workspace string, claim IndexedClaim) QueryClaim {

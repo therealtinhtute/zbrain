@@ -1,7 +1,7 @@
 ---
 id: 01KZ8PVTFHBYTJJXQZWJG07RHB
 type: plan
-intake_id: 01KZ8PW83GX2HM66JJ7S0DXENT
+intake_id: 01KZ96279PXDAXYZ5XC9QR9QS9
 lane: high-risk
 status: active
 created: 2026-08-05
@@ -90,8 +90,8 @@ updated: 2026-08-05
 - planning_status: planned
 - phases:
   - phase_slug: canonical-index-binding
-    story_id: 01KZ8Q5GS1T98GF18RAH8VBWED
-    status: planned
+    story_id: 01KZ962RJ9MK11SXBKD14AQ0Y5
+    status: checked
     goal: Bind derived index rows and trusted query results to canonical approved claim identity, digest, status, and path.
     depends_on: none
     allowed_surfaces: [internal/runtime/index.go, internal/runtime/query.go, internal/runtime/claim.go, internal/runtime/*_test.go, trusted-memory-spec.md]
@@ -134,7 +134,7 @@ updated: 2026-08-05
         proves: Existing trust/query and CLI regressions remain green.
 
   - phase_slug: workspace-generation-coordination
-    story_id: 01KZ8Q5GSAA79S2279ZWTZS3PM
+    story_id: 01KZ962RJHNRTBPZCJVJGGBMEY
     status: planned
     goal: Coordinate mutation, rebuild, publication, and query freshness so concurrent work cannot publish or serve a stale clean index.
     depends_on: canonical-index-binding
@@ -178,7 +178,7 @@ updated: 2026-08-05
         proves: Crash recovery remains fail closed.
 
   - phase_slug: content-digest-evidence
-    story_id: 01KZ8Q5GSJVY44PMP8X5KS4H5R
+    story_id: 01KZ962RJRXFSGC7M4SV3AMGHW
     status: planned
     goal: Replace mtime-only freshness assumptions with content-digest verification and bind approved claims to current evidence snapshots.
     depends_on: workspace-generation-coordination
@@ -222,7 +222,7 @@ updated: 2026-08-05
         proves: The scale gate remains at or below two seconds.
 
   - phase_slug: legacy-migration-reporting
-    story_id: 01KZ8Q5GSX7DWRHWFWBTFN8WQM
+    story_id: 01KZ962RJY3381D5X3MFYRPGTS
     status: planned
     goal: Provide explicit legacy claim migration and reapproval behavior and make migrate okf freshness reporting truthful.
     depends_on: content-digest-evidence
@@ -266,7 +266,7 @@ updated: 2026-08-05
         proves: The documented migration surface remains discoverable without adding an unapproved command family.
 
   - phase_slug: cli-assets-parity
-    story_id: 01KZ8Q5GT58T68Y45PPMT91HBH
+    story_id: 01KZ962RK5ZCWFRS5YZSWDAC34
     status: planned
     goal: Align runtime asset extraction, documentation, embedded guidance, CLI help, supported flags, and unknown-flag handling.
     depends_on: none
@@ -310,7 +310,7 @@ updated: 2026-08-05
         proves: The documented setup/runtime layout works in isolation.
 
   - phase_slug: shell-safe-scope-guidance
-    story_id: 01KZ8Q5GTE1VYY9AP2H2ZDAQXG
+    story_id: 01KZ962RKBH5ZBEDGYPP4AG0G2
     status: planned
     goal: Make active Claude Code skills shell-safe, workspace-explicit, and free of executable network or stale legacy workflows.
     depends_on: cli-assets-parity
@@ -354,7 +354,7 @@ updated: 2026-08-05
         proves: Skill/documentation edits are cleanly reviewable.
 
   - phase_slug: runtime-boundary-compatibility
-    story_id: 01KZ8Q5GTQAM9XHKH1KB471V97
+    story_id: 01KZ962RKHJ5XEDRZXHC44KDM8
     status: planned
     goal: Unify nested claim lookup, workspace boundaries, runtime permissions, and workspace current compatibility behavior with focused tests.
     depends_on: content-digest-evidence
@@ -398,7 +398,7 @@ updated: 2026-08-05
         proves: Boundary changes remain race-safe with existing runtime behavior.
 
   - phase_slug: release-proof
-    story_id: 01KZ8Q5GV1HY76K29BP864B5N1
+    story_id: 01KZ962RKRS5N6B1C48FB0HHVV
     status: planned
     goal: Run the complete regression, race, build, isolated smoke, performance, documentation, and release-proof gate for the initiative.
     depends_on: runtime-boundary-compatibility
@@ -448,7 +448,36 @@ updated: 2026-08-05
 
 ## Progress
 <!-- Append-only durable entries record timestamp, phase, wave, task, task_status, run_id, trace_id, exact verification/result, and changed surfaces or blocker. -->
-- none
+- timestamp: 2026-08-05T14:45:20Z
+  phase: canonical-index-binding
+  wave: phase-start
+  task: phase-start
+  task_status: in-progress
+  run_id: 01KZ9659369MJDN0GWPB1QMH2Z
+  trace_id: none
+  verification: not-run
+  changed_surfaces: []
+  blocker: none
+- timestamp: 2026-08-05T15:05:23Z
+  phase: canonical-index-binding
+  wave: 1
+  task: cib-1
+  task_status: DONE
+  run_id: 01KZ9659369MJDN0GWPB1QMH2Z
+  trace_id: none
+  exact_verification: "TMPDIR=/private/tmp/zbrain-safe go test ./internal/runtime -run '^TestCanonicalIndexBinding$' -count=1 -v -> pass; indexed rows carry body, tags, and verification digest, and TrustedQuery validates canonical bindings before mapping results"
+  changed_surfaces: [internal/runtime/index.go, internal/runtime/query.go]
+  blocker: none
+- timestamp: 2026-08-05T15:05:23Z
+  phase: canonical-index-binding
+  wave: 1
+  task: cib-2
+  task_status: DONE
+  run_id: 01KZ9659369MJDN0GWPB1QMH2Z
+  trace_id: 01KZ97BER63HT2S0GJ4FB7EYWZ
+  exact_verification: "TMPDIR=/private/tmp/zbrain-safe go test ./internal/runtime -run '^TestCanonicalIndexBinding' -count=1 -v -> pass; body, status, path, digest, and missing-target SQLite mutations fail closed while canonical bytes remain unchanged"
+  changed_surfaces: [internal/runtime/query_test.go]
+  blocker: none
 
 ## Decisions
 <!-- Append-only durable entries record timestamp, phase/task, decision, and rationale. -->
@@ -456,15 +485,30 @@ updated: 2026-08-05
 
 ## Validation
 <!-- Append-only durable entries record timestamp, phase, exact command/result/output, run_id, check_id, verdict, and proof_gaps. -->
-- none
+- timestamp: 2026-08-05T15:09:25Z
+  phase: canonical-index-binding
+  commands:
+    - TMPDIR=/private/tmp/zbrain-safe go test ./internal/runtime -run '^TestCanonicalIndexBinding$' -count=1 -v -> pass; red run before implementation failed body/status/path cases and digest column was absent
+    - TMPDIR=/private/tmp/zbrain-safe go test ./internal/runtime -run '^TestCanonicalIndexBinding' -count=1 -v -> pass; five SQLite-only tamper cases fail closed and canonical bytes remain unchanged
+    - TMPDIR=/private/tmp/zbrain-safe go test ./... -> pass
+    - TMPDIR=/private/tmp/zbrain-safe go vet ./... -> pass
+    - TMPDIR=/private/tmp/zbrain-safe go test -race ./... -> pass
+    - make build -> pass
+    - make smoke -> pass; isolated setup, workspace creation, claim approval, reindex, and trusted ask completed
+    - git diff --check -> pass
+    - zharness audit --json -> pointer drift before new check; resolved by this check record
+  run_id: 01KZ9659369MJDN0GWPB1QMH2Z
+  check_id: 01KZ97H6KYTC027KZ470B8XT3V
+  verdict: APPROVED
+  proof_gaps: same-session review; default macOS TMPDIR test invocation remains blocked by the existing /var/folders symlink boundary guard, while the canonical safe-temp invocation passes
 
 ## Current State and Next Action
 - active_phase: canonical-index-binding
-- lifecycle_status: planned
-- latest_run_id: none
-- latest_trace_ids: []
-- latest_check_id: none
+- lifecycle_status: checked
+- latest_run_id: 01KZ9659369MJDN0GWPB1QMH2Z
+- latest_trace_ids: [01KZ97BER63HT2S0GJ4FB7EYWZ]
+- latest_check_id: 01KZ97H6KYTC027KZ470B8XT3V
 - latest_handoff_id: 01KZ8QK3J8Q2T5PF0VAFRDH1QM
-- blockers: implementation run and phase check do not exist yet; unblock with `work full canonical-index-binding`, then `check full`.
+- blockers: none
 - open_items: [execute the planned trust and skills phases; preserve all 8 story IDs; release proof remains gated on every prerequisite phase]
-- exact_next_action: work full canonical-index-binding
+- exact_next_action: handoff
