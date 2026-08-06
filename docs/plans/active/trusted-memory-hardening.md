@@ -179,7 +179,7 @@ updated: 2026-08-05
 
   - phase_slug: content-digest-evidence
     story_id: 01KZ962RJRXFSGC7M4SV3AMGHW
-    status: planned
+    status: in-progress
     goal: Replace mtime-only freshness assumptions with content-digest verification and bind approved claims to current evidence snapshots.
     depends_on: workspace-generation-coordination
     allowed_surfaces: [internal/runtime/index.go, internal/runtime/evidence.go, internal/runtime/claim_store.go, internal/runtime/query.go, internal/runtime/*_test.go, trusted-memory-spec.md]
@@ -508,6 +508,16 @@ updated: 2026-08-05
   exact_verification: "TMPDIR=/private/tmp/zbrain-safe go test -race ./internal/runtime -run '^TestWorkspaceGeneration' -count=1 -v -> pass; deterministic interleavings cover mutation before canonical write, mutation during scan/publication, shared-query locking, pending recovery, and missing/malformed generation state"
   changed_surfaces: [internal/runtime/workspace_generation_test.go]
   blocker: none
+- timestamp: 2026-08-05T23:57:00Z
+  phase: content-digest-evidence
+  wave: phase-start
+  task: phase-start
+  task_status: in-progress
+  run_id: 01KZA5QNZTPF9JX7WPV79JCXCT
+  trace_id: none
+  verification: not-run
+  changed_surfaces: []
+  blocker: none
 
 ## Decisions
 <!-- Append-only durable entries record timestamp, phase/task, decision, and rationale. -->
@@ -548,12 +558,12 @@ updated: 2026-08-05
   proof_gaps: same-session review; lock behavior was not independently reviewed by a second agent; default macOS TMPDIR invocation remains blocked by the existing /var/folders symlink boundary guard, while safe-temp commands pass
 
 ## Current State and Next Action
-- active_phase: workspace-generation-coordination
-- lifecycle_status: checked
-- latest_run_id: 01KZ98C82FGJ8K8FXP4QWX3STP
-- latest_trace_ids: [01KZA5AMWH7W8XCJCJ66CYMKTA]
+- active_phase: content-digest-evidence
+- lifecycle_status: in-progress
+- latest_run_id: 01KZA5QNZTPF9JX7WPV79JCXCT
+- latest_trace_ids: []
 - latest_check_id: 01KZA5ERJS5V9H551MVYPHYPTA
 - latest_handoff_id: 01KZ8QK3J8Q2T5PF0VAFRDH1QM
 - blockers: none
 - open_items: [execute the planned trust and skills phases; preserve all 8 story IDs; release proof remains gated on every prerequisite phase]
-- exact_next_action: start content-digest-evidence wave 1 from commit a8e9eb8
+- exact_next_action: trace content-digest-evidence wave 1 and implement cde-1
