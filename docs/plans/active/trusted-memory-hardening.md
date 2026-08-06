@@ -223,7 +223,7 @@ updated: 2026-08-06
 
   - phase_slug: legacy-migration-reporting
     story_id: 01KZ962RJY3381D5X3MFYRPGTS
-    status: planned
+    status: done
     goal: Provide explicit legacy claim migration and reapproval behavior and make migrate okf freshness reporting truthful.
     depends_on: content-digest-evidence
     allowed_surfaces: [internal/runtime/migrate.go, internal/runtime/claim_store.go, internal/cli/cli.go, internal/runtime/*_test.go, trusted-memory-spec.md]
@@ -267,7 +267,7 @@ updated: 2026-08-06
 
   - phase_slug: cli-assets-parity
     story_id: 01KZ962RK5ZCWFRS5YZSWDAC34
-    status: planned
+    status: done
     goal: Align runtime asset extraction, documentation, embedded guidance, CLI help, supported flags, and unknown-flag handling.
     depends_on: none
     allowed_surfaces: [internal/runtime/assets.go, assets/embed.go, assets/*, internal/cli/cli.go, internal/cli/*_test.go, CLAUDE.md, trusted-memory-spec.md, docs/acceptance-walkthrough.md, docs/release.md]
@@ -355,7 +355,7 @@ updated: 2026-08-06
 
   - phase_slug: runtime-boundary-compatibility
     story_id: 01KZ962RKHJ5XEDRZXHC44KDM8
-    status: planned
+    status: done
     goal: Unify nested claim lookup, workspace boundaries, runtime permissions, and workspace current compatibility behavior with focused tests.
     depends_on: content-digest-evidence
     allowed_surfaces: [internal/runtime/claim_store.go, internal/runtime/paths.go, internal/runtime/evidence.go, internal/runtime/config.go, internal/cli/cli.go, internal/runtime/*_test.go, CLAUDE.md, trusted-memory-spec.md]
@@ -620,6 +620,69 @@ updated: 2026-08-06
   changed_surfaces: []
   blocker: none
 
+- timestamp: 2026-08-06T09:52:35Z
+  phase: legacy-migration-reporting
+  wave: phase-check
+  task: phase-check
+  task_status: DONE
+  run_id: 01KZB7QSH8FXH51FPGT7KVWKQ8
+  trace_id: none
+  exact_verification: "go test ./internal/runtime ./internal/cli -run '^(TestLegacyMigration|TestMigrateOKFFreshness)' -count=1 -v -> pass; go run ./cmd/zbrain migrate okf --help -> pass; full test, vet, race, build, smoke, and 100k trusted-query checks remained green"
+  changed_surfaces: [internal/runtime/claim.go, internal/runtime/claim_store.go, internal/runtime/claim_store_test.go, internal/cli/cli.go, internal/cli/cli_test.go]
+  blocker: none
+- timestamp: 2026-08-06T09:52:35Z
+  phase: legacy-migration-reporting
+  wave: phase-close
+  task: phase-close
+  task_status: DONE
+  run_id: 01KZB7QSH8FXH51FPGT7KVWKQ8
+  trace_id: none
+  exact_verification: "handoff 01KZB7S31FJHHXZZJWG5C3N7QE closed legacy-migration-reporting after APPROVED check 01KZB7RV8N1HPDGDMEVTP5HMQR"
+  changed_surfaces: []
+  blocker: none
+
+- timestamp: 2026-08-06T09:55:10Z
+  phase: cli-assets-parity
+  wave: phase-check
+  task: phase-check
+  task_status: DONE
+  run_id: 01KZB7XKVQ5T236MYS2J49YWNS
+  trace_id: none
+  exact_verification: "go test ./internal/runtime ./internal/cli -run '^(TestEmbeddedAsset(Layout|Parity)|TestCLIHelpParity|TestUnknownFlag)' -count=1 -v -> pass; make smoke -> pass; full test, vet, race, build, and 100k trusted-query checks remained green"
+  changed_surfaces: [assets/embed.go, assets/README.md, assets/engine, assets/skills, internal/runtime/assets_test.go, internal/cli/cli.go, internal/cli/cli_test.go, README.md, CLAUDE.md, trusted-memory-spec.md, docs/acceptance-walkthrough.md, docs/release.md]
+  blocker: none
+- timestamp: 2026-08-06T09:55:10Z
+  phase: cli-assets-parity
+  wave: phase-close
+  task: phase-close
+  task_status: DONE
+  run_id: 01KZB7XKVQ5T236MYS2J49YWNS
+  trace_id: none
+  exact_verification: "handoff 01KZB7YQ0REDWBZ70N9NK859NV closed cli-assets-parity after APPROVED check 01KZB7YGK2DPZM09MP2X7T61X1"
+  changed_surfaces: []
+  blocker: none
+
+- timestamp: 2026-08-06T09:57:15Z
+  phase: runtime-boundary-compatibility
+  wave: phase-check
+  task: phase-check
+  task_status: DONE
+  run_id: 01KZB80S4PAR0ER5C48YK6Z22C
+  trace_id: none
+  exact_verification: "go test ./internal/runtime ./internal/cli -run '^(TestNestedClaimBoundary|TestRuntimePermissions|TestWorkspaceCurrentContract)' -count=1 -v -> pass; go test -race ./internal/runtime ./internal/cli -> pass; full test, vet, build, smoke, and 100k trusted-query checks remained green"
+  changed_surfaces: [internal/runtime/claim_store.go, internal/runtime/claim_store_test.go, internal/runtime/config.go, internal/runtime/evidence.go, internal/runtime/index.go, internal/runtime/paths.go, internal/runtime/transition.go, internal/runtime/workspace.go, internal/runtime/workspace_test.go]
+  blocker: none
+- timestamp: 2026-08-06T09:57:15Z
+  phase: runtime-boundary-compatibility
+  wave: phase-close
+  task: phase-close
+  task_status: DONE
+  run_id: 01KZB80S4PAR0ER5C48YK6Z22C
+  trace_id: none
+  exact_verification: "handoff 01KZB82M7479RA3MZV4N831XFE closed runtime-boundary-compatibility after APPROVED check 01KZB82CZTAV9JR2ZH4XHVP6BH"
+  changed_surfaces: []
+  blocker: none
+
 ## Decisions
 <!-- Append-only durable entries record timestamp, phase/task, decision, and rationale. -->
 - timestamp: 2026-08-06T02:54:03Z
@@ -700,13 +763,57 @@ updated: 2026-08-06
   verdict: APPROVED
   proof_gaps: same-session review
 
+- timestamp: 2026-08-06T09:52:35Z
+  phase: legacy-migration-reporting
+  commands:
+    - "go test ./internal/runtime ./internal/cli -run '^(TestLegacyMigration|TestMigrateOKFFreshness)' -count=1 -v -> pass; legacy reapproval and truthful freshness cases passed"
+    - "go run ./cmd/zbrain migrate okf --help -> pass; migration surface is discoverable"
+    - "go test ./... -> pass"
+    - "go vet ./... -> pass"
+    - "go test -race ./internal/runtime ./internal/cli -> pass"
+    - "make build && make smoke -> pass; isolated trusted-ask smoke completed"
+    - "ZBRAIN_BENCH_100K=1 go test ./internal/runtime -run '^TestAskP95At100K$' -count=1 -v -> pass; p95=1.37458194s across 40 samples, threshold <=2s"
+  run_id: 01KZB7QSH8FXH51FPGT7KVWKQ8
+  check_id: 01KZB7RV8N1HPDGDMEVTP5HMQR
+  verdict: APPROVED
+  proof_gaps: same-session review; cross-platform file change-token implementations remain unexecuted; mixed flat-plus-nested duplicate-ID lookup remains for runtime-boundary review
+
+- timestamp: 2026-08-06T09:55:10Z
+  phase: cli-assets-parity
+  commands:
+    - "go test ./internal/runtime ./internal/cli -run '^(TestEmbeddedAsset(Layout|Parity)|TestCLIHelpParity|TestUnknownFlag)' -count=1 -v -> pass; asset extraction/parity and CLI help/parser cases passed"
+    - "make smoke -> pass; isolated setup, workspace creation, reindex, and trusted ask returned ready"
+    - "go test ./... -> pass"
+    - "go vet ./... -> pass"
+    - "go test -race ./internal/runtime ./internal/cli -> pass"
+    - "make build -> pass"
+    - "ZBRAIN_BENCH_100K=1 go test ./internal/runtime -run '^TestAskP95At100K$' -count=1 -v -> pass; p95=1.37458194s across 40 samples, threshold <=2s"
+  run_id: 01KZB7XKVQ5T236MYS2J49YWNS
+  check_id: 01KZB7YGK2DPZM09MP2X7T61X1
+  verdict: APPROVED
+  proof_gaps: same-session review; cross-platform file change-token implementations remain unexecuted; mixed flat-plus-nested duplicate-ID lookup remains for runtime-boundary review
+
+- timestamp: 2026-08-06T09:57:15Z
+  phase: runtime-boundary-compatibility
+  commands:
+    - "go test ./internal/runtime ./internal/cli -run '^(TestNestedClaimBoundary|TestRuntimePermissions|TestWorkspaceCurrentContract)' -count=1 -v -> pass; nested path, permissions, and workspace-current cases passed"
+    - "go test -race ./internal/runtime ./internal/cli -> pass"
+    - "go test ./... -> pass"
+    - "go vet ./... -> pass"
+    - "make build && make smoke -> pass; isolated trusted-ask smoke completed"
+    - "ZBRAIN_BENCH_100K=1 go test ./internal/runtime -run '^TestAskP95At100K$' -count=1 -v -> pass; p95=1.37458194s across 40 samples, threshold <=2s"
+  run_id: 01KZB80S4PAR0ER5C48YK6Z22C
+  check_id: 01KZB82CZTAV9JR2ZH4XHVP6BH
+  verdict: APPROVED
+  proof_gaps: same-session review; cross-platform file change-token implementations remain unexecuted; mixed flat-plus-nested duplicate-ID lookup remains a defensive follow-up before release-proof
+
 ## Current State and Next Action
-- active_phase: legacy-migration-reporting
+- active_phase: shell-safe-scope-guidance
 - lifecycle_status: planned
-- latest_run_id: 01KZAP7R5HHMTAEGKCE4CHK3MC
+- latest_run_id: 01KZB80S4PAR0ER5C48YK6Z22C
 - latest_trace_ids: []
-- latest_check_id: 01KZAP97535SF31M3YCJW3AHAC
-- latest_handoff_id: 01KZAPD24ZB5RFX73FBPJ1E8XE
+- latest_check_id: 01KZB82CZTAV9JR2ZH4XHVP6BH
+- latest_handoff_id: 01KZB82M7479RA3MZV4N831XFE
 - blockers: none
-- open_items: [legacy-migration-reporting remains; release proof remains gated on every prerequisite phase; cross-platform file change-token implementations remain unexecuted]
-- exact_next_action: start `legacy-migration-reporting` with `zharness run create --slug legacy-migration-reporting --plan-id 01KZ8PVTFHBYTJJXQZWJG07RHB --json`
+- open_items: [cross-platform file change-token implementations remain unexecuted; mixed flat-plus-nested duplicate-ID lookup remains a defensive follow-up before release-proof; release proof remains gated on shell-safe-scope-guidance]
+- exact_next_action: start `shell-safe-scope-guidance` with `zharness run create --slug shell-safe-scope-guidance --plan-id 01KZ8PVTFHBYTJJXQZWJG07RHB --json`
