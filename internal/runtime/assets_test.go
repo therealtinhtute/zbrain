@@ -1,8 +1,10 @@
 package runtime
 
 import (
+	"io/fs"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"testing"
 
@@ -32,6 +34,129 @@ func TestExtractBundledAssetsCopiesRuntimeAssets(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(paths.RuntimeDir, "workspaces", "research")); !os.IsNotExist(err) {
 		t.Fatalf("workspace seed assets must not create active workspaces, stat error = %v", err)
 	}
+}
+
+var documentedEmbeddedAssetPaths = []string{
+	"README.md",
+	"agents/wiki-planner.md",
+	"agents/wiki-qmd-selector.md",
+	"engine/claude-rules.md",
+	"engine/codex-rules.md",
+	"engine/constraints.md",
+	"engine/evidence-rules.md",
+	"engine/retrieval-rules.md",
+	"engine/system-prompt.md",
+	"skills/zbrain-ask/SKILL.md",
+	"skills/zbrain-ingest/SKILL.md",
+	"skills/zbrain-ingest/references/pipeline.md",
+	"skills/zbrain-learn/SKILL.md",
+	"skills/zbrain-research/SKILL.md",
+	"skills/zbrain-research/references/fetch-methods.md",
+	"skills/zbrain-research/scripts/fetch.sh",
+	"skills/zbrain-research/scripts/fetch_local.py",
+	"templates/axiom.md",
+	"templates/evidence-apply-checkpoint.json",
+	"templates/evidence-index.md",
+	"templates/evidence-manifest.yaml",
+	"templates/evidence-pending-external.md",
+	"templates/evidence-qa-answers.md",
+	"templates/evidence-qa-todo.json",
+	"templates/evidence-source.yaml",
+	"templates/mental-model.md",
+	"templates/project.md",
+	"templates/workspace.md",
+	"workspaces/.gitkeep",
+}
+
+func TestEmbeddedAssetLayout(t *testing.T) {
+	tmp := t.TempDir()
+	paths, err := ResolvePaths(Options{CWD: tmp, HomeDir: tmp, RuntimeDir: filepath.Join(tmp, ".zbrain")})
+	if err != nil {
+		t.Fatalf("ResolvePaths() error = %v", err)
+	}
+
+	result, err := ExtractBundledAssets(paths)
+	if err != nil {
+		t.Fatalf("ExtractBundledAssets() error = %v", err)
+	}
+
+	expectedCopied := []string{}
+	expectedSkipped := []string{}
+	for _, path := range documentedEmbeddedAssetPaths {
+		if strings.HasPrefix(path, "workspaces/") {
+			expectedSkipped = append(expectedSkipped, path)
+			continue
+		}
+		expectedCopied = append(expectedCopied, path)
+	}
+	assertAssetPathSet(t, "copied", result.Copied, expectedCopied)
+	assertAssetPathSet(t, "skipped", result.Skipped, expectedSkipped)
+
+	for _, root := range []string{"README.md", "agents", "engine", "skills", "templates"} {
+		if _, err := os.Stat(filepath.Join(paths.RuntimeDir, filepath.FromSlash(root))); err != nil {
+			t.Fatalf("missing extracted runtime path %q: %v", root, err)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(paths.RuntimeDir, "assets")); !os.IsNotExist(err) {
+		t.Fatalf("setup must not create a nested assets directory, stat error = %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(paths.RuntimeDir, "workspaces")); !os.IsNotExist(err) {
+		t.Fatalf("workspace seed assets must not create active workspaces, stat error = %v", err)
+	}
+}
+
+func TestEmbeddedAssetParity(t *testing.T) {
+	actual := bundledAssetPaths(t)
+	expected := append([]string(nil), documentedEmbeddedAssetPaths...)
+	assertUniqueAssetPaths(t, "documented", expected)
+	assertUniqueAssetPaths(t, "embedded", actual)
+	assertAssetPathSet(t, "embedded", actual, expected)
+}
+
+func assertAssetPathSet(t *testing.T, label string, actual, expected []string) {
+	t.Helper()
+	actual = append([]string(nil), actual...)
+	expected = append([]string(nil), expected...)
+	sort.Strings(actual)
+	sort.Strings(expected)
+	if len(actual) != len(expected) {
+		t.Fatalf("%s asset paths = %v, want %v", label, actual, expected)
+	}
+	for i := range expected {
+		if actual[i] != expected[i] {
+			t.Fatalf("%s asset paths = %v, want %v", label, actual, expected)
+		}
+	}
+}
+
+func assertUniqueAssetPaths(t *testing.T, label string, paths []string) {
+	t.Helper()
+	seen := make(map[string]struct{}, len(paths))
+	for _, path := range paths {
+		if _, ok := seen[path]; ok {
+			t.Fatalf("duplicate %s asset path %q", label, path)
+		}
+		seen[path] = struct{}{}
+	}
+}
+
+func bundledAssetPaths(t *testing.T) []string {
+	t.Helper()
+	paths := []string{}
+	err := fs.WalkDir(bundled.FS, ".", func(path string, entry fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if entry.IsDir() || strings.HasSuffix(path, ".go") {
+			return nil
+		}
+		paths = append(paths, path)
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("walk bundled assets: %v", err)
+	}
+	return paths
 }
 
 func TestBundledAssetsDoNotContainStaleRuntimeInstructions(t *testing.T) {

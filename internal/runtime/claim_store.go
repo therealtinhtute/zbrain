@@ -28,10 +28,12 @@ type InvalidClaim struct {
 }
 
 type ClaimMigrationSummary struct {
-	Workspace string `json:"workspace"`
-	Migrated  int    `json:"migrated"`
-	Skipped   int    `json:"skipped"`
-	Invalid   int    `json:"invalid"`
+	Workspace            string   `json:"workspace"`
+	Migrated             int      `json:"migrated"`
+	Skipped              int      `json:"skipped"`
+	Invalid              int      `json:"invalid"`
+	ReapprovalRequired   int      `json:"reapproval_required"`
+	ReapprovalCandidates []string `json:"reapproval_candidates,omitempty"`
 }
 
 func (store ClaimStore) WriteDraft(workspace string, claim Claim) (Claim, error) {
@@ -47,6 +49,7 @@ func (store ClaimStore) WriteDraft(workspace string, claim Claim) (Claim, error)
 }
 
 func (store ClaimStore) writeDraftUnlocked(workspace string, claim Claim) (Claim, error) {
+	requestedPath := claim.Path
 	claim.Schema = ""
 	claim.Type = OKFClaimType
 	claim.Status = ClaimStatusDraft
@@ -63,9 +66,20 @@ func (store ClaimStore) writeDraftUnlocked(workspace string, claim Claim) (Claim
 	if err != nil {
 		return Claim{}, err
 	}
-	if existing, err := store.Read(workspace, claim.ID); err == nil {
+	var existing Claim
+	if requestedPath != "" {
+		existing, err = store.readClaimPath(workspace, requestedPath)
+	} else {
+		existing, err = store.readFlatClaim(workspace, claim.ID)
+	}
+	if err == nil {
 		if existing.Status != ClaimStatusDraft {
 			return Claim{}, fmt.Errorf("claim %s is %s and cannot be overwritten in place", claim.ID, existing.Status)
+		}
+		claim.Path = existing.Path
+		path, err = store.claimFilePath(workspace, claim)
+		if err != nil {
+			return Claim{}, err
 		}
 	} else if !os.IsNotExist(err) {
 		return Claim{}, err
@@ -254,6 +268,75 @@ func (store ClaimStore) Read(workspace string, id string) (Claim, error) {
 	if !claimIDPattern.MatchString(id) {
 		return Claim{}, fmt.Errorf("claim id must match clm_<32 lowercase hex chars>")
 	}
+	claim, err := store.readFlatClaim(workspace, id)
+	if err == nil {
+		return claim, nil
+	}
+	if !os.IsNotExist(err) {
+		return Claim{}, err
+	}
+
+	workspaceRoot, err := ValidateWorkspace(store.Paths, workspace)
+	if err != nil {
+		return Claim{}, err
+	}
+	wikiRoot, err := ResolveWorkspacePath(store.Paths, workspace, "wiki")
+	if err != nil {
+		return Claim{}, err
+	}
+	var matches []Claim
+	err = filepath.WalkDir(wikiRoot, func(path string, entry os.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if entry.IsDir() || entry.Name() != id+".md" {
+			return nil
+		}
+		workspaceRel, err := filepath.Rel(workspaceRoot, path)
+		if err != nil {
+			return err
+		}
+		safePath, err := ResolveWorkspacePath(store.Paths, workspace, filepath.ToSlash(workspaceRel))
+		if err != nil {
+			return err
+		}
+		contents, err := os.ReadFile(safePath)
+		if err != nil {
+			return err
+		}
+		rel, err := filepath.Rel(wikiRoot, path)
+		if err != nil {
+			return err
+		}
+		rel = filepath.ToSlash(rel)
+		tier := strings.Split(rel, "/")[0]
+		claim, err := ParseClaimMarkdown(tier, rel, contents)
+		if err != nil {
+			return err
+		}
+		matches = append(matches, claim)
+		return nil
+	})
+	if err != nil {
+		return Claim{}, err
+	}
+	if len(matches) == 0 {
+		return Claim{}, os.ErrNotExist
+	}
+	if len(matches) > 1 {
+		return Claim{}, fmt.Errorf("claim %s has multiple canonical documents", id)
+	}
+	return matches[0], nil
+}
+
+func (store ClaimStore) readFlatClaim(workspace string, id string) (Claim, error) {
+	if !claimIDPattern.MatchString(id) {
+		return Claim{}, fmt.Errorf("claim id must match clm_<32 lowercase hex chars>")
+	}
+	if _, err := ValidateWorkspace(store.Paths, workspace); err != nil {
+		return Claim{}, err
+	}
+	var matches []Claim
 	for _, tier := range WikiTiers {
 		relative := filepath.ToSlash(filepath.Join("wiki", tier, id+".md"))
 		path, err := ResolveWorkspacePath(store.Paths, workspace, relative)
@@ -262,13 +345,44 @@ func (store ClaimStore) Read(workspace string, id string) (Claim, error) {
 		}
 		contents, err := os.ReadFile(path)
 		if err == nil {
-			return ParseClaimMarkdown(tier, filepath.ToSlash(filepath.Join(tier, id+".md")), contents)
+			claim, err := ParseClaimMarkdown(tier, filepath.ToSlash(filepath.Join(tier, id+".md")), contents)
+			if err != nil {
+				return Claim{}, err
+			}
+			matches = append(matches, claim)
+			continue
 		}
 		if !os.IsNotExist(err) {
 			return Claim{}, err
 		}
 	}
-	return Claim{}, os.ErrNotExist
+	if len(matches) == 0 {
+		return Claim{}, os.ErrNotExist
+	}
+	if len(matches) > 1 {
+		return Claim{}, fmt.Errorf("claim %s has multiple canonical documents", id)
+	}
+	return matches[0], nil
+}
+
+func (store ClaimStore) readClaimPath(workspace string, relative string) (Claim, error) {
+	relative = filepath.ToSlash(relative)
+	if _, err := safeRelativePath(relative); err != nil {
+		return Claim{}, err
+	}
+	parts := strings.Split(relative, "/")
+	if len(parts) < 2 || !isKnownWikiTier(parts[0]) || filepath.Ext(filepath.FromSlash(relative)) != ".md" {
+		return Claim{}, fmt.Errorf("claim path %q is not safe", relative)
+	}
+	path, err := ResolveWorkspacePath(store.Paths, workspace, filepath.ToSlash(filepath.Join("wiki", filepath.FromSlash(relative))))
+	if err != nil {
+		return Claim{}, err
+	}
+	contents, err := os.ReadFile(path)
+	if err != nil {
+		return Claim{}, err
+	}
+	return ParseClaimMarkdown(parts[0], relative, contents)
 }
 
 func (store ClaimStore) ScanWorkspace(workspace string) (ClaimScan, error) {
@@ -356,7 +470,7 @@ func (store ClaimStore) MigrateOKF(workspace string) (ClaimMigrationSummary, err
 	if err := recoverPendingTransitionForMutationUnlocked(store.Paths, workspace); err != nil {
 		return ClaimMigrationSummary{}, err
 	}
-	scan, err := store.scanWorkspace(workspace, true)
+	scan, err := store.scanWorkspace(workspace, false)
 	if err != nil {
 		return ClaimMigrationSummary{}, err
 	}
@@ -364,11 +478,19 @@ func (store ClaimStore) MigrateOKF(workspace string) (ClaimMigrationSummary, err
 	migrated := make([]Claim, 0)
 	for _, claim := range scan.Claims {
 		if claim.Schema != ClaimSchemaVersion {
+			if claim.Status == ClaimStatusApproved {
+				if err := VerifyClaimDigest(claim); err != nil {
+					summary.Invalid++
+				}
+			}
 			summary.Skipped++
 			continue
 		}
-		claim.Schema = ""
-		claim.Type = OKFClaimType
+		claim, requiresReapproval := migrateLegacyClaim(claim)
+		if requiresReapproval {
+			summary.ReapprovalRequired++
+			summary.ReapprovalCandidates = append(summary.ReapprovalCandidates, claim.ID)
+		}
 		migrated = append(migrated, claim)
 	}
 	if len(migrated) == 0 {
@@ -385,6 +507,22 @@ func (store ClaimStore) MigrateOKF(workspace string) (ClaimMigrationSummary, err
 		summary.Migrated++
 	}
 	return summary, nil
+}
+
+func migrateLegacyClaim(claim Claim) (Claim, bool) {
+	claim.Schema = ""
+	claim.Type = OKFClaimType
+	if claim.Status != ClaimStatusApproved {
+		return claim, false
+	}
+	if err := VerifyClaimDigest(claim); err == nil {
+		return claim, false
+	}
+	claim.Status = ClaimStatusDraft
+	claim.VerifiedAt = ""
+	claim.VerifiedBy = ""
+	claim.VerifiedDigest = ""
+	return claim, true
 }
 
 func (store ClaimStore) claimPath(workspace string, claim Claim) (string, error) {
@@ -462,7 +600,7 @@ func writeClaimAtomic(path string, claim Claim) error {
 	if err != nil {
 		return err
 	}
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+	if err := ensureDirectoryMode(filepath.Dir(path), runtimeDirectoryMode); err != nil {
 		return err
 	}
 	tmp, err := os.CreateTemp(filepath.Dir(path), "."+filepath.Base(path)+".*.tmp")
@@ -471,6 +609,10 @@ func writeClaimAtomic(path string, claim Claim) error {
 	}
 	tmpPath := tmp.Name()
 	defer func() { _ = os.Remove(tmpPath) }()
+	if err := tmp.Chmod(runtimeMetadataMode); err != nil {
+		_ = tmp.Close()
+		return err
+	}
 	if _, err := tmp.Write(contents); err != nil {
 		_ = tmp.Close()
 		return err
@@ -481,7 +623,7 @@ func writeClaimAtomic(path string, claim Claim) error {
 	if err := os.Rename(tmpPath, path); err != nil {
 		return err
 	}
-	return nil
+	return ensureFileMode(path, runtimeMetadataMode)
 }
 
 func appendUniqueClaimID(ids []string, id string) []string {
@@ -555,6 +697,9 @@ func (store ClaimStore) now() time.Time {
 }
 
 func claimRelPath(claim Claim) string {
+	if claim.Path != "" {
+		return filepath.ToSlash(claim.Path)
+	}
 	return filepath.ToSlash(filepath.Join(claim.Tier, claim.ID+".md"))
 }
 

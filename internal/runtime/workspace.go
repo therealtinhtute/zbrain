@@ -15,7 +15,6 @@ type WorkspaceCurrent struct {
 	ProjectRoot         string   `json:"project_root"`
 	Workspace           string   `json:"workspace"`
 	SecondaryWorkspaces []string `json:"secondary_workspaces"`
-	ContextFile         string   `json:"context_file"`
 }
 
 func CreateWorkspace(paths Paths, name string, now time.Time) error {
@@ -29,8 +28,14 @@ func CreateWorkspace(paths Paths, name string, now time.Time) error {
 	} else if !os.IsNotExist(err) {
 		return err
 	}
+	if err := ensureDirectoryMode(paths.WorkspacesDir, runtimeDirectoryMode); err != nil {
+		return err
+	}
+	if err := ensureDirectoryMode(root, runtimeDirectoryMode); err != nil {
+		return err
+	}
 	for _, tier := range WikiTiers {
-		if err := os.MkdirAll(filepath.Join(root, "wiki", tier), 0o755); err != nil {
+		if err := ensureDirectoryMode(filepath.Join(root, "wiki", tier), runtimeDirectoryMode); err != nil {
 			return err
 		}
 	}
@@ -42,16 +47,22 @@ func CreateWorkspace(paths Paths, name string, now time.Time) error {
 		"evidence/applied",
 		"evidence/archive",
 	} {
-		if err := os.MkdirAll(filepath.Join(root, dir), 0o755); err != nil {
+		if err := ensureDirectoryMode(filepath.Join(root, dir), runtimeDirectoryMode); err != nil {
 			return err
 		}
 	}
 
 	workspaceReadme := fmt.Sprintf("# %s\n\nCreated: %s\n", name, now.UTC().Format(time.RFC3339))
-	if err := os.WriteFile(filepath.Join(root, "workspace.md"), []byte(workspaceReadme), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(root, "workspace.md"), []byte(workspaceReadme), runtimeMetadataMode); err != nil {
 		return err
 	}
-	if err := os.WriteFile(filepath.Join(root, "evidence", "_index.md"), []byte("# Evidence Index\n"), 0o644); err != nil {
+	if err := ensureFileMode(filepath.Join(root, "workspace.md"), runtimeMetadataMode); err != nil {
+		return err
+	}
+	if err := os.WriteFile(filepath.Join(root, "evidence", "_index.md"), []byte("# Evidence Index\n"), runtimeMetadataMode); err != nil {
+		return err
+	}
+	if err := ensureFileMode(filepath.Join(root, "evidence", "_index.md"), runtimeMetadataMode); err != nil {
 		return err
 	}
 
@@ -84,7 +95,6 @@ func ResolveCurrentWorkspace(paths Paths) (WorkspaceCurrent, error) {
 		ProjectRoot:         paths.CWD,
 		Workspace:           workspace,
 		SecondaryWorkspaces: []string{},
-		ContextFile:         CurrentTaskFilePath(paths),
 	}, nil
 }
 
