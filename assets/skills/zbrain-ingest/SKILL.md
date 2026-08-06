@@ -11,9 +11,9 @@ Prefix your first line with 🥷 inline.
 Use:
 
 ```bash
-zbrain claim approve <id>
-zbrain reindex
-zbrain ask <query>
+zbrain claim approve <id> [--workspace <name>]
+zbrain reindex [--workspace <name>]
+zbrain ask [--workspace <name>] [--include <name>]... <query>
 ```
 
 Approved claims are OKF concepts with `type: zbrain.claim` and zbrain verification metadata. Do not describe analysis, QA, or apply subcommands as available.

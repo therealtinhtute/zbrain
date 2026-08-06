@@ -14,8 +14,10 @@ No JavaScript runtime, package manager, or external retrieval service is require
 ## Packaging Strategy
 
 Build on the target platform with the same Go-native command. The binary embeds
-the runtime content from `assets/`; `zbrain setup` extracts that content into the
-selected runtime root.
+the runtime content from `assets/`; `zbrain setup` extracts `README.md`,
+`agents/`, `engine/`, `skills/`, and `templates/` directly under the selected
+runtime root. Workspace seed assets are skipped; `workspace create` and
+`reindex` create workspace and index paths as needed.
 
 ## Acceptance and Smoke Checks
 

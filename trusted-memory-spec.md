@@ -33,14 +33,14 @@ The shipped commands are:
 zbrain setup
 zbrain workspace create <name>
 zbrain workspace current
-zbrain evidence add --file <path> --origin <uri-or-path> [--media-type <type>]
-zbrain claim draft
-zbrain claim approve <id>
-zbrain claim supersede <id>
-zbrain claim revoke <id> --reason <reason>
-zbrain migrate okf
-zbrain reindex
-zbrain ask <query>
+zbrain evidence add --file <path> --origin <uri-or-path> [--media-type <type>] [--workspace <name>]
+zbrain claim draft --tier <tier> --title <title> --basis <owner|evidence|derived> [--evidence <id>]... [--support <id>]... [--conflicts-with <id>]... [--workspace <name>]
+zbrain claim approve <id> [--workspace <name>]
+zbrain claim supersede <id> --tier <tier> --title <title> --basis <owner|evidence|derived> [--evidence <id>]... [--support <id>]... [--conflicts-with <id>]... [--workspace <name>]
+zbrain claim revoke <id> --reason <reason> [--workspace <name>]
+zbrain migrate okf [--workspace <name>]
+zbrain reindex [--workspace <name>]
+zbrain ask [--workspace <name>] [--include <name>]... <query>
 zbrain version
 ```
 
@@ -82,10 +82,14 @@ isolated tests and smoke runs.
 ```text
 ~/.zbrain/
   config.yml
-  assets/
-  indexes/
+  README.md                  # extracted runtime asset
+  agents/                    # extracted runtime agents
+  engine/                    # extracted engine rules
+  skills/                    # extracted skills and references
+  templates/                 # extracted templates
+  indexes/                   # created when a workspace is reindexed
     <workspace>.sqlite
-    <workspace>.dirty       # present while a rebuild is incomplete
+    <workspace>.dirty        # present while a rebuild is incomplete
   workspaces/<workspace>/
     workspace.md
     agents/
@@ -103,10 +107,23 @@ isolated tests and smoke runs.
       archive/
 ```
 
+`zbrain setup` extracts the embedded `README.md`, `agents/`, `engine/`, `skills/`, and `templates/` paths directly under the runtime root. The embedded `workspaces/` seed is not activated; `workspace create` creates the selected workspace and `reindex` creates its disposable index.
+
 Markdown is canonical. SQLite is a disposable derived cache. A database row,
 FTS index, or dirty marker must never be the only copy of trusted content.
 Workspace boundaries are hard: no read may cross workspace boundaries unless
 the caller explicitly passes the supported include option.
+
+Runtime ownership permissions are part of this boundary contract:
+
+- runtime, workspace, evidence, and index directories are owner-only (`0700`);
+- mutable runtime metadata and canonical Markdown are owner-only read/write
+  (`0600`);
+- immutable evidence raw snapshots and metadata are owner-only read (`0400`);
+- derived SQLite indexes and dirty markers are owner-only read/write (`0600`).
+
+Fresh outputs and normal mutation paths normalize these modes without changing
+canonical claim or evidence content semantics.
 
 ## 5. Claim Model
 

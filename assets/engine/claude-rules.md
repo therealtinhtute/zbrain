@@ -13,14 +13,14 @@ zbrain is a local-first trusted memory CLI. It returns versioned JSON context fo
 
 | Need | Command |
 |---|---|
-| Capture a local evidence snapshot | `zbrain evidence add --file <path> --origin <uri-or-path>` |
-| Draft an OKF claim concept from stdin | `zbrain claim draft --tier <tier> --title <title> --basis <owner|evidence|derived>` |
-| Promote a valid draft claim | `zbrain claim approve <id>` |
-| Replace an approved claim | `zbrain claim supersede <id>` then approve the replacement |
-| Revoke a claim | `zbrain claim revoke <id> --reason <text>` |
-| Convert legacy claim files | `zbrain migrate okf` |
-| Rebuild the derived index | `zbrain reindex` |
-| Retrieve trusted context | `zbrain ask [--include <workspace>] <query>` |
+| Capture a local evidence snapshot | `zbrain evidence add --file <path> --origin <uri-or-path> [--media-type <type>] [--workspace <name>]` |
+| Draft an OKF claim concept from stdin | `zbrain claim draft --tier <tier> --title <title> --basis <owner|evidence|derived> [--evidence <id>]... [--support <id>]... [--conflicts-with <id>]... [--workspace <name>]` |
+| Promote a valid draft claim | `zbrain claim approve <id> [--workspace <name>]` |
+| Replace an approved claim | `zbrain claim supersede <id> --tier <tier> --title <title> --basis <owner|evidence|derived> [--evidence <id>]... [--support <id>]... [--conflicts-with <id>]... [--workspace <name>]` then approve the replacement |
+| Revoke a claim | `zbrain claim revoke <id> --reason <text> [--workspace <name>]` |
+| Convert legacy claim files | `zbrain migrate okf [--workspace <name>]` |
+| Rebuild the derived index | `zbrain reindex [--workspace <name>]` |
+| Retrieve trusted context | `zbrain ask [--workspace <name>] [--include <workspace>]... <query>` |
 
 ### Invariants
 

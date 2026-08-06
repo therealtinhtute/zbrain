@@ -69,8 +69,12 @@ Runtime and workspace layout:
 ```text
 ~/.zbrain/
   config.yml
-  assets/
-  indexes/
+  README.md                  # extracted runtime asset
+  agents/                    # extracted runtime agents
+  engine/                    # extracted engine rules
+  skills/                    # extracted skills and references
+  templates/                 # extracted templates
+  indexes/                   # created when a workspace is reindexed
     <workspace>.sqlite
     <workspace>.dirty        # present while a rebuild is incomplete
   workspaces/<workspace>/
@@ -90,4 +94,8 @@ Runtime and workspace layout:
       archive/
 ```
 
-`zbrain workspace current` prints JSON and currently resolves from `config.yml` `default_workspace`. `ZBRAIN_HOME` replaces `~/.zbrain/` for isolated tests and smoke runs.
+`zbrain setup` extracts embedded files directly under the runtime root; workspace seed assets are not activated. `zbrain workspace current` prints JSON with `project_root`, `workspace`, and `secondary_workspaces`; it does not advertise session transcript or `context_file` storage. It resolves the primary workspace from `config.yml` `default_workspace`. `ZBRAIN_HOME` replaces `~/.zbrain/` for isolated tests and smoke runs.
+
+Runtime ownership permissions are owner-only: directories use `0700`, mutable
+metadata and canonical Markdown use `0600`, immutable evidence snapshots and
+metadata use `0400`, and derived index databases/dirty markers use `0600`.

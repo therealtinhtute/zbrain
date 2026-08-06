@@ -13,8 +13,8 @@ Retrieve trusted zbrain context for one question. Do not answer from memory when
 
 <instructions>
 1. Run `zbrain workspace current` to confirm the primary workspace.
-2. Run `zbrain ask "{question}"`.
-3. If the user explicitly allows another workspace, pass it with `--include <workspace>`.
+2. Run `zbrain ask [--workspace <name>] "{question}"`.
+3. If the user explicitly allows another workspace, pass it with repeated `--include <workspace>` flags.
 4. Use only `claims` from a `status: ready` response as trusted context.
 5. Trusted claims are approved OKF concepts with `type: zbrain.claim` and the zbrain trusted-memory profile.
 6. Treat `promotion_candidates` as drafts that need human approval before becoming facts.

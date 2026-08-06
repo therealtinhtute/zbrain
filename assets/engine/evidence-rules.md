@@ -2,10 +2,10 @@
 
 ## Current Pipeline
 
-1. Capture a local snapshot with `zbrain evidence add --file <path> --origin <uri-or-path>`.
+1. Capture a local snapshot with `zbrain evidence add --file <path> --origin <uri-or-path> [--media-type <type>] [--workspace <name>]`.
 2. Draft OKF claim concepts that reference evidence IDs when the claim is based on external facts.
 3. Approve only claims that pass their basis-specific proof rule.
-4. Run `zbrain reindex` before trusted retrieval.
+4. Run `zbrain reindex [--workspace <name>]` before trusted retrieval.
 
 ## Required Guards
 

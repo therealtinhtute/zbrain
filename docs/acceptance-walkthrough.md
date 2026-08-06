@@ -8,11 +8,11 @@ This walkthrough exercises the shipped Go-native CLI in an isolated runtime:
 2. `zbrain setup`
 3. `zbrain workspace create <name>`
 4. `zbrain workspace current`
-5. `zbrain evidence add --file <path> --origin <uri-or-path>`
-6. `zbrain claim draft --tier <tier> --title <title> --basis <owner|evidence|derived>`
-7. `zbrain claim approve <id>`
-8. `zbrain reindex`
-9. `zbrain ask <query>`
+5. `zbrain evidence add --file <path> --origin <uri-or-path> [--media-type <type>] [--workspace <name>]`
+6. `zbrain claim draft --tier <tier> --title <title> --basis <owner|evidence|derived> [--evidence <id>]... [--support <id>]... [--conflicts-with <id>]... [--workspace <name>]`
+7. `zbrain claim approve <id> [--workspace <name>]`
+8. `zbrain reindex [--workspace <name>]`
+9. `zbrain ask [--workspace <name>] [--include <name>]... <query>`
 
 `claim supersede`, `claim revoke`, and `migrate okf` are covered by the Go
 runtime and CLI test suites.
@@ -55,7 +55,9 @@ ZBRAIN_HOME=/tmp/zbrain-smoke ./dist/zbrain workspace create research
 ZBRAIN_HOME=/tmp/zbrain-smoke ./dist/zbrain workspace current
 ```
 
-`setup` copies the embedded `assets/` runtime content. Workspace seed assets are
-not treated as active workspaces. The runtime has no external runtime or
+`setup` extracts embedded `README.md`, `agents/`, `engine/`, `skills/`, and
+`templates/` directly under the selected runtime root. Workspace seed assets are
+not treated as active workspaces; `workspace create` creates the workspace and
+`reindex` creates its disposable index. The runtime has no external runtime or
 retrieval prerequisite; `zbrain ask` returns trusted context JSON and does not
 call an LLM.
