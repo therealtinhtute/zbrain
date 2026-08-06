@@ -10,14 +10,14 @@ The current slice stores canonical OKF-style Markdown claim concepts, immutable 
 zbrain setup
 zbrain workspace create <name>
 zbrain workspace current
-zbrain evidence add
-zbrain claim draft
-zbrain claim approve <id>
-zbrain claim supersede <id>
-zbrain claim revoke <id>
-zbrain migrate okf
-zbrain reindex
-zbrain ask <query>
+zbrain evidence add --file <path> --origin <uri-or-path> [--media-type <type>] [--workspace <name>]
+zbrain claim draft --tier <tier> --title <title> --basis <owner|evidence|derived> [--evidence <id>]... [--support <id>]... [--conflicts-with <id>]... [--workspace <name>]
+zbrain claim approve <id> [--workspace <name>]
+zbrain claim supersede <id> --tier <tier> --title <title> --basis <owner|evidence|derived> [--evidence <id>]... [--support <id>]... [--conflicts-with <id>]... [--workspace <name>]
+zbrain claim revoke <id> --reason <reason> [--workspace <name>]
+zbrain migrate okf [--workspace <name>]
+zbrain reindex [--workspace <name>]
+zbrain ask [--workspace <name>] [--include <name>]... <query>
 zbrain version
 ```
 
@@ -48,15 +48,18 @@ After `zbrain setup` and `zbrain workspace create research`:
 ```text
 ~/.zbrain/
   config.yml
-  agents/
-  engine/
-  skills/
-  templates/
-  indexes/
+  README.md                  # extracted runtime asset
+  agents/                    # extracted runtime agents
+  engine/                    # extracted engine rules
+  skills/                    # extracted skills and references
+  templates/                 # extracted templates
+  indexes/                   # created by zbrain reindex
     research.sqlite
+    research.dirty            # present while a rebuild is incomplete
   workspaces/
     research/
       workspace.md
+      agents/
       wiki/
         axioms/
         mental-models/
@@ -70,6 +73,10 @@ After `zbrain setup` and `zbrain workspace create research`:
         applied/
         archive/
 ```
+
+`zbrain setup` extracts embedded files directly under the runtime root. The
+embedded workspace seed is not activated; `workspace create` creates the
+selected workspace and `reindex` creates its disposable index.
 
 `zbrain workspace current` prints JSON with:
 

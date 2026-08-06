@@ -14,6 +14,45 @@ import (
 
 const Version = "0.1.0-go"
 
+var (
+	noFlags  = map[string]struct{}{}
+	askFlags = map[string]struct{}{
+		"workspace": {},
+		"include":   {},
+	}
+	evidenceAddFlags = map[string]struct{}{
+		"file":       {},
+		"origin":     {},
+		"media-type": {},
+		"workspace":  {},
+	}
+	claimDraftFlags = map[string]struct{}{
+		"tier":           {},
+		"title":          {},
+		"basis":          {},
+		"evidence":       {},
+		"support":        {},
+		"conflicts-with": {},
+		"workspace":      {},
+	}
+	claimSupersedeFlags = map[string]struct{}{
+		"tier":           {},
+		"title":          {},
+		"basis":          {},
+		"evidence":       {},
+		"support":        {},
+		"conflicts-with": {},
+		"workspace":      {},
+	}
+	claimRevokeFlags = map[string]struct{}{
+		"reason":    {},
+		"workspace": {},
+	}
+	workspaceFlags = map[string]struct{}{
+		"workspace": {},
+	}
+)
+
 type App struct {
 	Stdout io.Writer
 	Stderr io.Writer
@@ -44,9 +83,22 @@ func (app App) Run(args []string) error {
 
 	switch args[0] {
 	case "--help", "-h", "help":
+		if len(args) != 1 {
+			return errors.New("usage: zbrain --help")
+		}
 		app.printHelp()
 		return nil
 	case "--version", "version":
+		if helpRequested(args[1:]) {
+			app.printVersionHelp()
+			return nil
+		}
+		if len(args) > 1 {
+			if strings.HasPrefix(args[1], "-") {
+				return unknownFlag(args[1])
+			}
+			return errors.New("version accepts no arguments")
+		}
 		_, err := fmt.Fprintln(app.Stdout, Version)
 		return err
 	case "setup":
@@ -64,12 +116,23 @@ func (app App) Run(args []string) error {
 	case "ask":
 		return app.runAsk(args[1:])
 	default:
+		if strings.HasPrefix(args[0], "-") {
+			return unknownFlag(args[0])
+		}
 		return fmt.Errorf("unknown command: %s", args[0])
 	}
 }
 
 func (app App) runSetup(args []string) error {
-	if len(args) > 0 {
+	if helpRequested(args) {
+		app.printSetupHelp()
+		return nil
+	}
+	_, rest, err := parseFlags(args, noFlags)
+	if err != nil {
+		return err
+	}
+	if len(rest) > 0 {
 		return fmt.Errorf("setup accepts no arguments")
 	}
 	if err := os.MkdirAll(app.Paths.RuntimeDir, 0o755); err != nil {
@@ -88,6 +151,10 @@ func (app App) runSetup(args []string) error {
 }
 
 func (app App) runAsk(args []string) error {
+	if helpRequested(args) {
+		app.printAskHelp()
+		return nil
+	}
 	workspace, includes, rest, err := parseWorkspaceIncludeFlags(args)
 	if err != nil {
 		return err
@@ -103,6 +170,10 @@ func (app App) runAsk(args []string) error {
 }
 
 func (app App) runReindex(args []string) error {
+	if helpRequested(args) {
+		app.printReindexHelp()
+		return nil
+	}
 	workspace, rest, err := parseWorkspaceFlag(args)
 	if err != nil {
 		return err
@@ -125,10 +196,27 @@ func (app App) runReindex(args []string) error {
 }
 
 func (app App) runEvidence(args []string) error {
-	if len(args) == 0 || args[0] != "add" {
+	if len(args) == 0 {
 		return errors.New("evidence requires subcommand: add")
 	}
-	flags, rest := parseFlags(args[1:])
+	if helpRequested(args) {
+		app.printEvidenceHelp()
+		return nil
+	}
+	if strings.HasPrefix(args[0], "-") {
+		return unknownFlag(args[0])
+	}
+	if args[0] != "add" {
+		return errors.New("evidence requires subcommand: add")
+	}
+	if helpRequested(args[1:]) {
+		app.printEvidenceAddHelp()
+		return nil
+	}
+	flags, rest, err := parseFlags(args[1:], evidenceAddFlags)
+	if err != nil {
+		return err
+	}
 	if len(rest) > 0 {
 		return errors.New("usage: zbrain evidence add --file <path> --origin <uri-or-path> [--media-type <type>] [--workspace <name>]")
 	}
@@ -156,6 +244,13 @@ func (app App) runClaim(args []string) error {
 	if len(args) == 0 {
 		return errors.New("claim requires a subcommand: draft, approve, supersede, or revoke")
 	}
+	if helpRequested(args) {
+		app.printClaimHelp()
+		return nil
+	}
+	if strings.HasPrefix(args[0], "-") {
+		return unknownFlag(args[0])
+	}
 	switch args[0] {
 	case "draft":
 		return app.runClaimDraft(args[1:])
@@ -171,7 +266,14 @@ func (app App) runClaim(args []string) error {
 }
 
 func (app App) runClaimDraft(args []string) error {
-	flags, rest := parseFlags(args)
+	if helpRequested(args) {
+		app.printClaimDraftHelp()
+		return nil
+	}
+	flags, rest, err := parseFlags(args, claimDraftFlags)
+	if err != nil {
+		return err
+	}
 	if len(rest) > 0 {
 		return errors.New("usage: zbrain claim draft --tier <tier> --title <title> --basis <owner|evidence|derived> [--evidence <id>]... [--support <id>]... [--conflicts-with <id>]... [--workspace <name>]")
 	}
@@ -216,6 +318,10 @@ func (app App) runClaimDraft(args []string) error {
 }
 
 func (app App) runClaimApprove(args []string) error {
+	if helpRequested(args) {
+		app.printClaimApproveHelp()
+		return nil
+	}
 	workspace, rest, err := parseWorkspaceFlag(args)
 	if err != nil {
 		return err
@@ -238,9 +344,16 @@ func (app App) runClaimApprove(args []string) error {
 }
 
 func (app App) runClaimSupersede(args []string) error {
-	flags, rest := parseFlags(args)
+	if helpRequested(args) {
+		app.printClaimSupersedeHelp()
+		return nil
+	}
+	flags, rest, err := parseFlags(args, claimSupersedeFlags)
+	if err != nil {
+		return err
+	}
 	if len(rest) != 1 {
-		return errors.New("usage: zbrain claim supersede <id> --tier <tier> --title <title> --basis <owner|evidence|derived> ...")
+		return errors.New("usage: zbrain claim supersede <id> --tier <tier> --title <title> --basis <owner|evidence|derived> [--evidence <id>]... [--support <id>]... [--conflicts-with <id>]... [--workspace <name>]")
 	}
 	workspace, err := app.resolveWorkspace(flags.single("workspace"))
 	if err != nil {
@@ -270,7 +383,14 @@ func (app App) runClaimSupersede(args []string) error {
 }
 
 func (app App) runClaimRevoke(args []string) error {
-	flags, rest := parseFlags(args)
+	if helpRequested(args) {
+		app.printClaimRevokeHelp()
+		return nil
+	}
+	flags, rest, err := parseFlags(args, claimRevokeFlags)
+	if err != nil {
+		return err
+	}
 	if len(rest) != 1 || flags.single("reason") == "" {
 		return errors.New("usage: zbrain claim revoke <id> --reason <text> [--workspace <name>]")
 	}
@@ -289,8 +409,22 @@ func (app App) runClaimRevoke(args []string) error {
 }
 
 func (app App) runMigrate(args []string) error {
-	if len(args) == 0 || args[0] != "okf" {
+	if len(args) == 0 {
 		return errors.New("migrate requires subcommand: okf")
+	}
+	if helpRequested(args) {
+		app.printMigrateHelp()
+		return nil
+	}
+	if strings.HasPrefix(args[0], "-") {
+		return unknownFlag(args[0])
+	}
+	if args[0] != "okf" {
+		return errors.New("migrate requires subcommand: okf")
+	}
+	if helpRequested(args[1:]) {
+		app.printMigrateOKFHelp()
+		return nil
 	}
 	workspace, rest, err := parseWorkspaceFlag(args[1:])
 	if err != nil {
@@ -304,31 +438,22 @@ func (app App) runMigrate(args []string) error {
 		return err
 	}
 	claimStore := zruntime.ClaimStore{Paths: app.Paths, Now: app.Now}
-	scan, err := claimStore.ScanWorkspace(workspace)
-	if err != nil {
-		return err
-	}
-	needsMigration := false
-	for _, claim := range scan.Claims {
-		if claim.Schema == zruntime.ClaimSchemaVersion {
-			needsMigration = true
-			break
-		}
-	}
-	if needsMigration {
-		if err := (zruntime.IndexStore{Paths: app.Paths}).MarkDirty(workspace); err != nil {
-			return err
-		}
-	}
 	summary, err := claimStore.MigrateOKF(workspace)
 	if err != nil {
 		return err
 	}
+	indexFresh := true
+	indexFreshError := ""
+	if err := (zruntime.IndexStore{Paths: app.Paths}).CheckFresh(workspace); err != nil {
+		indexFresh = false
+		indexFreshError = err.Error()
+	}
 	return writeJSON(app.Stdout, struct {
-		SchemaVersion int  `json:"schema_version"`
-		IndexFresh    bool `json:"index_fresh"`
+		SchemaVersion   int    `json:"schema_version"`
+		IndexFresh      bool   `json:"index_fresh"`
+		IndexFreshError string `json:"index_fresh_error,omitempty"`
 		zruntime.ClaimMigrationSummary
-	}{SchemaVersion: 1, IndexFresh: summary.Migrated == 0, ClaimMigrationSummary: summary})
+	}{SchemaVersion: 1, IndexFresh: indexFresh, IndexFreshError: indexFreshError, ClaimMigrationSummary: summary})
 }
 
 func (app App) writeClaimMutation(workspace string, claim zruntime.Claim) error {
@@ -346,18 +471,41 @@ func (app App) runWorkspace(args []string) error {
 	if len(args) == 0 {
 		return errors.New("workspace requires a subcommand: create or current")
 	}
+	if helpRequested(args) {
+		app.printWorkspaceHelp()
+		return nil
+	}
+	if strings.HasPrefix(args[0], "-") {
+		return unknownFlag(args[0])
+	}
 	switch args[0] {
 	case "create":
-		if len(args) != 2 {
-			return errors.New("usage: zbrain workspace create <name>")
+		if helpRequested(args[1:]) {
+			app.printWorkspaceCreateHelp()
+			return nil
 		}
-		if err := zruntime.CreateWorkspace(app.Paths, args[1], app.Now()); err != nil {
+		_, rest, err := parseFlags(args[1:], noFlags)
+		if err != nil {
 			return err
 		}
-		_, err := fmt.Fprintf(app.Stdout, "workspace created: %s\n", args[1])
+		if len(rest) != 1 {
+			return errors.New("usage: zbrain workspace create <name>")
+		}
+		if err := zruntime.CreateWorkspace(app.Paths, rest[0], app.Now()); err != nil {
+			return err
+		}
+		_, err = fmt.Fprintf(app.Stdout, "workspace created: %s\n", rest[0])
 		return err
 	case "current":
-		if len(args) > 1 {
+		if helpRequested(args[1:]) {
+			app.printWorkspaceCurrentHelp()
+			return nil
+		}
+		_, rest, err := parseFlags(args[1:], noFlags)
+		if err != nil {
+			return err
+		}
+		if len(rest) > 0 {
 			return errors.New("workspace current accepts no arguments")
 		}
 		current, err := zruntime.ResolveCurrentWorkspace(app.Paths)
@@ -408,30 +556,47 @@ func (flags parsedFlags) single(name string) string {
 	return values[len(values)-1]
 }
 
-func parseFlags(args []string) (parsedFlags, []string) {
+func parseFlags(args []string, allowed map[string]struct{}) (parsedFlags, []string, error) {
 	flags := parsedFlags{values: map[string][]string{}}
 	rest := []string{}
 	for i := 0; i < len(args); i++ {
 		arg := args[i]
-		if strings.HasPrefix(arg, "--") && i+1 < len(args) {
+		if strings.HasPrefix(arg, "--") {
 			name := strings.TrimPrefix(arg, "--")
+			if _, ok := allowed[name]; !ok {
+				return flags, rest, unknownFlag(arg)
+			}
+			if i+1 >= len(args) || strings.HasPrefix(args[i+1], "--") {
+				return flags, rest, fmt.Errorf("flag %s requires a value", arg)
+			}
 			flags.values[name] = append(flags.values[name], args[i+1])
 			i++
 			continue
 		}
+		if strings.HasPrefix(arg, "-") {
+			return flags, rest, unknownFlag(arg)
+		}
 		rest = append(rest, arg)
 	}
-	return flags, rest
+	return flags, rest, nil
 }
 
 func parseWorkspaceFlag(args []string) (string, []string, error) {
-	flags, rest := parseFlags(args)
-	return flags.single("workspace"), rest, nil
+	flags, rest, err := parseFlags(args, workspaceFlags)
+	return flags.single("workspace"), rest, err
 }
 
 func parseWorkspaceIncludeFlags(args []string) (string, []string, []string, error) {
-	flags, rest := parseFlags(args)
-	return flags.single("workspace"), flags.values["include"], rest, nil
+	flags, rest, err := parseFlags(args, askFlags)
+	return flags.single("workspace"), flags.values["include"], rest, err
+}
+
+func unknownFlag(arg string) error {
+	return fmt.Errorf("unknown flag: %s", arg)
+}
+
+func helpRequested(args []string) bool {
+	return len(args) == 1 && (args[0] == "--help" || args[0] == "-h" || args[0] == "help")
 }
 
 func (app App) printHelp() {
@@ -439,19 +604,160 @@ func (app App) printHelp() {
 
 Usage:
   zbrain <command> [arguments]
+  zbrain <command> --help
 
 Commands:
-  setup                         Prepare the runtime directory
-  workspace create <name>       Create a workspace
-  workspace current             Print the active workspace as JSON
-  evidence add                  Capture an immutable local evidence snapshot
-  claim draft                   Write a draft OKF claim concept from stdin
-  claim approve <id>            Promote a valid draft claim
-  claim supersede <id>          Create a replacement draft for an approved claim
-  claim revoke <id>             Revoke a claim with a reason
-  migrate okf                   Convert legacy zbrain claims to OKF concepts
-  reindex                       Rebuild the derived workspace index
-  ask <query>                   Return trusted context JSON; does not call an LLM
-  version                       Print version
+  setup
+  workspace create <name>
+  workspace current
+  evidence add --file <path> --origin <uri-or-path> [--media-type <type>] [--workspace <name>]
+  claim draft --tier <tier> --title <title> --basis <owner|evidence|derived> [--evidence <id>]... [--support <id>]... [--conflicts-with <id>]... [--workspace <name>]
+  claim approve <id> [--workspace <name>]
+  claim supersede <id> --tier <tier> --title <title> --basis <owner|evidence|derived> [--evidence <id>]... [--support <id>]... [--conflicts-with <id>]... [--workspace <name>]
+  claim revoke <id> --reason <text> [--workspace <name>]
+  migrate okf [--workspace <name>]
+  reindex [--workspace <name>]
+  ask [--workspace <name>] [--include <name>]... <query>
+  version
+
+Use `+"`zbrain <command> --help`"+` for command-specific help.
+`)
+}
+
+func (app App) printSetupHelp() {
+	fmt.Fprint(app.Stdout, `Usage: zbrain setup
+
+Prepare the runtime directory and extract embedded assets.
+`)
+}
+
+func (app App) printVersionHelp() {
+	fmt.Fprint(app.Stdout, `Usage: zbrain version
+
+Print the CLI version.
+`)
+}
+
+func (app App) printWorkspaceHelp() {
+	fmt.Fprint(app.Stdout, `Usage:
+  zbrain workspace create <name>
+  zbrain workspace current
+
+Manage the active workspace.
+`)
+}
+
+func (app App) printWorkspaceCreateHelp() {
+	fmt.Fprint(app.Stdout, `Usage: zbrain workspace create <name>
+
+Create a workspace using a lowercase name, digits, or hyphens.
+`)
+}
+
+func (app App) printWorkspaceCurrentHelp() {
+	fmt.Fprint(app.Stdout, `Usage: zbrain workspace current
+
+Print the active workspace as JSON.
+`)
+}
+
+func (app App) printEvidenceHelp() {
+	app.printEvidenceAddHelp()
+}
+
+func (app App) printEvidenceAddHelp() {
+	fmt.Fprint(app.Stdout, `Usage: zbrain evidence add --file <path> --origin <uri-or-path> [--media-type <type>] [--workspace <name>]
+
+Options:
+  --file <path>             Local source file to snapshot
+  --origin <uri-or-path>    Origin recorded in evidence metadata
+  --media-type <type>      Optional media type
+  --workspace <name>       Target workspace; defaults to the current workspace
+`)
+}
+
+func (app App) printClaimHelp() {
+	fmt.Fprint(app.Stdout, `Usage:
+  zbrain claim draft --tier <tier> --title <title> --basis <owner|evidence|derived> [--evidence <id>]... [--support <id>]... [--conflicts-with <id>]... [--workspace <name>]
+  zbrain claim approve <id> [--workspace <name>]
+  zbrain claim supersede <id> --tier <tier> --title <title> --basis <owner|evidence|derived> [--evidence <id>]... [--support <id>]... [--conflicts-with <id>]... [--workspace <name>]
+  zbrain claim revoke <id> --reason <text> [--workspace <name>]
+
+Manage the four-state OKF claim lifecycle.
+`)
+}
+
+func (app App) printClaimDraftHelp() {
+	fmt.Fprint(app.Stdout, `Usage: zbrain claim draft --tier <tier> --title <title> --basis <owner|evidence|derived> [options]
+
+Options:
+  --tier <tier>             Claim tier
+  --title <title>           Claim title
+  --basis <basis>           owner, evidence, or derived
+  --evidence <id>           Evidence ID; repeat for multiple IDs
+  --support <id>            Supporting claim ID; repeat for multiple IDs
+  --conflicts-with <id>     Conflicting claim ID; repeat for multiple IDs
+  --workspace <name>       Target workspace; defaults to the current workspace
+
+The claim body is read from stdin.
+`)
+}
+
+func (app App) printClaimApproveHelp() {
+	fmt.Fprint(app.Stdout, `Usage: zbrain claim approve <id> [--workspace <name>]
+
+Promote a valid draft claim.
+`)
+}
+
+func (app App) printClaimSupersedeHelp() {
+	fmt.Fprint(app.Stdout, `Usage: zbrain claim supersede <id> --tier <tier> --title <title> --basis <owner|evidence|derived> [options]
+
+Options:
+  --tier <tier>             Replacement claim tier
+  --title <title>           Replacement claim title
+  --basis <basis>           owner, evidence, or derived
+  --evidence <id>           Evidence ID; repeat for multiple IDs
+  --support <id>            Supporting claim ID; repeat for multiple IDs
+  --conflicts-with <id>     Conflicting claim ID; repeat for multiple IDs
+  --workspace <name>       Target workspace; defaults to the current workspace
+
+The replacement claim body is read from stdin.
+`)
+}
+
+func (app App) printClaimRevokeHelp() {
+	fmt.Fprint(app.Stdout, `Usage: zbrain claim revoke <id> --reason <text> [--workspace <name>]
+
+Revoke a claim with an operator-provided reason.
+`)
+}
+
+func (app App) printMigrateHelp() {
+	fmt.Fprint(app.Stdout, `Usage: zbrain migrate okf [--workspace <name>]
+
+Convert legacy zbrain claim files to OKF concepts.
+`)
+}
+
+func (app App) printMigrateOKFHelp() {
+	app.printMigrateHelp()
+}
+
+func (app App) printReindexHelp() {
+	fmt.Fprint(app.Stdout, `Usage: zbrain reindex [--workspace <name>]
+
+Rebuild the disposable workspace index.
+`)
+}
+
+func (app App) printAskHelp() {
+	fmt.Fprint(app.Stdout, `Usage: zbrain ask [--workspace <name>] [--include <name>]... <query>
+
+Return trusted context JSON without calling an LLM.
+
+Options:
+  --workspace <name>       Primary workspace; defaults to the current workspace
+  --include <name>         Explicit read-only secondary workspace; repeatable
 `)
 }

@@ -4,7 +4,7 @@
 
 1. Resolve the primary workspace from `zbrain workspace current` or an explicit `--workspace` flag.
 2. Include secondary workspaces only when passed with `--include`.
-3. Run `zbrain ask` to retrieve trusted context JSON.
+3. Run `zbrain ask [--workspace <name>] [--include <name>]... <query>` to retrieve trusted context JSON.
 4. Treat `status: ready` as usable context, `status: gap` as insufficient approved memory, and `status: blocked` as an unresolved explicit conflict.
 
 ## Ranking

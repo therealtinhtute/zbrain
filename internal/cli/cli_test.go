@@ -45,6 +45,83 @@ func TestRunSetup(t *testing.T) {
 	}
 }
 
+func TestCLIHelpParity(t *testing.T) {
+	cases := []struct {
+		name string
+		args []string
+		want []string
+	}{
+		{
+			name: "root",
+			args: []string{"--help"},
+			want: []string{
+				"ask [--workspace <name>] [--include <name>]... <query>",
+				"evidence add --file <path> --origin <uri-or-path>",
+				"claim supersede <id>",
+				"zbrain <command> --help",
+			},
+		},
+		{name: "setup", args: []string{"setup", "--help"}, want: []string{"Usage: zbrain setup"}},
+		{name: "version", args: []string{"version", "--help"}, want: []string{"Usage: zbrain version"}},
+		{name: "workspace", args: []string{"workspace", "--help"}, want: []string{"zbrain workspace create <name>", "zbrain workspace current"}},
+		{name: "evidence", args: []string{"evidence", "--help"}, want: []string{"--file <path>", "--origin <uri-or-path>", "--workspace <name>"}},
+		{name: "claim", args: []string{"claim", "--help"}, want: []string{"claim draft --tier <tier>", "claim supersede <id>", "claim revoke <id> --reason <text>"}},
+		{name: "workspace create", args: []string{"workspace", "create", "--help"}, want: []string{"Usage: zbrain workspace create <name>"}},
+		{name: "workspace current", args: []string{"workspace", "current", "--help"}, want: []string{"Usage: zbrain workspace current"}},
+		{name: "evidence", args: []string{"evidence", "add", "--help"}, want: []string{"--file <path>", "--origin <uri-or-path>", "--media-type <type>", "--workspace <name>"}},
+		{name: "claim draft", args: []string{"claim", "draft", "--help"}, want: []string{"--tier <tier>", "--title <title>", "--basis <basis>", "--evidence <id>", "--support <id>", "--conflicts-with <id>", "--workspace <name>"}},
+		{name: "claim approve", args: []string{"claim", "approve", "--help"}, want: []string{"Usage: zbrain claim approve <id> [--workspace <name>]"}},
+		{name: "claim supersede", args: []string{"claim", "supersede", "--help"}, want: []string{"--tier <tier>", "--title <title>", "--basis <basis>"}},
+		{name: "claim revoke", args: []string{"claim", "revoke", "--help"}, want: []string{"--reason <text>", "--workspace <name>"}},
+		{name: "migrate", args: []string{"migrate", "okf", "--help"}, want: []string{"Usage: zbrain migrate okf [--workspace <name>]"}},
+		{name: "reindex", args: []string{"reindex", "--help"}, want: []string{"Usage: zbrain reindex [--workspace <name>]"}},
+		{name: "ask", args: []string{"ask", "--help"}, want: []string{"--workspace <name>", "--include <name>"}},
+	}
+
+	for _, test := range cases {
+		t.Run(test.name, func(t *testing.T) {
+			app, _ := testApp(t)
+			if err := app.Run(test.args); err != nil {
+				t.Fatalf("Run(%v) error = %v", test.args, err)
+			}
+			for _, want := range test.want {
+				if !strings.Contains(stdout(app), want) {
+					t.Fatalf("Run(%v) output %q does not contain %q", test.args, stdout(app), want)
+				}
+			}
+		})
+	}
+}
+
+func TestUnknownFlag(t *testing.T) {
+	cases := [][]string{
+		{"--bogus"},
+		{"setup", "--bogus"},
+		{"workspace", "create", "research", "--bogus", "value"},
+		{"workspace", "current", "--bogus"},
+		{"evidence", "add", "--file", "source", "--origin", "local", "--bogus", "value"},
+		{"claim", "draft", "--tier", "projects", "--bogus", "value"},
+		{"claim", "approve", "clm_example", "--bogus", "value"},
+		{"claim", "supersede", "clm_example", "--tier", "projects", "--bogus", "value"},
+		{"claim", "revoke", "clm_example", "--reason", "reason", "--bogus", "value"},
+		{"migrate", "okf", "--bogus", "value"},
+		{"reindex", "--bogus"},
+		{"ask", "query", "--bogus", "value"},
+		{"version", "--bogus"},
+	}
+
+	for _, args := range cases {
+		args := args
+		t.Run(strings.Join(args, "_"), func(t *testing.T) {
+			app, _ := testApp(t)
+			err := app.Run(args)
+			if err == nil || !strings.Contains(err.Error(), "unknown flag") {
+				t.Fatalf("Run(%v) error = %v, want unknown flag error", args, err)
+			}
+		})
+	}
+}
+
 func TestRunWorkspaceCreateCurrent(t *testing.T) {
 	app, _ := testApp(t)
 	if err := app.Run([]string{"setup"}); err != nil {
@@ -61,6 +138,55 @@ func TestRunWorkspaceCreateCurrent(t *testing.T) {
 	out := stdout(app)
 	if !strings.Contains(out, `"workspace": "research"`) {
 		t.Fatalf("unexpected output: %s", out)
+	}
+}
+
+func TestWorkspaceCurrentContract(t *testing.T) {
+	app, _ := testApp(t)
+	if err := app.Run([]string{"setup"}); err != nil {
+		t.Fatalf("Run(setup) error = %v", err)
+	}
+	if err := app.Run([]string{"workspace", "create", "research"}); err != nil {
+		t.Fatalf("Run(workspace create) error = %v", err)
+	}
+	app.Stdout = &bytes.Buffer{}
+	if err := app.Run([]string{"workspace", "current"}); err != nil {
+		t.Fatalf("Run(workspace current) error = %v", err)
+	}
+
+	var decoded map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(stdout(app)), &decoded); err != nil {
+		t.Fatalf("workspace current JSON is invalid: %v", err)
+	}
+	wantKeys := map[string]bool{
+		"project_root":         true,
+		"workspace":            true,
+		"secondary_workspaces": true,
+	}
+	if len(decoded) != len(wantKeys) {
+		t.Fatalf("workspace current keys = %#v, want exactly %#v", decoded, wantKeys)
+	}
+	for key := range wantKeys {
+		if _, ok := decoded[key]; !ok {
+			t.Fatalf("workspace current missing %q", key)
+		}
+	}
+	if _, ok := decoded["context_file"]; ok {
+		t.Fatalf("workspace current must not advertise unsupported context_file storage")
+	}
+	var workspace string
+	if err := json.Unmarshal(decoded["workspace"], &workspace); err != nil {
+		t.Fatalf("workspace field is invalid: %v", err)
+	}
+	if workspace != "research" {
+		t.Fatalf("workspace = %q, want research", workspace)
+	}
+	var secondary []string
+	if err := json.Unmarshal(decoded["secondary_workspaces"], &secondary); err != nil {
+		t.Fatalf("secondary_workspaces field is invalid: %v", err)
+	}
+	if len(secondary) != 0 {
+		t.Fatalf("secondary_workspaces = %#v, want empty", secondary)
 	}
 }
 
@@ -235,12 +361,13 @@ func TestRunMigrateOKFConvertsLegacyClaim(t *testing.T) {
 		t.Fatalf("Run(migrate okf) error = %v", err)
 	}
 	var summary struct {
-		SchemaVersion int  `json:"schema_version"`
-		Migrated      int  `json:"migrated"`
-		IndexFresh    bool `json:"index_fresh"`
+		SchemaVersion      int  `json:"schema_version"`
+		Migrated           int  `json:"migrated"`
+		IndexFresh         bool `json:"index_fresh"`
+		ReapprovalRequired int  `json:"reapproval_required"`
 	}
 	decodeJSON(t, stdout(app), &summary)
-	if summary.SchemaVersion != 1 || summary.Migrated != 1 || summary.IndexFresh {
+	if summary.SchemaVersion != 1 || summary.Migrated != 1 || summary.IndexFresh || summary.ReapprovalRequired != 0 {
 		t.Fatalf("migrate summary = %#v", summary)
 	}
 	migrated, err := os.ReadFile(claimPath)
@@ -260,17 +387,21 @@ func TestRunMigrateOKFNoopLeavesIndexFresh(t *testing.T) {
 	if err := app.Run([]string{"workspace", "create", "research"}); err != nil {
 		t.Fatalf("Run(workspace create) error = %v", err)
 	}
+	if err := app.Run([]string{"reindex"}); err != nil {
+		t.Fatalf("Run(reindex before migrate no-op) error = %v", err)
+	}
 	app.Stdout = &bytes.Buffer{}
 	if err := app.Run([]string{"migrate", "okf"}); err != nil {
 		t.Fatalf("Run(migrate okf no-op) error = %v", err)
 	}
 	var summary struct {
-		SchemaVersion int  `json:"schema_version"`
-		Migrated      int  `json:"migrated"`
-		IndexFresh    bool `json:"index_fresh"`
+		SchemaVersion   int    `json:"schema_version"`
+		Migrated        int    `json:"migrated"`
+		IndexFresh      bool   `json:"index_fresh"`
+		IndexFreshError string `json:"index_fresh_error"`
 	}
 	decodeJSON(t, stdout(app), &summary)
-	if summary.SchemaVersion != 1 || summary.Migrated != 0 || !summary.IndexFresh {
+	if summary.SchemaVersion != 1 || summary.Migrated != 0 || !summary.IndexFresh || summary.IndexFreshError != "" {
 		t.Fatalf("migrate no-op summary = %#v", summary)
 	}
 	dirtyPath, err := (zruntime.IndexStore{Paths: app.Paths}).DirtyPath("research")
@@ -279,6 +410,56 @@ func TestRunMigrateOKFNoopLeavesIndexFresh(t *testing.T) {
 	}
 	if _, err := os.Stat(dirtyPath); !os.IsNotExist(err) {
 		t.Fatalf("no-op migration created dirty marker: err = %v", err)
+	}
+}
+
+func TestMigrateOKFFreshnessReportsUnknownWithoutIndex(t *testing.T) {
+	app, _ := testApp(t)
+	if err := app.Run([]string{"setup"}); err != nil {
+		t.Fatalf("Run(setup) error = %v", err)
+	}
+	if err := app.Run([]string{"workspace", "create", "research"}); err != nil {
+		t.Fatalf("Run(workspace create) error = %v", err)
+	}
+	app.Stdout = &bytes.Buffer{}
+	if err := app.Run([]string{"migrate", "okf"}); err != nil {
+		t.Fatalf("Run(migrate okf without index) error = %v", err)
+	}
+	var summary struct {
+		IndexFresh      bool   `json:"index_fresh"`
+		IndexFreshError string `json:"index_fresh_error"`
+	}
+	decodeJSON(t, stdout(app), &summary)
+	if summary.IndexFresh || !strings.Contains(summary.IndexFreshError, "does not exist") {
+		t.Fatalf("migrate freshness summary = %#v, want explicit unknown result", summary)
+	}
+}
+
+func TestMigrateOKFFreshnessReportsDirtyIndex(t *testing.T) {
+	app, _ := testApp(t)
+	if err := app.Run([]string{"setup"}); err != nil {
+		t.Fatalf("Run(setup) error = %v", err)
+	}
+	if err := app.Run([]string{"workspace", "create", "research"}); err != nil {
+		t.Fatalf("Run(workspace create) error = %v", err)
+	}
+	if err := app.Run([]string{"reindex"}); err != nil {
+		t.Fatalf("Run(reindex) error = %v", err)
+	}
+	if err := (zruntime.IndexStore{Paths: app.Paths}).MarkDirty("research"); err != nil {
+		t.Fatalf("MarkDirty() error = %v", err)
+	}
+	app.Stdout = &bytes.Buffer{}
+	if err := app.Run([]string{"migrate", "okf"}); err != nil {
+		t.Fatalf("Run(migrate okf with dirty index) error = %v", err)
+	}
+	var summary struct {
+		IndexFresh      bool   `json:"index_fresh"`
+		IndexFreshError string `json:"index_fresh_error"`
+	}
+	decodeJSON(t, stdout(app), &summary)
+	if summary.IndexFresh || !strings.Contains(summary.IndexFreshError, "dirty") {
+		t.Fatalf("migrate freshness summary = %#v, want dirty index result", summary)
 	}
 }
 
