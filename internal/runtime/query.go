@@ -133,29 +133,33 @@ func TrustedQuery(paths Paths, options TrustedQueryOptions) (TrustedQueryRespons
 		locks = append(locks, lock)
 	}
 	runWorkspaceGenerationTestHook(workspaceGenerationHookTrustedQueryAfterLocking)
+	manifests := make(map[string]TrustInputManifest, len(workspaces))
 	for _, workspace := range workspaces {
-		if err := idx.checkFreshUnlocked(workspace); err != nil {
+		var manifest TrustInputManifest
+		if err := idx.checkFreshUnlockedOutput(workspace, &manifest); err != nil {
 			return TrustedQueryResponse{}, err
 		}
+		manifests[workspace] = manifest
 		response.Index = append(response.Index, QueryIndexMetadata{Workspace: workspace, Fresh: true})
 	}
 	for _, workspace := range workspaces {
-		approved, err := idx.searchUnlocked(workspace, SearchOptions{Query: options.Query, Statuses: []ClaimStatus{ClaimStatusApproved}, Limit: limit})
+		manifest := manifests[workspace]
+		approved, err := idx.searchUnlockedInternal(workspace, SearchOptions{Query: options.Query, Statuses: []ClaimStatus{ClaimStatusApproved}, Limit: limit}, false, true)
 		if err != nil {
 			return TrustedQueryResponse{}, err
 		}
 		for _, claim := range approved {
-			if err := validateIndexedClaimBinding(paths, workspace, claim); err != nil {
+			if err := validateIndexedClaimBinding(paths, workspace, claim, &manifest, nil, nil); err != nil {
 				return TrustedQueryResponse{}, err
 			}
 			response.Claims = append(response.Claims, toQueryClaim(workspace, claim))
 		}
-		drafts, err := idx.searchUnlocked(workspace, SearchOptions{Query: options.Query, Statuses: []ClaimStatus{ClaimStatusDraft}, Limit: limit})
+		drafts, err := idx.searchUnlockedInternal(workspace, SearchOptions{Query: options.Query, Statuses: []ClaimStatus{ClaimStatusDraft}, Limit: limit}, false, false)
 		if err != nil {
 			return TrustedQueryResponse{}, err
 		}
 		for _, claim := range drafts {
-			if err := validateIndexedClaimBinding(paths, workspace, claim); err != nil {
+			if err := validateIndexedClaimBinding(paths, workspace, claim, &manifest, nil, nil); err != nil {
 				return TrustedQueryResponse{}, err
 			}
 			response.PromotionCandidates = append(response.PromotionCandidates, toQueryClaim(workspace, claim))
@@ -180,7 +184,7 @@ func TrustedQuery(paths Paths, options TrustedQueryOptions) (TrustedQueryRespons
 	return response, nil
 }
 
-func validateIndexedClaimBinding(paths Paths, workspace string, indexed IndexedClaim) error {
+func validateIndexedClaimBinding(paths Paths, workspace string, indexed IndexedClaim, manifest *TrustInputManifest, evidenceValidator *EvidenceValidator, trustValidator *TrustValidator) error {
 	canonicalRelative := filepath.ToSlash(filepath.Join("wiki", filepath.FromSlash(indexed.Path)))
 	canonicalPath, err := ResolveWorkspacePath(paths, workspace, canonicalRelative)
 	if err != nil {
@@ -193,6 +197,9 @@ func validateIndexedClaimBinding(paths Paths, workspace string, indexed IndexedC
 	canonical, err := ParseClaimMarkdown(indexed.Tier, indexed.Path, contents)
 	if err != nil {
 		return fmt.Errorf("parse canonical claim %q: %w", indexed.ID, err)
+	}
+	if manifest != nil && !trustInputManifestContainsClaim(*manifest, canonicalRelative) {
+		return fmt.Errorf("indexed claim %q is not present in published trust manifest; run zbrain reindex", indexed.ID)
 	}
 
 	fields := []struct {
@@ -217,7 +224,58 @@ func validateIndexedClaimBinding(paths Paths, workspace string, indexed IndexedC
 			return fmt.Errorf("indexed claim %q %s does not match canonical claim", indexed.ID, field.name)
 		}
 	}
+	if canonical.Status != ClaimStatusApproved {
+		return nil
+	}
+	if len(canonical.EvidenceIDs) == 0 && len(canonical.SupportingClaimIDs) == 0 {
+		return nil
+	}
+	if evidenceValidator == nil {
+		var err error
+		evidenceValidator, err = NewEvidenceValidator(EvidenceStore{Paths: paths}, workspace)
+		if err != nil {
+			return fmt.Errorf("approved claim %q evidence validator is unavailable: %w", indexed.ID, err)
+		}
+	}
+	if len(canonical.SupportingClaimIDs) > 0 && trustValidator == nil {
+		var err error
+		trustValidator, err = NewTrustValidatorFromStore(ClaimStore{Paths: paths}, workspace)
+		if err != nil {
+			return fmt.Errorf("approved claim %q trust validator is unavailable: %w", indexed.ID, err)
+		}
+		trustValidator.validateSupporting = func(support Claim) error {
+			return validateClaimEvidence(evidenceValidator, support)
+		}
+	}
+	if err := VerifyClaimDigest(canonical); err != nil {
+		return fmt.Errorf("approved claim %q verification failed: %w", indexed.ID, err)
+	}
+	if len(canonical.EvidenceIDs) > 0 {
+		if evidenceValidator == nil {
+			return fmt.Errorf("approved claim %q evidence validator is unavailable", indexed.ID)
+		}
+		if err := validateClaimEvidence(evidenceValidator, canonical); err != nil {
+			return fmt.Errorf("approved claim %q evidence validation failed: %w", indexed.ID, err)
+		}
+	}
+	if len(canonical.SupportingClaimIDs) > 0 {
+		if trustValidator == nil {
+			return fmt.Errorf("approved claim %q trust validator is unavailable", indexed.ID)
+		}
+		if err := trustValidator.ValidateClaim(canonical); err != nil {
+			return fmt.Errorf("approved claim %q supporting-claim validation failed: %w", indexed.ID, err)
+		}
+	}
 	return nil
+}
+
+func trustInputManifestContainsClaim(manifest TrustInputManifest, path string) bool {
+	index := sort.Search(len(manifest.Entries), func(index int) bool {
+		return manifest.Entries[index].Path >= path
+	})
+	return index < len(manifest.Entries) &&
+		manifest.Entries[index].Path == path &&
+		manifest.Entries[index].Kind == TrustInputKindClaim
 }
 
 func toQueryClaim(workspace string, claim IndexedClaim) QueryClaim {

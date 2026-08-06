@@ -5,7 +5,7 @@ intake_id: 01KZ96279PXDAXYZ5XC9QR9QS9
 lane: high-risk
 status: active
 created: 2026-08-05
-updated: 2026-08-05
+updated: 2026-08-06
 ---
 
 # Plan: Trusted Memory Hardening and Claude Code Skill Coherence
@@ -91,7 +91,7 @@ updated: 2026-08-05
 - phases:
   - phase_slug: canonical-index-binding
     story_id: 01KZ962RJ9MK11SXBKD14AQ0Y5
-    status: checked
+    status: done
     goal: Bind derived index rows and trusted query results to canonical approved claim identity, digest, status, and path.
     depends_on: none
     allowed_surfaces: [internal/runtime/index.go, internal/runtime/query.go, internal/runtime/claim.go, internal/runtime/*_test.go, trusted-memory-spec.md]
@@ -135,7 +135,7 @@ updated: 2026-08-05
 
   - phase_slug: workspace-generation-coordination
     story_id: 01KZ962RJHNRTBPZCJVJGGBMEY
-    status: checked
+    status: done
     goal: Coordinate mutation, rebuild, publication, and query freshness so concurrent work cannot publish or serve a stale clean index.
     depends_on: canonical-index-binding
     allowed_surfaces: [internal/runtime/index.go, internal/runtime/transition.go, internal/runtime/claim_store.go, internal/runtime/query.go, internal/runtime/*_test.go]
@@ -179,7 +179,7 @@ updated: 2026-08-05
 
   - phase_slug: content-digest-evidence
     story_id: 01KZ962RJRXFSGC7M4SV3AMGHW
-    status: in-progress
+    status: done
     goal: Replace mtime-only freshness assumptions with content-digest verification and bind approved claims to current evidence snapshots.
     depends_on: workspace-generation-coordination
     allowed_surfaces: [internal/runtime/index.go, internal/runtime/evidence.go, internal/runtime/claim_store.go, internal/runtime/query.go, internal/runtime/*_test.go, trusted-memory-spec.md]
@@ -478,6 +478,26 @@ updated: 2026-08-05
   exact_verification: "TMPDIR=/private/tmp/zbrain-safe go test ./internal/runtime -run '^TestCanonicalIndexBinding' -count=1 -v -> pass; body, status, path, digest, and missing-target SQLite mutations fail closed while canonical bytes remain unchanged"
   changed_surfaces: [internal/runtime/query_test.go]
   blocker: none
+- timestamp: 2026-08-06T04:43:41Z
+  phase: canonical-index-binding
+  wave: phase-recheck
+  task: phase-recheck
+  task_status: DONE
+  run_id: 01KZAP2CB9GSJQK1GWPZRSTA0J
+  trace_id: none
+  exact_verification: "go test ./internal/runtime -run '^TestCanonicalIndexBinding' -count=1 -v -> pass; canonical body, status, path, digest, and missing-target tamper cases fail closed; go test ./internal/runtime ./internal/cli -> pass"
+  changed_surfaces: []
+  blocker: none
+- timestamp: 2026-08-06T04:43:41Z
+  phase: canonical-index-binding
+  wave: phase-close
+  task: phase-close
+  task_status: DONE
+  run_id: 01KZAP2CB9GSJQK1GWPZRSTA0J
+  trace_id: none
+  exact_verification: "handoff 01KZAP67K1ZGGDC1333W4BAP16 closed canonical-index-binding after APPROVED check 01KZAP32MKYXW6ENPW4G6GQAW0"
+  changed_surfaces: []
+  blocker: none
 - timestamp: 2026-08-05T15:24:01Z
   phase: workspace-generation-coordination
   wave: phase-start
@@ -518,10 +538,97 @@ updated: 2026-08-05
   verification: not-run
   changed_surfaces: []
   blocker: none
+- timestamp: 2026-08-06T02:35:22Z
+  phase: content-digest-evidence
+  wave: phase-start
+  task: phase-start
+  task_status: in-progress
+  run_id: 01KZAESFEY385AXK0F8S8SVR3A
+  trace_id: none
+  verification: not-run
+  changed_surfaces: []
+  blocker: none
+- timestamp: 2026-08-06T02:54:03Z
+  phase: content-digest-evidence
+  wave: 1
+  task: cde-1
+  task_status: DONE
+  run_id: 01KZAESFEY385AXK0F8S8SVR3A
+  trace_id: 01KZAFX5HJD84GBH4T49FBX6VK
+  exact_verification: "go test ./internal/runtime -run '^TestContentDigestFreshness$' -count=1 -v -> pass; canonical claim and evidence edits remain stale even when file mtimes are restored, using persisted change tokens with content-manifest fallback"
+  changed_surfaces: [internal/runtime/index.go, internal/runtime/index_state.go, internal/runtime/index_test.go]
+  blocker: none
+- timestamp: 2026-08-06T02:54:03Z
+  phase: content-digest-evidence
+  wave: 1
+  task: cde-2
+  task_status: DONE
+  run_id: 01KZAESFEY385AXK0F8S8SVR3A
+  trace_id: 01KZAFX5HJD84GBH4T49FBX6VK
+  exact_verification: "go test ./internal/runtime -run '^TestEvidenceClaimDigestBinding' -count=1 -v -> pass; same-size evidence raw and metadata replacement invalidates the evidence-backed claim and its supporting dependent"
+  changed_surfaces: [internal/runtime/evidence.go, internal/runtime/index_test.go]
+  blocker: none
+- timestamp: 2026-08-06T02:54:03Z
+  phase: content-digest-evidence
+  wave: 2
+  task: cde-3
+  task_status: DONE
+  run_id: 01KZAESFEY385AXK0F8S8SVR3A
+  trace_id: 01KZAFXRE42FV2HNHNYG4DH74F
+  exact_verification: "ZBRAIN_BENCH_100K=1 go test ./internal/runtime -run '^TestAskP95At100K$' -count=1 -v -> pass; p95=1.336441889s across 40 samples, below the 2s release threshold"
+  changed_surfaces: [internal/runtime/index.go, internal/runtime/index_state.go, internal/runtime/index_benchmark_test.go]
+  blocker: none
+
+- timestamp: 2026-08-06T04:45:30Z
+  phase: workspace-generation-coordination
+  wave: phase-start
+  task: phase-start
+  task_status: in-progress
+  run_id: 01KZAP7R5HHMTAEGKCE4CHK3MC
+  trace_id: none
+  verification: not-run
+  changed_surfaces: []
+  blocker: none
+- timestamp: 2026-08-06T04:46:20Z
+  phase: workspace-generation-coordination
+  wave: phase-check
+  task: phase-check
+  task_status: DONE
+  run_id: 01KZAP7R5HHMTAEGKCE4CHK3MC
+  trace_id: none
+  exact_verification: "go test -race ./internal/runtime -run '^TestWorkspaceGeneration' -count=1 -v -> pass; go test ./internal/runtime -run '^(TestPendingTransition|TestWorkspaceGeneration)' -count=1 -v -> pass"
+  changed_surfaces: []
+  blocker: none
+- timestamp: 2026-08-06T04:46:20Z
+  phase: workspace-generation-coordination
+  wave: phase-close
+  task: phase-close
+  task_status: DONE
+  run_id: 01KZAP7R5HHMTAEGKCE4CHK3MC
+  trace_id: none
+  exact_verification: "handoff 01KZAPB4B84VVKJ4GAXKXSZ2DM closed workspace-generation-coordination after APPROVED check 01KZAP97535SF31M3YCJW3AHAC"
+  changed_surfaces: []
+  blocker: none
+- timestamp: 2026-08-06T04:48:47Z
+  phase: content-digest-evidence
+  wave: phase-close
+  task: phase-close
+  task_status: DONE
+  run_id: 01KZAESFEY385AXK0F8S8SVR3A
+  trace_id: none
+  exact_verification: "handoff 01KZAPD24ZB5RFX73FBPJ1E8XE closed content-digest-evidence after APPROVED check 01KZANKY1M3Z0KBRC5Z24QY4FB"
+  changed_surfaces: []
+  blocker: none
 
 ## Decisions
 <!-- Append-only durable entries record timestamp, phase/task, decision, and rationale. -->
-- none
+- timestamp: 2026-08-06T02:54:03Z
+  phase: content-digest-evidence
+  task: cde-1
+  decision: Persist a file change token alongside the content manifest and use the manifest as a fallback when the platform cannot expose one.
+  rationale: Replacing file contents does not change the parent directory mtime, and restoring the file mtime would otherwise make freshness accept tampered canonical inputs.
+  affected_surfaces: [internal/runtime/index.go, internal/runtime/index_state.go]
+
 
 ## Validation
 <!-- Append-only durable entries record timestamp, phase, exact command/result/output, run_id, check_id, verdict, and proof_gaps. -->
@@ -541,6 +648,15 @@ updated: 2026-08-05
   check_id: 01KZ97H6KYTC027KZ470B8XT3V
   verdict: APPROVED
   proof_gaps: same-session review; default macOS TMPDIR test invocation remains blocked by the existing /var/folders symlink boundary guard, while the canonical safe-temp invocation passes
+- timestamp: 2026-08-06T04:43:41Z
+  phase: canonical-index-binding
+  commands:
+    - "go test ./internal/runtime -run '^TestCanonicalIndexBinding' -count=1 -v -> pass; body, status, path, digest, and missing-target SQLite mutations fail closed"
+    - "go test ./internal/runtime ./internal/cli -> pass"
+  run_id: 01KZAP2CB9GSJQK1GWPZRSTA0J
+  check_id: 01KZAP32MKYXW6ENPW4G6GQAW0
+  verdict: APPROVED
+  proof_gaps: same-session review
 - timestamp: 2026-08-05T23:52:31Z
   phase: workspace-generation-coordination
   commands:
@@ -557,13 +673,40 @@ updated: 2026-08-05
   verdict: APPROVED
   proof_gaps: same-session review; lock behavior was not independently reviewed by a second agent; default macOS TMPDIR invocation remains blocked by the existing /var/folders symlink boundary guard, while safe-temp commands pass
 
+- timestamp: 2026-08-06T04:34:57Z
+  phase: content-digest-evidence
+  commands:
+    - "go test ./internal/runtime -run 'TestTrustedQueryFailsClosedWhenFreshnessRowsForged|TestRebuildRejectsLegacyEvidenceDigestWithRecoveryGuidance|TestContentDigestFreshnessFallbackWithoutChangeTokens' -count=1 -> pass; forged freshness rows, legacy raw-only digest, and unavailable-token manifest fallback fail closed"
+    - "go test ./... -> pass"
+    - "go vet ./... -> pass"
+    - "go test -race ./internal/runtime ./internal/cli -> pass"
+    - "make build -> pass"
+    - "make smoke -> pass; isolated setup, workspace creation, claim approval, reindex, and trusted ask completed"
+    - "ZBRAIN_BENCH_100K=1 go test ./internal/runtime -run TestAskP95At100K -count=1 -v -> pass; 100k TrustedQuery p95=1.31078643s across 40 samples, threshold <=2s"
+    - "git diff --check -> pass"
+    - "independent security review -> no verified HIGH or MEDIUM findings; SQLite freshness forgery is blocked by canonical/evidence/dependency query validation"
+  run_id: 01KZAESFEY385AXK0F8S8SVR3A
+  check_id: 01KZANKY1M3Z0KBRC5Z24QY4FB
+  verdict: APPROVED
+  proof_gaps: same-session author review; non-Linux file change-token implementations were not independently executed, while the forced unavailable-token fallback passed
+
+- timestamp: 2026-08-06T04:46:20Z
+  phase: workspace-generation-coordination
+  commands:
+    - "go test -race ./internal/runtime -run '^TestWorkspaceGeneration' -count=1 -v -> pass; all deterministic generation, locking, mutation, publication, recovery, and malformed-state tests passed"
+    - "go test ./internal/runtime -run '^(TestPendingTransition|TestWorkspaceGeneration)' -count=1 -v -> pass"
+  run_id: 01KZAP7R5HHMTAEGKCE4CHK3MC
+  check_id: 01KZAP97535SF31M3YCJW3AHAC
+  verdict: APPROVED
+  proof_gaps: same-session review
+
 ## Current State and Next Action
-- active_phase: content-digest-evidence
-- lifecycle_status: in-progress
-- latest_run_id: 01KZA5QNZTPF9JX7WPV79JCXCT
+- active_phase: legacy-migration-reporting
+- lifecycle_status: planned
+- latest_run_id: 01KZAP7R5HHMTAEGKCE4CHK3MC
 - latest_trace_ids: []
-- latest_check_id: 01KZA5ERJS5V9H551MVYPHYPTA
-- latest_handoff_id: 01KZ8QK3J8Q2T5PF0VAFRDH1QM
+- latest_check_id: 01KZAP97535SF31M3YCJW3AHAC
+- latest_handoff_id: 01KZAPD24ZB5RFX73FBPJ1E8XE
 - blockers: none
-- open_items: [execute the planned trust and skills phases; preserve all 8 story IDs; release proof remains gated on every prerequisite phase]
-- exact_next_action: trace content-digest-evidence wave 1 and implement cde-1
+- open_items: [legacy-migration-reporting remains; release proof remains gated on every prerequisite phase; cross-platform file change-token implementations remain unexecuted]
+- exact_next_action: start `legacy-migration-reporting` with `zharness run create --slug legacy-migration-reporting --plan-id 01KZ8PVTFHBYTJJXQZWJG07RHB --json`

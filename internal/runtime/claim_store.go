@@ -104,10 +104,11 @@ func (store ClaimStore) approveUnlocked(workspace string, id string) (Claim, err
 	if err := ValidateClaimApproval(claim); err != nil {
 		return Claim{}, err
 	}
-	if err := store.validateApprovalReferences(workspace, claim); err != nil {
+	evidenceValidator, err := store.validateApprovalReferences(workspace, claim)
+	if err != nil {
 		return Claim{}, err
 	}
-	sources, err := store.claimSources(workspace, claim.EvidenceIDs)
+	sources, err := store.claimSources(workspace, claim.EvidenceIDs, evidenceValidator)
 	if err != nil {
 		return Claim{}, err
 	}
@@ -498,31 +499,34 @@ func appendClaimTransition(claim Claim, transition ClaimTransition) []ClaimTrans
 	return append(transitions, transition)
 }
 
-func (store ClaimStore) validateApprovalReferences(workspace string, claim Claim) error {
+func (store ClaimStore) validateApprovalReferences(workspace string, claim Claim) (*EvidenceValidator, error) {
 	evidenceValidator, err := NewEvidenceValidator(EvidenceStore{Paths: store.Paths}, workspace)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	if err := validateClaimEvidence(evidenceValidator, claim); err != nil {
-		return fmt.Errorf("verify claim evidence: %w", err)
+		return nil, fmt.Errorf("verify claim evidence: %w", err)
 	}
 	if len(claim.SupportingClaimIDs) == 0 {
-		return nil
+		return evidenceValidator, nil
 	}
 	validator, err := NewTrustValidatorFromStore(store, workspace)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	validator.validateSupporting = func(support Claim) error {
 		return validateClaimEvidence(evidenceValidator, support)
 	}
 	if err := validator.ValidateClaim(claim); err != nil {
-		return fmt.Errorf("validate supporting claims for %s: %w", claim.ID, err)
+		return nil, fmt.Errorf("validate supporting claims for %s: %w", claim.ID, err)
 	}
-	return nil
+	return evidenceValidator, nil
 }
 
-func (store ClaimStore) claimSources(workspace string, evidenceIDs []string) ([]ClaimSource, error) {
+func (store ClaimStore) claimSources(workspace string, evidenceIDs []string, validator *EvidenceValidator) ([]ClaimSource, error) {
+	if validator == nil {
+		return nil, fmt.Errorf("evidence validator is nil")
+	}
 	sources := make([]ClaimSource, 0, len(evidenceIDs))
 	evidenceStore := EvidenceStore{Paths: store.Paths}
 	for _, evidenceID := range evidenceIDs {
@@ -530,11 +534,14 @@ func (store ClaimStore) claimSources(workspace string, evidenceIDs []string) ([]
 		if err != nil {
 			return nil, err
 		}
+		if err := validator.Verify(evidenceID); err != nil {
+			return nil, err
+		}
 		sources = append(sources, ClaimSource{
 			ID:       evidence.ID,
 			Resource: filepath.ToSlash(filepath.Join("evidence", "sources", evidence.ID, "raw")),
 			Title:    evidence.Origin,
-			Digest:   "sha256:" + evidence.SHA256,
+			Digest:   validator.snapshotDigests[evidenceID],
 		})
 	}
 	return sources, nil

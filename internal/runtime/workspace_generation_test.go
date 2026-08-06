@@ -89,6 +89,36 @@ func TestWorkspaceGenerationMutationDuringScanRejectsStalePublication(t *testing
 	}
 }
 
+func TestWorkspaceGenerationEvidenceMutationBeforeFreshnessCaptureRejectsStalePublication(t *testing.T) {
+	paths := indexTestPaths(t)
+	idx := IndexStore{Paths: paths}
+	evidence := addStoreEvidence(t, paths, "original evidence")
+	if _, err := idx.Rebuild("research"); err != nil {
+		t.Fatalf("initial Rebuild() error = %v", err)
+	}
+	rawPath := filepath.Join(paths.WorkspacesDir, "research", "evidence", "sources", evidence.ID, "raw")
+	restoreHook := setWorkspaceGenerationTestHook(workspaceGenerationHookRebuildBeforeFreshnessCapture, func() {
+		if err := os.Chmod(rawPath, 0o644); err != nil {
+			t.Fatalf("Chmod(raw) error = %v", err)
+		}
+		if err := os.WriteFile(rawPath, []byte("tampered evidence"), 0o644); err != nil {
+			t.Fatalf("WriteFile(raw) error = %v", err)
+		}
+	})
+	defer restoreHook()
+
+	if _, err := idx.Rebuild("research"); err == nil || !strings.Contains(err.Error(), "trust inputs changed during rebuild") {
+		t.Fatalf("Rebuild() error = %v, want trust-input mutation rejection", err)
+	}
+	dirtyPath, err := idx.DirtyPath("research")
+	if err != nil {
+		t.Fatalf("DirtyPath() error = %v", err)
+	}
+	if _, err := os.Stat(dirtyPath); err != nil {
+		t.Fatalf("dirty marker error = %v, want fail-closed rebuild state", err)
+	}
+}
+
 func TestWorkspaceGenerationMutationBeforePublicationRejectsStalePublication(t *testing.T) {
 	paths := indexTestPaths(t)
 	idx := IndexStore{Paths: paths}

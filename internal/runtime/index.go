@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"sort"
 	"strings"
 	"time"
@@ -178,6 +179,10 @@ func (store IndexStore) CheckFresh(workspace string) error {
 }
 
 func (store IndexStore) checkFreshUnlocked(workspace string) error {
+	return store.checkFreshUnlockedOutput(workspace, nil)
+}
+
+func (store IndexStore) checkFreshUnlockedOutput(workspace string, manifestOutput *TrustInputManifest) error {
 	databasePath, dirtyPath, err := store.validatedIndexPaths(workspace)
 	if err != nil {
 		return err
@@ -235,6 +240,8 @@ func (store IndexStore) checkFreshUnlocked(workspace string) error {
 	if err != nil {
 		return fmt.Errorf("workspace %q index freshness metadata is missing or malformed: %w; run zbrain reindex", workspace, err)
 	}
+	directoryChanged := false
+	directoryChangeTokenUnavailable := false
 	for _, recordedDirectory := range directories {
 		directory := filepath.Join(workspaceRoot, filepath.FromSlash(recordedDirectory.Path))
 		info, err := os.Lstat(directory)
@@ -250,9 +257,14 @@ func (store IndexStore) checkFreshUnlocked(workspace string) error {
 		if !info.IsDir() {
 			return fmt.Errorf("workspace %q index freshness check failed: trust directory %q is not a directory", workspace, directory)
 		}
-		if info.ModTime().UnixNano() == recordedDirectory.ModifiedAt {
+		currentChangeToken := trustFileChangeToken(info)
+		if currentChangeToken < 0 || recordedDirectory.ChangeToken < 0 {
+			directoryChangeTokenUnavailable = true
+		}
+		if info.ModTime().UnixNano() == recordedDirectory.ModifiedAt && currentChangeToken == recordedDirectory.ChangeToken {
 			continue
 		}
+		directoryChanged = true
 		offender, err := findFreshnessOffender(workspaceRoot, directory, recordedMtimes)
 		if err != nil {
 			return fmt.Errorf("workspace %q index freshness check failed: %w", workspace, err)
@@ -261,9 +273,29 @@ func (store IndexStore) checkFreshUnlocked(workspace string) error {
 			return fmt.Errorf("workspace %q index is stale; trust input %q changed after index; run zbrain reindex", workspace, offender)
 		}
 	}
+	changeTokenUnavailable := false
+	for _, metadata := range recordedMtimes {
+		if metadata.ChangeToken < 0 {
+			changeTokenUnavailable = true
+			break
+		}
+	}
+	if directoryChanged || directoryChangeTokenUnavailable || changeTokenUnavailable {
+		currentManifest, err := BuildTrustInputManifest(store.Paths, workspace)
+		if err != nil {
+			return fmt.Errorf("workspace %q index freshness digest check failed: %w; run zbrain reindex", workspace, err)
+		}
+		if !sameTrustInputManifest(manifest, currentManifest) {
+			offender := findTrustInputManifestOffender(manifest, currentManifest)
+			if offender == "" {
+				return fmt.Errorf("workspace %q index manifest is stale; run zbrain reindex", workspace)
+			}
+			return fmt.Errorf("workspace %q index is stale; trust input %q changed after index; run zbrain reindex", workspace, filepath.Join(workspaceRoot, filepath.FromSlash(offender)))
+		}
+	}
 
 	for _, entry := range manifest.Entries {
-		recordedMtime, ok := recordedMtimes[entry.Path]
+		recordedMetadata, ok := recordedMtimes[entry.Path]
 		if !ok {
 			return fmt.Errorf("workspace %q index freshness metadata is missing for %q; run zbrain reindex", workspace, entry.Path)
 		}
@@ -281,9 +313,12 @@ func (store IndexStore) checkFreshUnlocked(workspace string) error {
 		if !info.Mode().IsRegular() {
 			return fmt.Errorf("workspace %q index freshness check failed: trust input %q is not a regular file", workspace, inputPath)
 		}
-		if info.ModTime().UnixNano() != recordedMtime {
+		if info.ModTime().UnixNano() != recordedMetadata.ModifiedAt || trustFileChangeToken(info) != recordedMetadata.ChangeToken {
 			return fmt.Errorf("workspace %q index is stale; trust input %q changed after index; run zbrain reindex", workspace, inputPath)
 		}
+	}
+	if manifestOutput != nil {
+		*manifestOutput = manifest
 	}
 	return nil
 }
@@ -291,41 +326,42 @@ func (store IndexStore) checkFreshUnlocked(workspace string) error {
 var errFreshnessOffender = errors.New("freshness offender found")
 
 type trustInputMtime struct {
-	Path       string
-	ModifiedAt int64
+	Path        string
+	ModifiedAt  int64
+	ChangeToken int64
 }
 
 type trustDirectoryMtime struct {
-	Path       string
-	ModifiedAt int64
+	Path        string
+	ModifiedAt  int64
+	ChangeToken int64
 }
 
-func readTrustInputMtimes(db *sql.DB) (map[string]int64, error) {
-	rows, err := db.Query("select path, modified_at from trust_input_mtimes order by path")
+func readTrustInputMtimes(db *sql.DB) (map[string]trustInputMtime, error) {
+	rows, err := db.Query("select path, modified_at, change_token from trust_input_mtimes order by path")
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
 
-	mtimes := make(map[string]int64)
+	mtimes := make(map[string]trustInputMtime)
 	previous := ""
 	for rows.Next() {
-		var path string
-		var modifiedAt int64
-		if err := rows.Scan(&path, &modifiedAt); err != nil {
+		var metadata trustInputMtime
+		if err := rows.Scan(&metadata.Path, &metadata.ModifiedAt, &metadata.ChangeToken); err != nil {
 			return nil, err
 		}
-		if strings.ContainsAny(path, "\\\\\x00") {
-			return nil, fmt.Errorf("input path %q is not slash-normalized", path)
+		if strings.ContainsAny(metadata.Path, "\\\\\x00") {
+			return nil, fmt.Errorf("input path %q is not slash-normalized", metadata.Path)
 		}
-		if _, err := safeRelativePath(path); err != nil || !isTrustInputPath(path) {
-			return nil, fmt.Errorf("input path %q is not a canonical trust input", path)
+		if _, err := safeRelativePath(metadata.Path); err != nil || !isTrustInputPath(metadata.Path) {
+			return nil, fmt.Errorf("input path %q is not a canonical trust input", metadata.Path)
 		}
-		if previous != "" && path <= previous {
-			return nil, fmt.Errorf("trust input mtimes are not unique and sorted at %q", path)
+		if previous != "" && metadata.Path <= previous {
+			return nil, fmt.Errorf("trust input mtimes are not unique and sorted at %q", metadata.Path)
 		}
-		mtimes[path] = modifiedAt
-		previous = path
+		mtimes[metadata.Path] = metadata
+		previous = metadata.Path
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err
@@ -334,7 +370,7 @@ func readTrustInputMtimes(db *sql.DB) (map[string]int64, error) {
 }
 
 func readTrustDirectories(db *sql.DB) ([]trustDirectoryMtime, error) {
-	rows, err := db.Query("select path, modified_at from trust_directories order by path")
+	rows, err := db.Query("select path, modified_at, change_token from trust_directories order by path")
 	if err != nil {
 		return nil, err
 	}
@@ -344,7 +380,7 @@ func readTrustDirectories(db *sql.DB) ([]trustDirectoryMtime, error) {
 	previous := ""
 	for rows.Next() {
 		var directory trustDirectoryMtime
-		if err := rows.Scan(&directory.Path, &directory.ModifiedAt); err != nil {
+		if err := rows.Scan(&directory.Path, &directory.ModifiedAt, &directory.ChangeToken); err != nil {
 			return nil, err
 		}
 		if strings.ContainsAny(directory.Path, "\\\\\x00") {
@@ -365,7 +401,7 @@ func readTrustDirectories(db *sql.DB) ([]trustDirectoryMtime, error) {
 	return directories, nil
 }
 
-func findFreshnessOffender(workspaceRoot string, directory string, knownInputMtimes map[string]int64) (string, error) {
+func findFreshnessOffender(workspaceRoot string, directory string, knownInputMtimes map[string]trustInputMtime) (string, error) {
 	var offender string
 	err := filepath.WalkDir(directory, func(path string, entry os.DirEntry, walkErr error) error {
 		if walkErr != nil {
@@ -395,8 +431,8 @@ func findFreshnessOffender(workspaceRoot string, directory string, knownInputMti
 		if !info.Mode().IsRegular() {
 			return fmt.Errorf("trust input %q is not a regular file", path)
 		}
-		recordedMtime, known := knownInputMtimes[relative]
-		if !known || info.ModTime().UnixNano() != recordedMtime {
+		recordedMetadata, known := knownInputMtimes[relative]
+		if !known || info.ModTime().UnixNano() != recordedMetadata.ModifiedAt || trustFileChangeToken(info) != recordedMetadata.ChangeToken {
 			offender = path
 			return errFreshnessOffender
 		}
@@ -406,6 +442,32 @@ func findFreshnessOffender(workspaceRoot string, directory string, knownInputMti
 		return offender, nil
 	}
 	return "", err
+}
+
+func findTrustInputManifestOffender(recorded TrustInputManifest, current TrustInputManifest) string {
+	recordedIndex, currentIndex := 0, 0
+	for recordedIndex < len(recorded.Entries) || currentIndex < len(current.Entries) {
+		if recordedIndex >= len(recorded.Entries) {
+			return current.Entries[currentIndex].Path
+		}
+		if currentIndex >= len(current.Entries) {
+			return recorded.Entries[recordedIndex].Path
+		}
+		recordedEntry := recorded.Entries[recordedIndex]
+		currentEntry := current.Entries[currentIndex]
+		switch {
+		case recordedEntry.Path < currentEntry.Path:
+			return recordedEntry.Path
+		case currentEntry.Path < recordedEntry.Path:
+			return currentEntry.Path
+		case recordedEntry != currentEntry:
+			return recordedEntry.Path
+		default:
+			recordedIndex++
+			currentIndex++
+		}
+	}
+	return ""
 }
 
 func collectTrustInputMtimes(paths Paths, workspace string, manifest TrustInputManifest) ([]trustInputMtime, error) {
@@ -426,17 +488,53 @@ func collectTrustInputMtimes(paths Paths, workspace string, manifest TrustInputM
 		if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
 			return nil, fmt.Errorf("trust input %q is not a regular file", path)
 		}
-		mtimes = append(mtimes, trustInputMtime{Path: entry.Path, ModifiedAt: info.ModTime().UnixNano()})
+		mtimes = append(mtimes, trustInputMtime{
+			Path:        entry.Path,
+			ModifiedAt:  info.ModTime().UnixNano(),
+			ChangeToken: trustFileChangeToken(info),
+		})
 	}
 	return mtimes, nil
 }
+
+func fileChangeToken(info os.FileInfo) int64 {
+	value := reflect.ValueOf(info.Sys())
+	if !value.IsValid() {
+		return -1
+	}
+	if value.Kind() == reflect.Pointer {
+		if value.IsNil() {
+			return -1
+		}
+		value = value.Elem()
+	}
+	if value.Kind() != reflect.Struct {
+		return -1
+	}
+	for _, name := range []string{"Ctim", "Ctimespec", "ChangeTime"} {
+		field := value.FieldByName(name)
+		if !field.IsValid() {
+			continue
+		}
+		if field.Kind() == reflect.Struct {
+			seconds := field.FieldByName("Sec")
+			nanoseconds := field.FieldByName("Nsec")
+			if seconds.IsValid() && nanoseconds.IsValid() && seconds.Kind() >= reflect.Int && seconds.Kind() <= reflect.Int64 && nanoseconds.Kind() >= reflect.Int && nanoseconds.Kind() <= reflect.Int64 {
+				return seconds.Int()*int64(time.Second) + nanoseconds.Int()
+			}
+		}
+	}
+	return -1
+}
+
+var trustFileChangeToken = fileChangeToken
 
 func collectTrustDirectories(paths Paths, workspace string) ([]trustDirectoryMtime, error) {
 	root, err := ValidateWorkspace(paths, workspace)
 	if err != nil {
 		return nil, err
 	}
-	directorySet := make(map[string]int64)
+	directorySet := make(map[string]trustDirectoryMtime)
 	add := func(path string) error {
 		absolute, err := filepath.Abs(path)
 		if err != nil {
@@ -460,7 +558,11 @@ func collectTrustDirectories(paths Paths, workspace string) ([]trustDirectoryMti
 		if !isTrustDirectoryPath(relative) {
 			return fmt.Errorf("trust directory %q is not canonical", path)
 		}
-		directorySet[relative] = info.ModTime().UnixNano()
+		directorySet[relative] = trustDirectoryMtime{
+			Path:        relative,
+			ModifiedAt:  info.ModTime().UnixNano(),
+			ChangeToken: trustFileChangeToken(info),
+		}
 		return nil
 	}
 
@@ -513,8 +615,8 @@ func collectTrustDirectories(paths Paths, workspace string) ([]trustDirectoryMti
 	}
 
 	directories := make([]trustDirectoryMtime, 0, len(directorySet))
-	for path, modifiedAt := range directorySet {
-		directories = append(directories, trustDirectoryMtime{Path: path, ModifiedAt: modifiedAt})
+	for _, directory := range directorySet {
+		directories = append(directories, directory)
 	}
 	sort.Slice(directories, func(i, j int) bool {
 		return directories[i].Path < directories[j].Path
@@ -543,7 +645,7 @@ func writeTrustInputMtimes(tx *sql.Tx, mtimes []trustInputMtime) error {
 		return fmt.Errorf("clear trust input mtimes: %w", err)
 	}
 	for _, mtime := range mtimes {
-		if _, err := tx.Exec("insert into trust_input_mtimes(path, modified_at) values (?, ?)", mtime.Path, mtime.ModifiedAt); err != nil {
+		if _, err := tx.Exec("insert into trust_input_mtimes(path, modified_at, change_token) values (?, ?, ?)", mtime.Path, mtime.ModifiedAt, mtime.ChangeToken); err != nil {
 			return fmt.Errorf("write trust input mtime %q: %w", mtime.Path, err)
 		}
 	}
@@ -555,7 +657,7 @@ func writeTrustDirectories(tx *sql.Tx, directories []trustDirectoryMtime) error 
 		return fmt.Errorf("clear trust directories: %w", err)
 	}
 	for _, directory := range directories {
-		if _, err := tx.Exec("insert into trust_directories(path, modified_at) values (?, ?)", directory.Path, directory.ModifiedAt); err != nil {
+		if _, err := tx.Exec("insert into trust_directories(path, modified_at, change_token) values (?, ?, ?)", directory.Path, directory.ModifiedAt, directory.ChangeToken); err != nil {
 			return fmt.Errorf("write trust directory %q: %w", directory.Path, err)
 		}
 	}
@@ -690,6 +792,7 @@ func (store IndexStore) Rebuild(workspace string) (IndexSummary, error) {
 		}
 		return scan.Invalid[i].Path < scan.Invalid[j].Path
 	})
+	runWorkspaceGenerationTestHook(workspaceGenerationHookRebuildBeforeFreshnessCapture)
 	inputMtimes, err := collectTrustInputMtimes(store.Paths, workspace, manifest)
 	if err != nil {
 		return IndexSummary{}, err
@@ -698,6 +801,14 @@ func (store IndexStore) Rebuild(workspace string) (IndexSummary, error) {
 	if err != nil {
 		return IndexSummary{}, err
 	}
+	manifestAfterValidation, err := BuildTrustInputManifest(store.Paths, workspace)
+	if err != nil {
+		return IndexSummary{}, err
+	}
+	if !sameTrustInputManifest(manifest, manifestAfterValidation) {
+		return IndexSummary{}, fmt.Errorf("trust inputs changed during rebuild")
+	}
+	manifest = manifestAfterValidation
 
 	invalidCount := len(scan.Invalid) + len(scan.LegacyUnindexed)
 	rebuildStatus := RebuildStatusClean
@@ -824,6 +935,10 @@ func (store IndexStore) Search(workspace string, options SearchOptions) ([]Index
 }
 
 func (store IndexStore) searchUnlocked(workspace string, options SearchOptions) ([]IndexedClaim, error) {
+	return store.searchUnlockedInternal(workspace, options, true, true)
+}
+
+func (store IndexStore) searchUnlockedInternal(workspace string, options SearchOptions, checkFresh bool, checkIntegrity bool) ([]IndexedClaim, error) {
 	databasePath, _, err := store.validatedIndexPaths(workspace)
 	if err != nil {
 		return nil, err
@@ -837,16 +952,20 @@ func (store IndexStore) searchUnlocked(workspace string, options SearchOptions) 
 	if len(options.Statuses) == 0 {
 		return nil, fmt.Errorf("at least one status filter is required")
 	}
-	if err := store.checkFreshUnlocked(workspace); err != nil {
-		return nil, err
+	if checkFresh {
+		if err := store.checkFreshUnlocked(workspace); err != nil {
+			return nil, err
+		}
 	}
 	db, err := sql.Open("sqlite", databasePath)
 	if err != nil {
 		return nil, err
 	}
 	defer db.Close()
-	if err := integrityCheck(db); err != nil {
-		return nil, err
+	if checkIntegrity {
+		if err := integrityCheck(db); err != nil {
+			return nil, err
+		}
 	}
 
 	statusValues := make([]string, 0, len(options.Statuses))
@@ -941,11 +1060,13 @@ create table trust_inputs (
 );
 create table trust_input_mtimes (
   path text not null primary key,
-  modified_at integer not null
+  modified_at integer not null,
+  change_token integer not null
 );
 create table trust_directories (
   path text not null primary key,
-  modified_at integer not null
+  modified_at integer not null,
+  change_token integer not null
 );
 create table rebuild_state (
   id integer not null primary key default 1 check (id = 1),
@@ -957,7 +1078,7 @@ create table rebuild_state (
 	if err != nil {
 		return err
 	}
-	_, err = db.Exec("pragma user_version = 1")
+	_, err = db.Exec("pragma user_version = 3")
 	return err
 }
 

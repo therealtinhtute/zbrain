@@ -46,10 +46,11 @@ func (err *EvidenceVerificationError) Unwrap() error {
 }
 
 type EvidenceValidator struct {
-	store       EvidenceStore
-	workspace   string
-	cache       map[string]error
-	verifyCount map[string]int
+	store           EvidenceStore
+	workspace       string
+	cache           map[string]error
+	snapshotDigests map[string]string
+	verifyCount     map[string]int
 }
 
 func NewEvidenceValidator(store EvidenceStore, workspace string) (*EvidenceValidator, error) {
@@ -57,10 +58,11 @@ func NewEvidenceValidator(store EvidenceStore, workspace string) (*EvidenceValid
 		return nil, err
 	}
 	return &EvidenceValidator{
-		store:       store,
-		workspace:   workspace,
-		cache:       make(map[string]error),
-		verifyCount: make(map[string]int),
+		store:           store,
+		workspace:       workspace,
+		cache:           make(map[string]error),
+		snapshotDigests: make(map[string]string),
+		verifyCount:     make(map[string]int),
 	}, nil
 }
 
@@ -257,7 +259,23 @@ func (validator *EvidenceValidator) verifyUncached(id string) error {
 		err := fmt.Errorf("sha256 = %s, want %s", actual, evidence.SHA256)
 		return newEvidenceVerificationError(id, evidenceRawPath(id), err.Error(), err)
 	}
+	validator.snapshotDigests[id] = evidenceSnapshotDigest(contents, evidence)
 	return nil
+}
+
+const evidenceSnapshotDigestPrefix = "sha256:evidence-v1:"
+
+func evidenceSnapshotDigest(metadata []byte, evidence Evidence) string {
+	hash := sha256.New()
+	hash.Write([]byte("zbrain.evidence/v1\n"))
+	fmt.Fprintf(hash, "metadata-length:%d\n", len(metadata))
+	hash.Write(metadata)
+	fmt.Fprintf(hash, "\nraw-byte-length:%d\nraw-sha256:%s\n", evidence.ByteLength, evidence.SHA256)
+	return evidenceSnapshotDigestPrefix + hex.EncodeToString(hash.Sum(nil))
+}
+
+func isLegacyEvidenceDigest(value string) bool {
+	return strings.HasPrefix(value, "sha256:") && isEvidenceSHA256(strings.TrimPrefix(value, "sha256:"))
 }
 
 func validateEvidenceMetadata(id string, evidence Evidence) error {
@@ -288,10 +306,54 @@ func validateEvidenceMetadata(id string, evidence Evidence) error {
 func validateClaimEvidence(validator *EvidenceValidator, claim Claim) error {
 	ids := append([]string(nil), claim.EvidenceIDs...)
 	sort.Strings(ids)
+	seenIDs := make(map[string]struct{}, len(ids))
 	for _, id := range ids {
+		if _, exists := seenIDs[id]; exists {
+			return fmt.Errorf("claim %s has duplicate evidence id %s", claim.ID, id)
+		}
+		seenIDs[id] = struct{}{}
 		if err := validator.Verify(id); err != nil {
 			return fmt.Errorf("evidence %s: %w", id, err)
 		}
+	}
+	if claim.Status != ClaimStatusApproved {
+		return nil
+	}
+
+	approvedSources := make(map[string]ClaimSource, len(claim.Sources))
+	for _, source := range claim.Sources {
+		if _, exists := approvedSources[source.ID]; exists {
+			return fmt.Errorf("claim %s has duplicate evidence source %s", claim.ID, source.ID)
+		}
+		if _, exists := seenIDs[source.ID]; !exists {
+			return fmt.Errorf("claim %s evidence source closure does not match approved evidence ids", claim.ID)
+		}
+		approvedSources[source.ID] = source
+	}
+	if len(approvedSources) != len(seenIDs) {
+		return fmt.Errorf("claim %s evidence source closure does not match approved evidence ids", claim.ID)
+	}
+	for _, id := range ids {
+		evidence, err := validator.store.Read(validator.workspace, id)
+		if err != nil {
+			return fmt.Errorf("evidence %s: read current metadata: %w", id, err)
+		}
+		source, ok := approvedSources[id]
+		if !ok {
+			return fmt.Errorf("claim %s evidence source closure does not match approved evidence ids", claim.ID)
+		}
+		expectedResource := filepath.ToSlash(filepath.Join("evidence", "sources", id, "raw"))
+		if source.Resource != expectedResource || source.Title != evidence.Origin {
+			return fmt.Errorf("evidence %s source reference does not match current metadata", id)
+		}
+		currentDigest := validator.snapshotDigests[id]
+		if source.Digest == currentDigest {
+			continue
+		}
+		if isLegacyEvidenceDigest(source.Digest) {
+			return fmt.Errorf("evidence %s uses legacy raw digest; supersede and reapprove claim %s to bind metadata and raw bytes", id, claim.ID)
+		}
+		return fmt.Errorf("evidence %s digest mismatch: approved %s, current %s", id, source.Digest, currentDigest)
 	}
 	return nil
 }

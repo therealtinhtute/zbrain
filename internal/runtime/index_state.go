@@ -10,7 +10,7 @@ import (
 )
 
 const (
-	indexSchemaVersion  = 1
+	indexSchemaVersion  = 3
 	indexStateSingleton = 1
 )
 
@@ -132,6 +132,20 @@ func validateIndexStateSchema(reader indexStateSQL) error {
 		"sha256":      "text",
 	}); err != nil {
 		return fmt.Errorf("validate trust_inputs schema: %w", err)
+	}
+	if err := requireIndexStateColumns(reader, "trust_input_mtimes", map[string]string{
+		"path":         "text",
+		"modified_at":  "integer",
+		"change_token": "integer",
+	}); err != nil {
+		return fmt.Errorf("validate trust input freshness schema: %w", err)
+	}
+	if err := requireIndexStateColumns(reader, "trust_directories", map[string]string{
+		"path":         "text",
+		"modified_at":  "integer",
+		"change_token": "integer",
+	}); err != nil {
+		return fmt.Errorf("validate trust directory freshness schema: %w", err)
 	}
 	if err := requireIndexStateColumns(reader, "rebuild_state", map[string]string{
 		"id":              "integer",
