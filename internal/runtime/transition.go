@@ -72,7 +72,7 @@ func writePendingTransitionUnlocked(paths Paths, workspace string, pending Pendi
 	}
 	encoded = append(encoded, '\n')
 
-	if err := os.MkdirAll(filepath.Dir(journalPath), 0o755); err != nil {
+	if err := ensureDirectoryMode(filepath.Dir(journalPath), runtimeDirectoryMode); err != nil {
 		return fmt.Errorf("create pending transition directory: %w", err)
 	}
 	temporary, err := os.CreateTemp(filepath.Dir(journalPath), "."+pendingTransitionFileName+".*.tmp")
@@ -98,6 +98,9 @@ func writePendingTransitionUnlocked(paths Paths, workspace string, pending Pendi
 	}
 	if err := os.Link(temporaryPath, journalPath); err != nil {
 		return fmt.Errorf("publish pending transition journal: %w", err)
+	}
+	if err := ensureFileMode(journalPath, runtimeMetadataMode); err != nil {
+		return fmt.Errorf("set pending transition journal permissions: %w", err)
 	}
 	return nil
 }
@@ -364,6 +367,10 @@ func writeTransitionBytesAtomic(path string, contents []byte) error {
 	}
 	tmpPath := tmp.Name()
 	defer func() { _ = os.Remove(tmpPath) }()
+	if err := tmp.Chmod(runtimeMetadataMode); err != nil {
+		_ = tmp.Close()
+		return err
+	}
 	if _, err := tmp.Write(contents); err != nil {
 		_ = tmp.Close()
 		return err
@@ -371,5 +378,8 @@ func writeTransitionBytesAtomic(path string, contents []byte) error {
 	if err := tmp.Close(); err != nil {
 		return err
 	}
-	return os.Rename(tmpPath, path)
+	if err := os.Rename(tmpPath, path); err != nil {
+		return err
+	}
+	return ensureFileMode(path, runtimeMetadataMode)
 }

@@ -1,10 +1,16 @@
 package runtime
 
 import (
-	"crypto/sha256"
-	"encoding/hex"
 	"os"
 	"path/filepath"
+)
+
+const (
+	runtimeDirectoryMode  os.FileMode = 0o700
+	runtimeMetadataMode   os.FileMode = 0o600
+	evidenceDirectoryMode os.FileMode = 0o700
+	evidenceFileMode      os.FileMode = 0o400
+	derivedIndexMode      os.FileMode = 0o600
 )
 
 type Paths struct {
@@ -13,7 +19,6 @@ type Paths struct {
 	RuntimeDir    string
 	ConfigFile    string
 	WorkspacesDir string
-	ProjectsDir   string
 	IndexesDir    string
 }
 
@@ -68,15 +73,19 @@ func ResolvePaths(options Options) (Paths, error) {
 		RuntimeDir:    runtimeDir,
 		ConfigFile:    filepath.Join(runtimeDir, "config.yml"),
 		WorkspacesDir: filepath.Join(runtimeDir, "workspaces"),
-		ProjectsDir:   filepath.Join(runtimeDir, "projects"),
 		IndexesDir:    filepath.Join(runtimeDir, "indexes"),
 	}, nil
 }
 
-func CurrentTaskFilePath(paths Paths) string {
-	sum := sha256.Sum256([]byte(paths.CWD))
-	projectID := hex.EncodeToString(sum[:])[:16]
-	return filepath.Join(paths.ProjectsDir, projectID, "current-task.md")
+func ensureDirectoryMode(path string, mode os.FileMode) error {
+	if err := os.MkdirAll(path, mode); err != nil {
+		return err
+	}
+	return os.Chmod(path, mode)
+}
+
+func ensureFileMode(path string, mode os.FileMode) error {
+	return os.Chmod(path, mode)
 }
 
 func IsSafeWorkspaceName(name string) bool {

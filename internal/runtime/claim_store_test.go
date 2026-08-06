@@ -593,7 +593,7 @@ func TestClaimStoreMigrateOKFConvertsLegacyClaim(t *testing.T) {
 	if err != nil {
 		t.Fatalf("MigrateOKF() error = %v", err)
 	}
-	if summary.Migrated != 1 || summary.Invalid != 0 {
+	if summary.Migrated != 1 || summary.Invalid != 0 || summary.ReapprovalRequired != 0 {
 		t.Fatalf("summary = %#v", summary)
 	}
 	contents, err := os.ReadFile(claimPath)
@@ -602,6 +602,85 @@ func TestClaimStoreMigrateOKFConvertsLegacyClaim(t *testing.T) {
 	}
 	if strings.Contains(string(contents), "schema: zbrain.claim/v1") || !strings.Contains(string(contents), "type: zbrain.claim") || !strings.Contains(string(contents), "profile: zbrain.trusted-memory/v1") {
 		t.Fatalf("legacy claim was not migrated to OKF:\n%s", contents)
+	}
+}
+
+func TestLegacyMigrationRequiresExplicitReapproval(t *testing.T) {
+	paths, _ := claimStoreTestPaths(t)
+	id := "clm_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+	claimPath := filepath.Join(paths.WorkspacesDir, "research", "wiki", "projects", id+".md")
+	legacy := []byte("---\nschema: zbrain.claim/v1\nid: " + id + "\nstatus: approved\ntitle: Legacy Approved\nbasis: owner\ncreated_at: 2026-07-30T09:00:00Z\ncreated_by: owner\n---\n\nLegacy approved body\n")
+	if err := os.WriteFile(claimPath, legacy, 0o644); err != nil {
+		t.Fatalf("WriteFile(legacy claim) error = %v", err)
+	}
+
+	store := ClaimStore{Paths: paths, Now: fixedClaimStoreNow}
+	summary, err := store.MigrateOKF("research")
+	if err != nil {
+		t.Fatalf("MigrateOKF() error = %v", err)
+	}
+	if summary.Migrated != 1 || summary.Invalid != 0 || summary.ReapprovalRequired != 1 || len(summary.ReapprovalCandidates) != 1 || summary.ReapprovalCandidates[0] != id {
+		t.Fatalf("summary = %#v", summary)
+	}
+	migrated, err := store.Read("research", id)
+	if err != nil {
+		t.Fatalf("Read(migrated) error = %v", err)
+	}
+	if migrated.Status != ClaimStatusDraft || migrated.ID != id || migrated.Body != "\nLegacy approved body\n" || migrated.VerifiedAt != "" || migrated.VerifiedBy != "" || migrated.VerifiedDigest != "" {
+		t.Fatalf("migrated claim = %#v, want explicit draft reapproval candidate", migrated)
+	}
+	if err := VerifyClaimDigest(migrated); err != nil {
+		t.Fatalf("VerifyClaimDigest(migrated draft) error = %v", err)
+	}
+
+	approved, err := store.Approve("research", id)
+	if err != nil {
+		t.Fatalf("Approve(migrated) error = %v", err)
+	}
+	if approved.Status != ClaimStatusApproved || approved.VerifiedDigest == "" {
+		t.Fatalf("approved migrated claim = %#v", approved)
+	}
+	if err := VerifyClaimDigest(approved); err != nil {
+		t.Fatalf("VerifyClaimDigest(approved migrated claim) error = %v", err)
+	}
+}
+
+func TestLegacyMigrationPreservesApprovedClaimWithValidOKFDigest(t *testing.T) {
+	paths, _ := claimStoreTestPaths(t)
+	id := "clm_cccccccccccccccccccccccccccccccc"
+	verifiedAt := fixedClaimStoreNow().Format(time.RFC3339)
+	claim := validStoreClaim(id, ClaimBasisOwner)
+	claim.Body = "\nStore body\n"
+	claim.Status = ClaimStatusApproved
+	claim.VerifiedAt = verifiedAt
+	claim.VerifiedBy = "owner"
+	digest, err := ClaimVerificationDigest(claim)
+	if err != nil {
+		t.Fatalf("ClaimVerificationDigest() error = %v", err)
+	}
+	legacy := []byte("---\nschema: zbrain.claim/v1\nid: " + id + "\nstatus: approved\ntitle: Store claim\nbasis: owner\ncreated_at: 2026-07-30T09:00:00Z\ncreated_by: owner\nverified:\n  at: " + verifiedAt + "\n  by: owner\n  digest: " + digest + "\n---\n\nStore body\n")
+	claimPath := filepath.Join(paths.WorkspacesDir, "research", "wiki", "projects", id+".md")
+	if err := os.WriteFile(claimPath, legacy, 0o644); err != nil {
+		t.Fatalf("WriteFile(legacy claim) error = %v", err)
+	}
+
+	store := ClaimStore{Paths: paths, Now: fixedClaimStoreNow}
+	summary, err := store.MigrateOKF("research")
+	if err != nil {
+		t.Fatalf("MigrateOKF() error = %v", err)
+	}
+	if summary.Migrated != 1 || summary.Invalid != 0 || summary.ReapprovalRequired != 0 {
+		t.Fatalf("summary = %#v", summary)
+	}
+	migrated, err := store.Read("research", id)
+	if err != nil {
+		t.Fatalf("Read(migrated) error = %v", err)
+	}
+	if migrated.Status != ClaimStatusApproved || migrated.VerifiedDigest != digest {
+		t.Fatalf("migrated approved claim = %#v, want preserved valid OKF attestation", migrated)
+	}
+	if err := VerifyClaimDigest(migrated); err != nil {
+		t.Fatalf("VerifyClaimDigest(migrated) error = %v", err)
 	}
 }
 
@@ -809,4 +888,172 @@ func sha256Hex(t *testing.T, path string) string {
 	}
 	sum := sha256.Sum256(contents)
 	return hex.EncodeToString(sum[:])
+}
+
+func TestNestedClaimBoundary(t *testing.T) {
+	paths, _ := claimStoreTestPaths(t)
+	store := ClaimStore{Paths: paths, Now: fixedClaimStoreNow}
+	id := "clm_11111111111111111111111111111111"
+	nestedPath := "projects/topics/security/" + id + ".md"
+	claim := validStoreClaim(id, ClaimBasisOwner)
+	claim.Title = "Nested boundary marker"
+	claim.Body = "nested boundary marker\n"
+	claim.Path = nestedPath
+	canonicalPath := filepath.Join(paths.WorkspacesDir, "research", "wiki", filepath.FromSlash(nestedPath))
+	if err := writeClaimAtomic(canonicalPath, claim); err != nil {
+		t.Fatalf("writeClaimAtomic(nested) error = %v", err)
+	}
+
+	loaded, err := store.Read("research", id)
+	if err != nil {
+		t.Fatalf("Read(nested) error = %v", err)
+	}
+	if loaded.Path != nestedPath {
+		t.Fatalf("Read(nested).Path = %q, want %q", loaded.Path, nestedPath)
+	}
+
+	claim.Body = "updated nested boundary marker\n"
+	written, err := store.WriteDraft("research", claim)
+	if err != nil {
+		t.Fatalf("WriteDraft(nested) error = %v", err)
+	}
+	if written.Path != nestedPath {
+		t.Fatalf("WriteDraft(nested).Path = %q, want %q", written.Path, nestedPath)
+	}
+	rootPath := filepath.Join(paths.WorkspacesDir, "research", "wiki", "projects", id+".md")
+	if _, err := os.Stat(rootPath); !os.IsNotExist(err) {
+		t.Fatalf("nested draft created root duplicate, stat error = %v", err)
+	}
+
+	approved, err := store.Approve("research", id)
+	if err != nil {
+		t.Fatalf("Approve(nested) error = %v", err)
+	}
+	if approved.Path != nestedPath || approved.Status != ClaimStatusApproved {
+		t.Fatalf("approved nested claim = %#v", approved)
+	}
+
+	conflictID := "clm_22222222222222222222222222222222"
+	conflictPath := "projects/topics/security/conflict/" + conflictID + ".md"
+	conflict := validStoreClaim(conflictID, ClaimBasisOwner)
+	conflict.Title = "Nested conflict marker"
+	conflict.Body = "nested conflict marker\n"
+	conflict.ConflictsWith = []string{id}
+	conflict.Path = conflictPath
+	if err := writeClaimAtomic(filepath.Join(paths.WorkspacesDir, "research", "wiki", filepath.FromSlash(conflictPath)), conflict); err != nil {
+		t.Fatalf("writeClaimAtomic(conflict) error = %v", err)
+	}
+	if _, err := store.WriteDraft("research", conflict); err != nil {
+		t.Fatalf("WriteDraft(conflict) error = %v", err)
+	}
+	conflictApproved, err := store.Approve("research", conflictID)
+	if err != nil {
+		t.Fatalf("Approve(conflict) error = %v", err)
+	}
+	if conflictApproved.Path != conflictPath {
+		t.Fatalf("approved conflict path = %q, want %q", conflictApproved.Path, conflictPath)
+	}
+
+	if err := CreateWorkspace(paths, "personal", fixedClaimStoreNow()); err != nil {
+		t.Fatalf("CreateWorkspace(personal) error = %v", err)
+	}
+	if _, err := store.Read("personal", id); err == nil {
+		t.Fatalf("Read(cross workspace) error = nil")
+	}
+
+	index := IndexStore{Paths: paths}
+	if _, err := index.Rebuild("research"); err != nil {
+		t.Fatalf("Rebuild(nested) error = %v", err)
+	}
+	results, err := index.Search("research", SearchOptions{Query: "nested", Statuses: []ClaimStatus{ClaimStatusApproved}, Limit: 10})
+	if err != nil {
+		t.Fatalf("Search(nested) error = %v", err)
+	}
+	if len(results) != 2 {
+		t.Fatalf("nested search results = %#v, want two claims", results)
+	}
+	indexedPaths := make(map[string]string, len(results))
+	queryClaims := make([]QueryClaim, 0, len(results))
+	for _, result := range results {
+		indexedPaths[result.ID] = result.Path
+		queryClaims = append(queryClaims, QueryClaim{Workspace: "research", ID: result.ID, Path: result.Path})
+	}
+	if indexedPaths[id] != nestedPath || indexedPaths[conflictID] != conflictPath {
+		t.Fatalf("indexed nested paths = %#v", indexedPaths)
+	}
+	conflicts, err := findQueryConflicts(paths, queryClaims)
+	if err != nil {
+		t.Fatalf("findQueryConflicts(nested) error = %v", err)
+	}
+	if len(conflicts) != 1 || len(conflicts[0].ClaimIDs) != 2 {
+		t.Fatalf("nested conflicts = %#v", conflicts)
+	}
+}
+
+func TestRuntimePermissions(t *testing.T) {
+	paths, _ := claimStoreTestPaths(t)
+	assertPermissionMode(t, paths.RuntimeDir, runtimeDirectoryMode)
+	assertPermissionMode(t, paths.ConfigFile, runtimeMetadataMode)
+	assertPermissionMode(t, paths.WorkspacesDir, runtimeDirectoryMode)
+	workspaceRoot := filepath.Join(paths.WorkspacesDir, "research")
+	assertPermissionMode(t, workspaceRoot, runtimeDirectoryMode)
+	assertPermissionMode(t, filepath.Join(workspaceRoot, "wiki", "projects"), runtimeDirectoryMode)
+	assertPermissionMode(t, filepath.Join(workspaceRoot, "workspace.md"), runtimeMetadataMode)
+	assertPermissionMode(t, filepath.Join(workspaceRoot, "evidence"), evidenceDirectoryMode)
+
+	source := filepath.Join(t.TempDir(), "source.txt")
+	if err := os.WriteFile(source, []byte("immutable evidence"), 0o600); err != nil {
+		t.Fatalf("WriteFile(source) error = %v", err)
+	}
+	evidence, err := (EvidenceStore{Paths: paths, Now: fixedClaimStoreNow}).AddFile("research", source, "file://source.txt", "text/plain")
+	if err != nil {
+		t.Fatalf("AddFile() error = %v", err)
+	}
+	evidenceRoot := filepath.Join(workspaceRoot, "evidence", "sources", evidence.ID)
+	assertPermissionMode(t, filepath.Join(workspaceRoot, "evidence", "sources"), evidenceDirectoryMode)
+	assertPermissionMode(t, evidenceRoot, evidenceDirectoryMode)
+	assertPermissionMode(t, filepath.Join(evidenceRoot, "raw"), evidenceFileMode)
+	assertPermissionMode(t, filepath.Join(evidenceRoot, "source.yaml"), evidenceFileMode)
+
+	store := ClaimStore{Paths: paths, Now: fixedClaimStoreNow}
+	claim := validStoreClaim("clm_33333333333333333333333333333333", ClaimBasisOwner)
+	if _, err := store.WriteDraft("research", claim); err != nil {
+		t.Fatalf("WriteDraft() error = %v", err)
+	}
+	claimPath := filepath.Join(workspaceRoot, "wiki", "projects", claim.ID+".md")
+	assertPermissionMode(t, claimPath, runtimeMetadataMode)
+	if _, err := store.Approve("research", claim.ID); err != nil {
+		t.Fatalf("Approve() error = %v", err)
+	}
+	assertPermissionMode(t, claimPath, runtimeMetadataMode)
+
+	index := IndexStore{Paths: paths}
+	if _, err := index.Rebuild("research"); err != nil {
+		t.Fatalf("Rebuild() error = %v", err)
+	}
+	assertPermissionMode(t, paths.IndexesDir, runtimeDirectoryMode)
+	databasePath, err := index.DatabasePath("research")
+	if err != nil {
+		t.Fatalf("DatabasePath() error = %v", err)
+	}
+	assertPermissionMode(t, databasePath, derivedIndexMode)
+	if err := index.MarkDirty("research"); err != nil {
+		t.Fatalf("MarkDirty() error = %v", err)
+	}
+	dirtyPath, err := index.DirtyPath("research")
+	if err != nil {
+		t.Fatalf("DirtyPath() error = %v", err)
+	}
+	assertPermissionMode(t, dirtyPath, derivedIndexMode)
+}
+
+func assertPermissionMode(t *testing.T, path string, want os.FileMode) {
+	t.Helper()
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("Stat(%s) error = %v", path, err)
+	}
+	if got := info.Mode().Perm(); got != want.Perm() {
+		t.Fatalf("mode(%s) = %04o, want %04o", path, got.Perm(), want.Perm())
+	}
 }

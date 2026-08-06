@@ -114,7 +114,16 @@ func (store EvidenceStore) AddFile(workspace string, sourcePath string, origin s
 	if _, err := beginCanonicalMutationUnlocked(store.Paths, workspace); err != nil {
 		return Evidence{}, err
 	}
-	if err := os.MkdirAll(root, 0o755); err != nil {
+	for _, relative := range []string{"evidence", "evidence/sources"} {
+		directory, err := ResolveWorkspacePath(store.Paths, workspace, relative)
+		if err != nil {
+			return Evidence{}, err
+		}
+		if err := ensureDirectoryMode(directory, evidenceDirectoryMode); err != nil {
+			return Evidence{}, err
+		}
+	}
+	if err := ensureDirectoryMode(root, evidenceDirectoryMode); err != nil {
 		return Evidence{}, err
 	}
 	created := false
@@ -129,7 +138,7 @@ func (store EvidenceStore) AddFile(workspace string, sourcePath string, origin s
 		return Evidence{}, err
 	}
 	runWorkspaceGenerationTestHook(workspaceGenerationHookBeforeCanonicalWrite)
-	raw, err := os.OpenFile(rawPath, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o444)
+	raw, err := os.OpenFile(rawPath, os.O_WRONLY|os.O_CREATE|os.O_EXCL, evidenceFileMode)
 	if err != nil {
 		return Evidence{}, err
 	}
@@ -142,7 +151,7 @@ func (store EvidenceStore) AddFile(workspace string, sourcePath string, origin s
 	if closeErr != nil {
 		return Evidence{}, closeErr
 	}
-	if err := os.Chmod(rawPath, 0o444); err != nil {
+	if err := ensureFileMode(rawPath, evidenceFileMode); err != nil {
 		return Evidence{}, err
 	}
 
@@ -166,7 +175,10 @@ func (store EvidenceStore) AddFile(workspace string, sourcePath string, origin s
 	if err != nil {
 		return Evidence{}, err
 	}
-	if err := os.WriteFile(metadataPath, metadata, 0o444); err != nil {
+	if err := os.WriteFile(metadataPath, metadata, evidenceFileMode); err != nil {
+		return Evidence{}, err
+	}
+	if err := ensureFileMode(metadataPath, evidenceFileMode); err != nil {
 		return Evidence{}, err
 	}
 	created = true

@@ -163,10 +163,13 @@ func (store IndexStore) markDirtyUnlocked(workspace string) error {
 	if err != nil {
 		return err
 	}
-	if err := os.MkdirAll(store.Paths.IndexesDir, 0o755); err != nil {
+	if err := ensureDirectoryMode(store.Paths.IndexesDir, runtimeDirectoryMode); err != nil {
 		return err
 	}
-	return os.WriteFile(dirtyPath, []byte("dirty\n"), 0o644)
+	if err := os.WriteFile(dirtyPath, []byte("dirty\n"), derivedIndexMode); err != nil {
+		return err
+	}
+	return ensureFileMode(dirtyPath, derivedIndexMode)
 }
 
 func (store IndexStore) CheckFresh(workspace string) error {
@@ -743,7 +746,7 @@ func (store IndexStore) Rebuild(workspace string) (IndexSummary, error) {
 	if err := store.AssertFTS5(); err != nil {
 		return IndexSummary{}, err
 	}
-	if err := os.MkdirAll(store.Paths.IndexesDir, 0o755); err != nil {
+	if err := ensureDirectoryMode(store.Paths.IndexesDir, runtimeDirectoryMode); err != nil {
 		return IndexSummary{}, err
 	}
 	temporary, err := os.CreateTemp(store.Paths.IndexesDir, workspace+".sqlite.*.tmp")
@@ -894,6 +897,9 @@ func (store IndexStore) Rebuild(workspace string) (IndexSummary, error) {
 	}
 	if generation.Current != observedGeneration {
 		return IndexSummary{}, fmt.Errorf("workspace %q changed during rebuild; run zbrain reindex", workspace)
+	}
+	if err := ensureFileMode(tmpPath, derivedIndexMode); err != nil {
+		return IndexSummary{}, err
 	}
 	if err := os.Rename(tmpPath, databasePath); err != nil {
 		return IndexSummary{}, err

@@ -126,7 +126,12 @@ func TestResolveCurrentWorkspaceReturnsJSONShape(t *testing.T) {
 	if decoded["project_root"] != paths.CWD {
 		t.Fatalf("project_root = %v", decoded["project_root"])
 	}
-	if decoded["context_file"] == "" {
-		t.Fatalf("context_file missing")
+	if _, ok := decoded["context_file"]; ok {
+		t.Fatalf("context_file is not part of the current workspace contract")
+	}
+	for _, key := range []string{"project_root", "workspace", "secondary_workspaces"} {
+		if _, ok := decoded[key]; !ok {
+			t.Fatalf("%s missing", key)
+		}
 	}
 }

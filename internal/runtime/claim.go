@@ -124,18 +124,24 @@ type zbrainProfile struct {
 }
 
 type legacyClaimFrontmatter struct {
-	Schema             string      `yaml:"schema"`
-	ID                 string      `yaml:"id"`
-	Status             ClaimStatus `yaml:"status"`
-	Title              string      `yaml:"title"`
-	Basis              ClaimBasis  `yaml:"basis"`
-	CreatedAt          string      `yaml:"created_at"`
-	CreatedBy          string      `yaml:"created_by"`
-	EvidenceIDs        []string    `yaml:"evidence_ids,omitempty"`
-	SupportingClaimIDs []string    `yaml:"supporting_claim_ids,omitempty"`
-	Supersedes         []string    `yaml:"supersedes,omitempty"`
-	ConflictsWith      []string    `yaml:"conflicts_with,omitempty"`
-	Tags               []string    `yaml:"tags,omitempty"`
+	Schema             string            `yaml:"schema"`
+	ID                 string            `yaml:"id"`
+	Status             ClaimStatus       `yaml:"status"`
+	Title              string            `yaml:"title"`
+	Description        string            `yaml:"description,omitempty"`
+	Resource           string            `yaml:"resource,omitempty"`
+	Basis              ClaimBasis        `yaml:"basis"`
+	CreatedAt          string            `yaml:"created_at"`
+	CreatedBy          string            `yaml:"created_by"`
+	Verified           *ClaimVerified    `yaml:"verified,omitempty"`
+	StaleAfter         string            `yaml:"stale_after,omitempty"`
+	Sources            []ClaimSource     `yaml:"sources,omitempty"`
+	EvidenceIDs        []string          `yaml:"evidence_ids,omitempty"`
+	SupportingClaimIDs []string          `yaml:"supporting_claim_ids,omitempty"`
+	Supersedes         []string          `yaml:"supersedes,omitempty"`
+	ConflictsWith      []string          `yaml:"conflicts_with,omitempty"`
+	Tags               []string          `yaml:"tags,omitempty"`
+	Transitions        []ClaimTransition `yaml:"transitions,omitempty"`
 }
 
 var (
@@ -409,6 +415,12 @@ func parseLegacyClaimFrontmatter(frontmatter []byte, tier string, relPath string
 	if err := yaml.Unmarshal(frontmatter, &metadata); err != nil {
 		return Claim{}, err
 	}
+	var verifiedAt, verifiedBy, verifiedDigest string
+	if metadata.Verified != nil {
+		verifiedAt = metadata.Verified.At
+		verifiedBy = metadata.Verified.By
+		verifiedDigest = metadata.Verified.Digest
+	}
 	claim := Claim{
 		Schema:             metadata.Schema,
 		Type:               OKFClaimType,
@@ -417,18 +429,35 @@ func parseLegacyClaimFrontmatter(frontmatter []byte, tier string, relPath string
 		Path:               filepath.ToSlash(relPath),
 		Status:             metadata.Status,
 		Title:              metadata.Title,
+		Description:        metadata.Description,
+		Resource:           metadata.Resource,
 		Basis:              metadata.Basis,
 		CreatedAt:          metadata.CreatedAt,
 		CreatedBy:          metadata.CreatedBy,
+		VerifiedAt:         verifiedAt,
+		VerifiedBy:         verifiedBy,
+		VerifiedDigest:     verifiedDigest,
+		StaleAfter:         metadata.StaleAfter,
+		Sources:            append([]ClaimSource(nil), metadata.Sources...),
 		EvidenceIDs:        append([]string(nil), metadata.EvidenceIDs...),
 		SupportingClaimIDs: append([]string(nil), metadata.SupportingClaimIDs...),
 		Supersedes:         append([]string(nil), metadata.Supersedes...),
 		ConflictsWith:      append([]string(nil), metadata.ConflictsWith...),
 		Tags:               append([]string(nil), metadata.Tags...),
+		Transitions:        append([]ClaimTransition(nil), metadata.Transitions...),
 		Body:               string(body),
 	}
 	if err := ValidateClaim(claim); err != nil {
-		return Claim{}, err
+		if claim.Status != ClaimStatusApproved || !strings.Contains(err.Error(), "claim verified.digest") {
+			return Claim{}, err
+		}
+		unsigned := claim
+		unsigned.VerifiedAt = ""
+		unsigned.VerifiedBy = ""
+		unsigned.VerifiedDigest = ""
+		if unsignedErr := ValidateClaim(unsigned); unsignedErr != nil {
+			return Claim{}, err
+		}
 	}
 	return claim, nil
 }
