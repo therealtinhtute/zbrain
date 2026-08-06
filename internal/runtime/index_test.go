@@ -235,6 +235,171 @@ func TestRebuildDependencyCanonicalUnchanged(t *testing.T) {
 	}
 }
 
+func TestEvidenceClaimDigestBinding(t *testing.T) {
+	paths := indexTestPaths(t)
+	evidence := addStoreEvidence(t, paths, "original evidence")
+	store := ClaimStore{Paths: paths, Now: fixedIndexNow}
+	support := indexClaim("clm_eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee", "Evidence Support", ClaimBasisEvidence)
+	support.EvidenceIDs = []string{evidence.ID}
+	if _, err := store.WriteDraft("research", support); err != nil {
+		t.Fatalf("WriteDraft(support) error = %v", err)
+	}
+	if _, err := store.Approve("research", support.ID); err != nil {
+		t.Fatalf("Approve(support) error = %v", err)
+	}
+	dependent := indexClaim("clm_ffffffffffffffffffffffffffffffff", "Evidence Dependent", ClaimBasisDerived)
+	dependent.SupportingClaimIDs = []string{support.ID}
+	if _, err := store.WriteDraft("research", dependent); err != nil {
+		t.Fatalf("WriteDraft(dependent) error = %v", err)
+	}
+	if _, err := store.Approve("research", dependent.ID); err != nil {
+		t.Fatalf("Approve(dependent) error = %v", err)
+	}
+
+	idx := IndexStore{Paths: paths}
+	initial, err := idx.Rebuild("research")
+	if err != nil {
+		t.Fatalf("initial Rebuild() error = %v", err)
+	}
+	if initial.RebuildState != RebuildStatusClean || initial.Approved != 2 {
+		t.Fatalf("initial summary = %#v, want clean two-claim index", initial)
+	}
+
+	replacement := []byte("tampered evidence")
+	rawPath := filepath.Join(paths.WorkspacesDir, "research", "evidence", "sources", evidence.ID, "raw")
+	if err := os.Chmod(rawPath, 0o644); err != nil {
+		t.Fatalf("Chmod(raw) error = %v", err)
+	}
+	if err := os.WriteFile(rawPath, replacement, 0o644); err != nil {
+		t.Fatalf("WriteFile(replacement) error = %v", err)
+	}
+	updatedEvidence := evidence
+	updatedEvidence.ByteLength = int64(len(replacement))
+	updatedEvidence.SHA256 = sha256String(string(replacement))
+	rewriteEvidenceMetadata(t, EvidenceStore{Paths: paths}, "research", evidence.ID, updatedEvidence)
+
+	summary, err := idx.Rebuild("research")
+	if err != nil {
+		t.Fatalf("invalidating Rebuild() error = %v", err)
+	}
+	if summary.RebuildState != RebuildStatusRejected || summary.Approved != 0 || summary.Invalid != 2 || summary.InvalidCount != 2 {
+		t.Fatalf("invalidating summary = %#v, want two rejected claims", summary)
+	}
+	for _, invalid := range summary.InvalidClaims {
+		if !strings.Contains(invalid.Error, evidence.ID) || !strings.Contains(invalid.Error, "digest mismatch") {
+			t.Fatalf("invalid claim = %#v, want evidence digest mismatch", invalid)
+		}
+	}
+	if indexed := indexedClaimStatuses(t, paths, "research"); len(indexed) != 0 {
+		t.Fatalf("digest-invalid evidence closure was indexed: %#v", indexed)
+	}
+}
+
+func TestEvidenceClaimMetadataDigestBinding(t *testing.T) {
+	paths := indexTestPaths(t)
+	evidence := addStoreEvidence(t, paths, "original evidence")
+	store := ClaimStore{Paths: paths, Now: fixedIndexNow}
+	claim := indexClaim("clm_11111111111111111111111111111111", "Metadata Evidence Claim", ClaimBasisEvidence)
+	claim.EvidenceIDs = []string{evidence.ID}
+	if _, err := store.WriteDraft("research", claim); err != nil {
+		t.Fatalf("WriteDraft() error = %v", err)
+	}
+	if _, err := store.Approve("research", claim.ID); err != nil {
+		t.Fatalf("Approve() error = %v", err)
+	}
+	idx := IndexStore{Paths: paths}
+	if summary, err := idx.Rebuild("research"); err != nil || summary.RebuildState != RebuildStatusClean {
+		t.Fatalf("initial Rebuild() summary=%#v error=%v, want clean", summary, err)
+	}
+	updatedEvidence := evidence
+	updatedEvidence.MediaType = "application/json"
+	rewriteEvidenceMetadata(t, EvidenceStore{Paths: paths}, "research", evidence.ID, updatedEvidence)
+
+	summary, err := idx.Rebuild("research")
+	if err != nil {
+		t.Fatalf("metadata replacement Rebuild() error = %v", err)
+	}
+	if summary.RebuildState != RebuildStatusRejected || summary.Approved != 0 || summary.Invalid != 1 || summary.InvalidCount != 1 {
+		t.Fatalf("metadata replacement summary = %#v, want one rejected claim", summary)
+	}
+	if len(summary.InvalidClaims) != 1 || !strings.Contains(summary.InvalidClaims[0].Error, "digest mismatch") {
+		t.Fatalf("InvalidClaims = %#v, want metadata digest mismatch", summary.InvalidClaims)
+	}
+	if indexed := indexedClaimStatuses(t, paths, "research"); len(indexed) != 0 {
+		t.Fatalf("metadata-invalid claim was indexed: %#v", indexed)
+	}
+}
+
+func TestRebuildRejectsLegacyEvidenceDigestWithRecoveryGuidance(t *testing.T) {
+	paths := indexTestPaths(t)
+	evidence := addStoreEvidence(t, paths, "legacy digest evidence")
+	store := ClaimStore{Paths: paths, Now: fixedIndexNow}
+	claim := indexClaim("clm_33333333333333333333333333333333", "Legacy Evidence Claim", ClaimBasisEvidence)
+	claim.EvidenceIDs = []string{evidence.ID}
+	if _, err := store.WriteDraft("research", claim); err != nil {
+		t.Fatalf("WriteDraft() error = %v", err)
+	}
+	approved, err := store.Approve("research", claim.ID)
+	if err != nil {
+		t.Fatalf("Approve() error = %v", err)
+	}
+	approved.Sources[0].Digest = "sha256:" + evidence.SHA256
+	approved.VerifiedDigest, err = ClaimVerificationDigest(approved)
+	if err != nil {
+		t.Fatalf("ClaimVerificationDigest() error = %v", err)
+	}
+	claimPath := filepath.Join(paths.WorkspacesDir, "research", "wiki", "projects", claim.ID+".md")
+	if err := writeClaimAtomic(claimPath, approved); err != nil {
+		t.Fatalf("writeClaimAtomic() error = %v", err)
+	}
+
+	summary, err := (IndexStore{Paths: paths}).Rebuild("research")
+	if err != nil {
+		t.Fatalf("legacy digest Rebuild() error = %v", err)
+	}
+	if summary.RebuildState != RebuildStatusRejected || summary.Approved != 0 || summary.Invalid != 1 || summary.InvalidCount != 1 {
+		t.Fatalf("legacy digest summary = %#v, want one rejected claim", summary)
+	}
+	if len(summary.InvalidClaims) != 1 || !strings.Contains(summary.InvalidClaims[0].Error, "legacy raw digest") || !strings.Contains(summary.InvalidClaims[0].Error, "supersede and reapprove") {
+		t.Fatalf("InvalidClaims = %#v, want explicit legacy digest recovery guidance", summary.InvalidClaims)
+	}
+}
+
+func TestRebuildRejectsEvidenceSourceClosureMismatch(t *testing.T) {
+	paths := indexTestPaths(t)
+	evidence := addStoreEvidence(t, paths, "closure evidence")
+	store := ClaimStore{Paths: paths, Now: fixedIndexNow}
+	claim := indexClaim("clm_22222222222222222222222222222222", "Closure Evidence Claim", ClaimBasisEvidence)
+	claim.EvidenceIDs = []string{evidence.ID}
+	if _, err := store.WriteDraft("research", claim); err != nil {
+		t.Fatalf("WriteDraft() error = %v", err)
+	}
+	approved, err := store.Approve("research", claim.ID)
+	if err != nil {
+		t.Fatalf("Approve() error = %v", err)
+	}
+	approved.EvidenceIDs = []string{evidence.ID, evidence.ID}
+	approved.VerifiedDigest, err = ClaimVerificationDigest(approved)
+	if err != nil {
+		t.Fatalf("ClaimVerificationDigest() error = %v", err)
+	}
+	claimPath := filepath.Join(paths.WorkspacesDir, "research", "wiki", "projects", claim.ID+".md")
+	if err := writeClaimAtomic(claimPath, approved); err != nil {
+		t.Fatalf("writeClaimAtomic() error = %v", err)
+	}
+
+	summary, err := (IndexStore{Paths: paths}).Rebuild("research")
+	if err != nil {
+		t.Fatalf("closure mismatch Rebuild() error = %v", err)
+	}
+	if summary.RebuildState != RebuildStatusRejected || summary.Approved != 0 || summary.Invalid != 1 || summary.InvalidCount != 1 {
+		t.Fatalf("closure mismatch summary = %#v, want one rejected claim", summary)
+	}
+	if len(summary.InvalidClaims) != 1 || !strings.Contains(summary.InvalidClaims[0].Error, "duplicate evidence id") {
+		t.Fatalf("InvalidClaims = %#v, want duplicate evidence id", summary.InvalidClaims)
+	}
+}
+
 func TestRebuildEvidenceRejectedState(t *testing.T) {
 	paths := indexTestPaths(t)
 	evidence := addStoreEvidence(t, paths, "evidence bytes")
@@ -523,6 +688,135 @@ func TestCheckFreshReportsStaleAfterTrustInputDeletion(t *testing.T) {
 	}
 }
 
+func TestContentDigestFreshness(t *testing.T) {
+	t.Run("claim edit with restored mtime", func(t *testing.T) {
+		paths := indexTestPaths(t)
+		store := ClaimStore{Paths: paths, Now: fixedIndexNow}
+		claim := indexClaim("clm_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "Content Digest Claim", ClaimBasisOwner)
+		if _, err := store.WriteDraft("research", claim); err != nil {
+			t.Fatalf("WriteDraft() error = %v", err)
+		}
+		if _, err := store.Approve("research", claim.ID); err != nil {
+			t.Fatalf("Approve() error = %v", err)
+		}
+		idx := IndexStore{Paths: paths}
+		if _, err := idx.Rebuild("research"); err != nil {
+			t.Fatalf("Rebuild() error = %v", err)
+		}
+		claimPath := filepath.Join(paths.WorkspacesDir, "research", "wiki", "projects", claim.ID+".md")
+		info, err := os.Stat(claimPath)
+		if err != nil {
+			t.Fatalf("Stat(claim) error = %v", err)
+		}
+		contents, err := os.ReadFile(claimPath)
+		if err != nil {
+			t.Fatalf("ReadFile(claim) error = %v", err)
+		}
+		contents = []byte(strings.Replace(string(contents), "Content Digest Claim", "Content Digest Delta", 1))
+		if err := os.WriteFile(claimPath, contents, 0o644); err != nil {
+			t.Fatalf("WriteFile(claim) error = %v", err)
+		}
+		if err := os.Chtimes(claimPath, info.ModTime(), info.ModTime()); err != nil {
+			t.Fatalf("Chtimes(claim) error = %v", err)
+		}
+		freshErr := idx.CheckFresh("research")
+		if freshErr == nil || !strings.Contains(freshErr.Error(), claimPath) || !strings.Contains(freshErr.Error(), "run zbrain reindex") {
+			t.Fatalf("CheckFresh() error = %v, want content-digest stale error naming %q", freshErr, claimPath)
+		}
+	})
+
+	t.Run("evidence edit with restored mtime", func(t *testing.T) {
+		paths := indexTestPaths(t)
+		evidence := addStoreEvidence(t, paths, "original evidence")
+		idx := IndexStore{Paths: paths}
+		if _, err := idx.Rebuild("research"); err != nil {
+			t.Fatalf("Rebuild() error = %v", err)
+		}
+		rawPath := filepath.Join(paths.WorkspacesDir, "research", "evidence", "sources", evidence.ID, "raw")
+		info, err := os.Stat(rawPath)
+		if err != nil {
+			t.Fatalf("Stat(raw) error = %v", err)
+		}
+		if err := os.Chmod(rawPath, 0o644); err != nil {
+			t.Fatalf("Chmod(raw) error = %v", err)
+		}
+		if err := os.WriteFile(rawPath, []byte("tampered evidence"), 0o644); err != nil {
+			t.Fatalf("WriteFile(raw) error = %v", err)
+		}
+		if err := os.Chtimes(rawPath, info.ModTime(), info.ModTime()); err != nil {
+			t.Fatalf("Chtimes(raw) error = %v", err)
+		}
+		freshErr := idx.CheckFresh("research")
+		if freshErr == nil || !strings.Contains(freshErr.Error(), rawPath) || !strings.Contains(freshErr.Error(), "run zbrain reindex") {
+			t.Fatalf("CheckFresh() error = %v, want content-digest stale error naming %q", freshErr, rawPath)
+		}
+	})
+}
+
+func TestContentDigestFreshnessFallbackWithoutChangeTokens(t *testing.T) {
+	previous := trustFileChangeToken
+	trustFileChangeToken = func(os.FileInfo) int64 { return -1 }
+	t.Cleanup(func() { trustFileChangeToken = previous })
+
+	paths := indexTestPaths(t)
+	store := ClaimStore{Paths: paths, Now: fixedIndexNow}
+	claim := indexClaim("clm_12121212121212121212121212121212", "Fallback Digest Claim", ClaimBasisOwner)
+	if _, err := store.WriteDraft("research", claim); err != nil {
+		t.Fatalf("WriteDraft() error = %v", err)
+	}
+	if _, err := store.Approve("research", claim.ID); err != nil {
+		t.Fatalf("Approve() error = %v", err)
+	}
+	idx := IndexStore{Paths: paths}
+	if _, err := idx.Rebuild("research"); err != nil {
+		t.Fatalf("Rebuild() error = %v", err)
+	}
+	claimPath := filepath.Join(paths.WorkspacesDir, "research", "wiki", "projects", claim.ID+".md")
+	info, err := os.Stat(claimPath)
+	if err != nil {
+		t.Fatalf("Stat(claim) error = %v", err)
+	}
+	contents, err := os.ReadFile(claimPath)
+	if err != nil {
+		t.Fatalf("ReadFile(claim) error = %v", err)
+	}
+	contents = []byte(strings.Replace(string(contents), "Fallback Digest Claim", "Fallback Digest Delta", 1))
+	if err := os.WriteFile(claimPath, contents, 0o644); err != nil {
+		t.Fatalf("WriteFile(claim) error = %v", err)
+	}
+	if err := os.Chtimes(claimPath, info.ModTime(), info.ModTime()); err != nil {
+		t.Fatalf("Chtimes(claim) error = %v", err)
+	}
+	freshErr := idx.CheckFresh("research")
+	if freshErr == nil || !strings.Contains(freshErr.Error(), claimPath) || !strings.Contains(freshErr.Error(), "run zbrain reindex") {
+		t.Fatalf("CheckFresh() error = %v, want manifest-fallback stale error naming %q", freshErr, claimPath)
+	}
+}
+
+func TestContentDigestFreshnessNewInputWithRestoredDirectoryMtime(t *testing.T) {
+	paths := indexTestPaths(t)
+	idx := IndexStore{Paths: paths}
+	if _, err := idx.Rebuild("research"); err != nil {
+		t.Fatalf("Rebuild() error = %v", err)
+	}
+	projectsDir := filepath.Join(paths.WorkspacesDir, "research", "wiki", "projects")
+	info, err := os.Stat(projectsDir)
+	if err != nil {
+		t.Fatalf("Stat(projects directory) error = %v", err)
+	}
+	addedPath := filepath.Join(projectsDir, "added.md")
+	if err := os.WriteFile(addedPath, []byte("added trust input\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile(added) error = %v", err)
+	}
+	if err := os.Chtimes(projectsDir, info.ModTime(), info.ModTime()); err != nil {
+		t.Fatalf("Chtimes(projects directory) error = %v", err)
+	}
+	freshErr := idx.CheckFresh("research")
+	if freshErr == nil || !strings.Contains(freshErr.Error(), addedPath) || !strings.Contains(freshErr.Error(), "run zbrain reindex") {
+		t.Fatalf("CheckFresh() error = %v, want added-input stale error naming %q", freshErr, addedPath)
+	}
+}
+
 func TestCheckFreshReportsStaleAfterEvidenceEdit(t *testing.T) {
 	paths := indexTestPaths(t)
 	sourceRoot := filepath.Join(paths.WorkspacesDir, "research", "evidence", "sources", "evd_test")
@@ -728,6 +1022,38 @@ func TestRebuildDoesNotMutateCanonical(t *testing.T) {
 	}
 	if string(after) != string(before) {
 		t.Fatalf("canonical claim changed during rebuild: before=%q after=%q", before, after)
+	}
+}
+
+func TestRebuildRecoversUnsupportedIndexSchema(t *testing.T) {
+	paths := indexTestPaths(t)
+	idx := IndexStore{Paths: paths}
+	if _, err := idx.Rebuild("research"); err != nil {
+		t.Fatalf("initial Rebuild() error = %v", err)
+	}
+	databasePath, err := idx.DatabasePath("research")
+	if err != nil {
+		t.Fatalf("DatabasePath() error = %v", err)
+	}
+	db, err := sql.Open("sqlite", databasePath)
+	if err != nil {
+		t.Fatalf("sql.Open() error = %v", err)
+	}
+	if _, err := db.Exec("pragma user_version = 1"); err != nil {
+		_ = db.Close()
+		t.Fatalf("set old schema version error = %v", err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+	if err := idx.CheckFresh("research"); err == nil || !strings.Contains(err.Error(), "unsupported index schema version") {
+		t.Fatalf("CheckFresh() error = %v, want unsupported schema error", err)
+	}
+	if _, err := idx.Rebuild("research"); err != nil {
+		t.Fatalf("recovery Rebuild() error = %v", err)
+	}
+	if err := idx.CheckFresh("research"); err != nil {
+		t.Fatalf("CheckFresh() after recovery error = %v", err)
 	}
 }
 

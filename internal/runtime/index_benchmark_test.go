@@ -32,19 +32,19 @@ func TestAskP95At100K(t *testing.T) {
 	durations := make([]time.Duration, 0, 40)
 	for i := 0; i < 40; i++ {
 		start := time.Now()
-		results, err := idx.Search("research", SearchOptions{Query: fmt.Sprintf("shard %03d local", i%1000), Statuses: []ClaimStatus{ClaimStatusApproved}, Limit: 10})
+		response, err := TrustedQuery(paths, TrustedQueryOptions{Query: fmt.Sprintf("shard %03d local", i%1000), Limit: 10})
 		if err != nil {
-			t.Fatalf("Search(%d) error = %v", i, err)
+			t.Fatalf("TrustedQuery(%d) error = %v", i, err)
 		}
-		if len(results) == 0 {
-			t.Fatalf("Search(%d) returned no results", i)
+		if len(response.Claims) == 0 {
+			t.Fatalf("TrustedQuery(%d) returned no results: %#v", i, response)
 		}
 		durations = append(durations, time.Since(start))
 	}
 	sort.Slice(durations, func(i, j int) bool { return durations[i] < durations[j] })
 	p95 := durations[int(float64(len(durations))*0.95)-1]
-	t.Logf("100k claim search p95=%s samples=%d", p95, len(durations))
+	t.Logf("100k trusted ask p95=%s samples=%d", p95, len(durations))
 	if p95 > 2*time.Second {
-		t.Fatalf("100k claim search p95=%s, want <=2s", p95)
+		t.Fatalf("100k trusted ask p95=%s, want <=2s", p95)
 	}
 }

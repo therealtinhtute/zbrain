@@ -206,8 +206,14 @@ func TestClaimStoreApproveEvidenceClaimVerifiesEvidenceAndWritesSources(t *testi
 	if err != nil {
 		t.Fatalf("Approve() error = %v", err)
 	}
-	if len(approved.Sources) != 1 || approved.Sources[0].ID != evidence.ID || approved.Sources[0].Digest != "sha256:"+evidence.SHA256 {
-		t.Fatalf("Sources = %#v, evidence = %#v", approved.Sources, evidence)
+	metadataPath := filepath.Join(paths.WorkspacesDir, "research", "evidence", "sources", evidence.ID, "source.yaml")
+	metadata, err := os.ReadFile(metadataPath)
+	if err != nil {
+		t.Fatalf("ReadFile(metadata) error = %v", err)
+	}
+	wantDigest := evidenceSnapshotDigest(metadata, evidence)
+	if len(approved.Sources) != 1 || approved.Sources[0].ID != evidence.ID || approved.Sources[0].Digest != wantDigest {
+		t.Fatalf("Sources = %#v, want digest %q", approved.Sources, wantDigest)
 	}
 	claimPath := filepath.Join(paths.WorkspacesDir, "research", "wiki", "projects", claim.ID+".md")
 	contents, err := os.ReadFile(claimPath)

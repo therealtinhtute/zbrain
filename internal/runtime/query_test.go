@@ -355,6 +355,158 @@ func TestEvidenceInvalidationAndRepair(t *testing.T) {
 	}
 }
 
+func TestTrustedQueryFailsClosedWhenFreshnessRowsForged(t *testing.T) {
+	paths := queryTestPaths(t)
+	evidence := addStoreEvidence(t, paths, "original trusted evidence")
+	store := ClaimStore{Paths: paths, Now: fixedQueryNow}
+	claim := queryClaim("clm_eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee", "Forged Freshness Evidence", ClaimBasisEvidence)
+	claim.EvidenceIDs = []string{evidence.ID}
+	claim.Body = "forged freshness trusted token\n"
+	if _, err := store.WriteDraft("research", claim); err != nil {
+		t.Fatalf("WriteDraft() error = %v", err)
+	}
+	if _, err := store.Approve("research", claim.ID); err != nil {
+		t.Fatalf("Approve() error = %v", err)
+	}
+	idx := IndexStore{Paths: paths}
+	if _, err := idx.Rebuild("research"); err != nil {
+		t.Fatalf("initial Rebuild() error = %v", err)
+	}
+
+	rawPath := filepath.Join(paths.WorkspacesDir, "research", "evidence", "sources", evidence.ID, "raw")
+	original, err := os.ReadFile(rawPath)
+	if err != nil {
+		t.Fatalf("ReadFile(raw) error = %v", err)
+	}
+	if err := os.Chmod(rawPath, 0o644); err != nil {
+		t.Fatalf("Chmod(raw) error = %v", err)
+	}
+	if err := os.WriteFile(rawPath, []byte(strings.Repeat("x", len(original))), 0o644); err != nil {
+		t.Fatalf("WriteFile(raw) error = %v", err)
+	}
+
+	forgeTrustFreshnessRows(t, paths, idx, "research")
+
+	if err := idx.CheckFresh("research"); err != nil {
+		t.Fatalf("CheckFresh() error = %v, want forged freshness rows to pass the disposable fast path", err)
+	}
+	if _, err := TrustedQuery(paths, TrustedQueryOptions{Query: "forged freshness trusted", Limit: 10}); err == nil || !strings.Contains(err.Error(), evidence.ID) {
+		t.Fatalf("TrustedQuery() error = %v, want evidence validation failure", err)
+	}
+}
+
+func TestTrustedQueryRejectsApprovedClaimOutsidePublishedManifest(t *testing.T) {
+	paths := queryTestPaths(t)
+	store := ClaimStore{Paths: paths, Now: fixedQueryNow}
+	published := queryClaim("clm_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "Published Claim", ClaimBasisOwner)
+	published.Body = "published manifest trusted token\n"
+	if _, err := store.WriteDraft("research", published); err != nil {
+		t.Fatalf("WriteDraft() error = %v", err)
+	}
+	if _, err := store.Approve("research", published.ID); err != nil {
+		t.Fatalf("Approve() error = %v", err)
+	}
+	idx := IndexStore{Paths: paths}
+	if _, err := idx.Rebuild("research"); err != nil {
+		t.Fatalf("initial Rebuild() error = %v", err)
+	}
+
+	injected := queryClaim("clm_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", "Injected Claim", ClaimBasisOwner)
+	injected.Path = "projects/" + injected.ID + ".md"
+	injected.Status = ClaimStatusApproved
+	injected.VerifiedAt = fixedQueryNow().Format(time.RFC3339)
+	injected.VerifiedBy = "owner"
+	injected.Transitions = []ClaimTransition{{
+		Kind: ClaimTransitionApprove,
+		At:   injected.VerifiedAt,
+		By:   injected.VerifiedBy,
+	}}
+	injected.Body = "injected manifest trusted token\n"
+	var err error
+	injected.VerifiedDigest, err = ClaimVerificationDigest(injected)
+	if err != nil {
+		t.Fatalf("ClaimVerificationDigest() error = %v", err)
+	}
+	contents, err := RenderClaimMarkdown(injected)
+	if err != nil {
+		t.Fatalf("RenderClaimMarkdown() error = %v", err)
+	}
+	injectedPath := filepath.Join(paths.WorkspacesDir, "research", "wiki", filepath.FromSlash(injected.Path))
+	if err := os.WriteFile(injectedPath, contents, 0o644); err != nil {
+		t.Fatalf("WriteFile(injected claim) error = %v", err)
+	}
+
+	db, err := sql.Open("sqlite", indexDatabasePath(t, idx, "research"))
+	if err != nil {
+		t.Fatalf("sql.Open() error = %v", err)
+	}
+	tx, err := db.Begin()
+	if err != nil {
+		_ = db.Close()
+		t.Fatalf("db.Begin() error = %v", err)
+	}
+	if err := insertIndexedClaim(tx, injected); err != nil {
+		_ = tx.Rollback()
+		_ = db.Close()
+		t.Fatalf("insertIndexedClaim() error = %v", err)
+	}
+	if err := tx.Commit(); err != nil {
+		_ = db.Close()
+		t.Fatalf("tx.Commit() error = %v", err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("db.Close() error = %v", err)
+	}
+
+	forgeTrustFreshnessRows(t, paths, idx, "research")
+
+	if err := idx.CheckFresh("research"); err != nil {
+		t.Fatalf("CheckFresh() error = %v, want forged freshness rows to pass the disposable fast path", err)
+	}
+	if _, err := TrustedQuery(paths, TrustedQueryOptions{Query: "injected manifest trusted", Limit: 10}); err == nil || !strings.Contains(err.Error(), "published trust manifest") {
+		t.Fatalf("TrustedQuery() error = %v, want published-manifest binding failure", err)
+	}
+}
+
+func forgeTrustFreshnessRows(t *testing.T, paths Paths, idx IndexStore, workspace string) {
+	t.Helper()
+	root, err := ValidateWorkspace(paths, workspace)
+	if err != nil {
+		t.Fatalf("ValidateWorkspace() error = %v", err)
+	}
+	db, err := sql.Open("sqlite", indexDatabasePath(t, idx, workspace))
+	if err != nil {
+		t.Fatalf("sql.Open() error = %v", err)
+	}
+	defer db.Close()
+	mtimes, err := readTrustInputMtimes(db)
+	if err != nil {
+		t.Fatalf("readTrustInputMtimes() error = %v", err)
+	}
+	for path := range mtimes {
+		info, err := os.Lstat(filepath.Join(root, filepath.FromSlash(path)))
+		if err != nil {
+			t.Fatalf("Lstat(%s) error = %v", path, err)
+		}
+		if _, err := db.Exec("update trust_input_mtimes set modified_at = ?, change_token = ? where path = ?", info.ModTime().UnixNano(), fileChangeToken(info), path); err != nil {
+			t.Fatalf("update trust_input_mtimes(%s) error = %v", path, err)
+		}
+	}
+	directories, err := readTrustDirectories(db)
+	if err != nil {
+		t.Fatalf("readTrustDirectories() error = %v", err)
+	}
+	for _, directory := range directories {
+		info, err := os.Lstat(filepath.Join(root, filepath.FromSlash(directory.Path)))
+		if err != nil {
+			t.Fatalf("Lstat(directory %s) error = %v", directory.Path, err)
+		}
+		if _, err := db.Exec("update trust_directories set modified_at = ?, change_token = ? where path = ?", info.ModTime().UnixNano(), fileChangeToken(info), directory.Path); err != nil {
+			t.Fatalf("update trust_directories(%s) error = %v", directory.Path, err)
+		}
+	}
+}
+
 func TestTrustedQueryFailsClosedWhenIndexIsDirty(t *testing.T) {
 	paths := queryTestPaths(t)
 	idx := IndexStore{Paths: paths}

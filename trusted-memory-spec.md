@@ -177,8 +177,13 @@ hash and byte length. Raw evidence is untrusted source data, not trusted
 context, and is not indexed by `zbrain ask`.
 
 Evidence-based claims must reference existing immutable evidence IDs before
-approval. Derived claims must reference approved supporting claims or verified
-evidence. Owner claims require owner confirmation metadata.
+approval. Their `sources[].digest` uses the versioned
+`sha256:evidence-v1:<hex>` snapshot format, which covers the exact metadata bytes
+and the raw-byte length/SHA-256. The older raw-only `sha256:<hex>` source digest is
+rejected with an explicit supersede-and-reapprove recovery path rather than being
+silently trusted without metadata binding. Derived claims must reference approved
+supporting claims or verified evidence. Owner claims require owner confirmation
+metadata.
 
 ## 8. Derived Index and Freshness
 
@@ -209,15 +214,21 @@ the next `zbrain ask` fail closed with the offending path and instructs the
 operator to run `zbrain reindex`; retrieval is restored only after a clean
 rebuild.
 
-The digest check belongs at the index boundary, so normal queries do not need
-to reopen and rehash every returned claim. The outside-edit freshness check is
-a separate invariant: it prevents an already-built index from serving content
-that changed after the rebuild.
+The full trust-input digest check belongs at the index boundary, so normal queries do not
+need to reopen and rehash the entire workspace or every returned owner claim. The
+outside-edit freshness check is a separate invariant: it prevents an already-built
+index from serving content that changed after the rebuild. Because SQLite freshness
+metadata is disposable, `zbrain ask` also verifies that each returned indexed claim
+belongs to the published trust-input manifest and revalidates the current evidence
+and supporting-claim closure for returned approved claims; these targeted checks do
+not rebuild or rehash the workspace manifest.
 
 Digest verification, recursive supporting-claim and evidence validation, and
-outside-edit freshness checks are enforced at the rebuild boundary. Rejected
-rebuild state remains fail-closed through `zbrain ask`; rebuilding never repairs,
-rewrites, deletes, or auto-revokes invalid canonical inputs.
+outside-edit freshness checks are enforced at the rebuild boundary. Trusted queries
+repeat only the returned approved claim's canonical binding and evidence/dependency
+checks needed to keep disposable freshness metadata from bypassing current evidence
+validation. Rejected rebuild state remains fail-closed through `zbrain ask`;
+rebuilding never repairs, rewrites, deletes, or auto-revokes invalid canonical inputs.
 
 ## 9. Trusted Query Contract
 

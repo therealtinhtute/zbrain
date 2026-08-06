@@ -327,10 +327,11 @@ func beginCanonicalMutationUnlocked(paths Paths, workspace string) (WorkspaceGen
 }
 
 const (
-	workspaceGenerationHookBeforeCanonicalWrite     = "before-canonical-write"
-	workspaceGenerationHookRebuildAfterScan         = "rebuild-after-scan"
-	workspaceGenerationHookRebuildBeforePublication = "rebuild-before-publication"
-	workspaceGenerationHookTrustedQueryAfterLocking = "trusted-query-after-locking"
+	workspaceGenerationHookBeforeCanonicalWrite          = "before-canonical-write"
+	workspaceGenerationHookRebuildAfterScan              = "rebuild-after-scan"
+	workspaceGenerationHookRebuildBeforeFreshnessCapture = "rebuild-before-freshness-capture"
+	workspaceGenerationHookRebuildBeforePublication      = "rebuild-before-publication"
+	workspaceGenerationHookTrustedQueryAfterLocking      = "trusted-query-after-locking"
 )
 
 var workspaceGenerationHooks struct {
