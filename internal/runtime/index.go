@@ -500,34 +500,109 @@ func collectTrustInputMtimes(paths Paths, workspace string, manifest TrustInputM
 	return mtimes, nil
 }
 
+const unavailableFileChangeToken int64 = -1
+
 func fileChangeToken(info os.FileInfo) int64 {
+	if info == nil {
+		return unavailableFileChangeToken
+	}
 	value := reflect.ValueOf(info.Sys())
 	if !value.IsValid() {
-		return -1
+		return unavailableFileChangeToken
 	}
-	if value.Kind() == reflect.Pointer {
+	for value.Kind() == reflect.Pointer {
 		if value.IsNil() {
-			return -1
+			return unavailableFileChangeToken
 		}
 		value = value.Elem()
 	}
 	if value.Kind() != reflect.Struct {
-		return -1
+		return unavailableFileChangeToken
 	}
 	for _, name := range []string{"Ctim", "Ctimespec", "ChangeTime"} {
-		field := value.FieldByName(name)
-		if !field.IsValid() {
-			continue
-		}
-		if field.Kind() == reflect.Struct {
-			seconds := field.FieldByName("Sec")
-			nanoseconds := field.FieldByName("Nsec")
-			if seconds.IsValid() && nanoseconds.IsValid() && seconds.Kind() >= reflect.Int && seconds.Kind() <= reflect.Int64 && nanoseconds.Kind() >= reflect.Int && nanoseconds.Kind() <= reflect.Int64 {
-				return seconds.Int()*int64(time.Second) + nanoseconds.Int()
-			}
+		if token, ok := reflectChangeStamp(value.FieldByName(name)); ok {
+			return token
 		}
 	}
-	return -1
+	seconds, ok := reflectInteger(value.FieldByName("Ctime"))
+	if !ok {
+		return unavailableFileChangeToken
+	}
+	nanoseconds := int64(0)
+	nanosecondsValue := value.FieldByName("CtimeNsec")
+	if nanosecondsValue.IsValid() {
+		var ok bool
+		nanoseconds, ok = reflectInteger(nanosecondsValue)
+		if !ok {
+			return unavailableFileChangeToken
+		}
+	}
+	return combineChangeStamp(seconds, nanoseconds)
+}
+
+func reflectChangeStamp(value reflect.Value) (int64, bool) {
+	for value.IsValid() && value.Kind() == reflect.Pointer {
+		if value.IsNil() {
+			return 0, false
+		}
+		value = value.Elem()
+	}
+	if !value.IsValid() || value.Kind() != reflect.Struct {
+		return 0, false
+	}
+	seconds, ok := reflectInteger(value.FieldByName("Sec"))
+	if !ok {
+		return 0, false
+	}
+	nanoseconds, ok := reflectInteger(value.FieldByName("Nsec"))
+	if !ok {
+		return 0, false
+	}
+	token := combineChangeStamp(seconds, nanoseconds)
+	if token == unavailableFileChangeToken {
+		return 0, false
+	}
+	return token, true
+}
+
+func reflectInteger(value reflect.Value) (int64, bool) {
+	if !value.IsValid() {
+		return 0, false
+	}
+	switch value.Kind() {
+	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
+		if !value.CanInt() {
+			return 0, false
+		}
+		return value.Int(), true
+	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64, reflect.Uintptr:
+		if !value.CanUint() {
+			return 0, false
+		}
+		unsigned := value.Uint()
+		if unsigned > uint64(1<<63-1) {
+			return 0, false
+		}
+		return int64(unsigned), true
+	default:
+		return 0, false
+	}
+}
+
+func combineChangeStamp(seconds int64, nanoseconds int64) int64 {
+	nanosecondsPerSecond := int64(time.Second)
+	if nanoseconds < 0 || nanoseconds >= nanosecondsPerSecond {
+		return unavailableFileChangeToken
+	}
+	if seconds < (-1<<63)/nanosecondsPerSecond ||
+		seconds > ((1<<63-1)-nanoseconds)/nanosecondsPerSecond {
+		return unavailableFileChangeToken
+	}
+	token := seconds*nanosecondsPerSecond + nanoseconds
+	if token == unavailableFileChangeToken {
+		return unavailableFileChangeToken
+	}
+	return token
 }
 
 var trustFileChangeToken = fileChangeToken

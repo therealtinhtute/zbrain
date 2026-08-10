@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"sort"
 	"strings"
 	"time"
@@ -66,11 +67,26 @@ func (store ClaimStore) writeDraftUnlocked(workspace string, claim Claim) (Claim
 	if err != nil {
 		return Claim{}, err
 	}
+	matches, err := store.readCanonicalClaimsByID(workspace, claim.ID)
+	if err != nil {
+		return Claim{}, err
+	}
+	if len(matches) > 1 {
+		return Claim{}, duplicateCanonicalClaimError(claim.ID, matches)
+	}
 	var existing Claim
 	if requestedPath != "" {
 		existing, err = store.readClaimPath(workspace, requestedPath)
+		if err == nil && len(matches) == 1 && existing.Path != matches[0].Path {
+			return Claim{}, fmt.Errorf("claim %s already exists at canonical path %q; requested path %q would duplicate its identity", claim.ID, matches[0].Path, requestedPath)
+		}
+		if os.IsNotExist(err) && len(matches) == 1 {
+			return Claim{}, fmt.Errorf("claim %s already exists at canonical path %q; requested path %q would duplicate its identity", claim.ID, matches[0].Path, requestedPath)
+		}
+	} else if len(matches) == 1 {
+		existing, err = matches[0], nil
 	} else {
-		existing, err = store.readFlatClaim(workspace, claim.ID)
+		err = os.ErrNotExist
 	}
 	if err == nil {
 		if existing.Status != ClaimStatusDraft {
@@ -268,28 +284,50 @@ func (store ClaimStore) Read(workspace string, id string) (Claim, error) {
 	if !claimIDPattern.MatchString(id) {
 		return Claim{}, fmt.Errorf("claim id must match clm_<32 lowercase hex chars>")
 	}
-	claim, err := store.readFlatClaim(workspace, id)
-	if err == nil {
-		return claim, nil
-	}
-	if !os.IsNotExist(err) {
-		return Claim{}, err
-	}
-
-	workspaceRoot, err := ValidateWorkspace(store.Paths, workspace)
+	matches, err := store.readCanonicalClaimsByID(workspace, id)
 	if err != nil {
 		return Claim{}, err
+	}
+	if len(matches) == 0 {
+		return Claim{}, os.ErrNotExist
+	}
+	if len(matches) > 1 {
+		return Claim{}, duplicateCanonicalClaimError(id, matches)
+	}
+	return matches[0], nil
+}
+
+func (store ClaimStore) readCanonicalClaimsByID(workspace string, id string) ([]Claim, error) {
+	if !claimIDPattern.MatchString(id) {
+		return nil, fmt.Errorf("claim id must match clm_<32 lowercase hex chars>")
+	}
+	workspaceRoot, err := ValidateWorkspace(store.Paths, workspace)
+	if err != nil {
+		return nil, err
 	}
 	wikiRoot, err := ResolveWorkspacePath(store.Paths, workspace, "wiki")
 	if err != nil {
-		return Claim{}, err
+		return nil, err
 	}
-	var matches []Claim
+	matches, err := store.readFlatClaims(workspace, id)
+	if err != nil && !os.IsNotExist(err) {
+		return nil, err
+	}
+	nested, err := wikiHasNestedDirectories(wikiRoot)
+	if err != nil {
+		return nil, err
+	}
+	if !nested {
+		sort.Slice(matches, func(i, j int) bool { return matches[i].Path < matches[j].Path })
+		return matches, nil
+	}
+
+	matches = make([]Claim, 0)
 	err = filepath.WalkDir(wikiRoot, func(path string, entry os.DirEntry, walkErr error) error {
 		if walkErr != nil {
 			return walkErr
 		}
-		if entry.IsDir() || entry.Name() != id+".md" {
+		if entry.IsDir() || filepath.Ext(path) != ".md" {
 			return nil
 		}
 		workspaceRel, err := filepath.Rel(workspaceRoot, path)
@@ -304,6 +342,9 @@ func (store ClaimStore) Read(workspace string, id string) (Claim, error) {
 		if err != nil {
 			return err
 		}
+		if !isZbrainClaimDocument(contents) {
+			return nil
+		}
 		rel, err := filepath.Rel(wikiRoot, path)
 		if err != nil {
 			return err
@@ -314,53 +355,118 @@ func (store ClaimStore) Read(workspace string, id string) (Claim, error) {
 		if err != nil {
 			return err
 		}
+		if claim.ID != id {
+			return nil
+		}
 		matches = append(matches, claim)
 		return nil
 	})
 	if err != nil {
-		return Claim{}, err
+		return nil, err
 	}
-	if len(matches) == 0 {
-		return Claim{}, os.ErrNotExist
-	}
-	if len(matches) > 1 {
-		return Claim{}, fmt.Errorf("claim %s has multiple canonical documents", id)
-	}
-	return matches[0], nil
+	sort.Slice(matches, func(i, j int) bool { return matches[i].Path < matches[j].Path })
+	return matches, nil
 }
 
-func (store ClaimStore) readFlatClaim(workspace string, id string) (Claim, error) {
+func wikiHasNestedDirectories(wikiRoot string) (bool, error) {
+	for _, tier := range WikiTiers {
+		tierRoot := filepath.Join(wikiRoot, tier)
+		info, err := os.Lstat(tierRoot)
+		if os.IsNotExist(err) {
+			continue
+		}
+		if err != nil {
+			return false, err
+		}
+		if info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
+			return true, nil
+		}
+		hasNested, known := fileInfoHasSubdirectories(info)
+		if !known || hasNested {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+func fileInfoHasSubdirectories(info os.FileInfo) (bool, bool) {
+	if info == nil {
+		return false, false
+	}
+	value := reflect.ValueOf(info.Sys())
+	if !value.IsValid() {
+		return false, false
+	}
+	for value.Kind() == reflect.Pointer {
+		if value.IsNil() {
+			return false, false
+		}
+		value = value.Elem()
+	}
+	if value.Kind() != reflect.Struct {
+		return false, false
+	}
+	nlink, ok := reflectInteger(value.FieldByName("Nlink"))
+	if !ok || nlink < 2 {
+		return false, false
+	}
+	return nlink > 2, true
+}
+
+func duplicateCanonicalClaimError(id string, claims []Claim) error {
+	paths := make([]string, 0, len(claims))
+	for _, claim := range claims {
+		paths = append(paths, claim.Path)
+	}
+	return duplicateCanonicalClaimPathsError(id, paths)
+}
+
+func duplicateCanonicalClaimPathsError(id string, paths []string) error {
+	ordered := append([]string(nil), paths...)
+	sort.Strings(ordered)
+	return fmt.Errorf("duplicate canonical claim ID %q found at paths: %s", id, strings.Join(ordered, ", "))
+}
+
+func (store ClaimStore) readFlatClaims(workspace string, id string) ([]Claim, error) {
 	if !claimIDPattern.MatchString(id) {
-		return Claim{}, fmt.Errorf("claim id must match clm_<32 lowercase hex chars>")
+		return nil, fmt.Errorf("claim id must match clm_<32 lowercase hex chars>")
 	}
 	if _, err := ValidateWorkspace(store.Paths, workspace); err != nil {
-		return Claim{}, err
+		return nil, err
 	}
-	var matches []Claim
+	matches := make([]Claim, 0)
 	for _, tier := range WikiTiers {
 		relative := filepath.ToSlash(filepath.Join("wiki", tier, id+".md"))
 		path, err := ResolveWorkspacePath(store.Paths, workspace, relative)
 		if err != nil {
-			return Claim{}, err
+			return nil, err
 		}
 		contents, err := os.ReadFile(path)
 		if err == nil {
 			claim, err := ParseClaimMarkdown(tier, filepath.ToSlash(filepath.Join(tier, id+".md")), contents)
 			if err != nil {
-				return Claim{}, err
+				return nil, err
 			}
 			matches = append(matches, claim)
 			continue
 		}
 		if !os.IsNotExist(err) {
-			return Claim{}, err
+			return nil, err
 		}
 	}
 	if len(matches) == 0 {
-		return Claim{}, os.ErrNotExist
+		return nil, os.ErrNotExist
+	}
+	return matches, nil
+}
+
+func (store ClaimStore) readFlatClaim(workspace string, id string) (Claim, error) {
+	matches, err := store.readFlatClaims(workspace, id)
+	if err != nil {
+		return Claim{}, err
 	}
 	if len(matches) > 1 {
-		return Claim{}, fmt.Errorf("claim %s has multiple canonical documents", id)
+		return Claim{}, duplicateCanonicalClaimError(id, matches)
 	}
 	return matches[0], nil
 }
@@ -409,7 +515,14 @@ func (store ClaimStore) scanWorkspace(workspace string, verifyDigests bool) (Cla
 		}
 		return ClaimScan{}, err
 	}
+	type parsedClaim struct {
+		claim Claim
+		path  string
+	}
 	scan := ClaimScan{}
+	parsed := make([]parsedClaim, 0)
+	claimsByID := make(map[string][]parsedClaim)
+	invalidByPath := make(map[string][]string)
 	err = filepath.WalkDir(wikiRoot, func(path string, entry os.DirEntry, walkErr error) error {
 		if walkErr != nil {
 			return walkErr
@@ -440,24 +553,61 @@ func (store ClaimStore) scanWorkspace(workspace string, verifyDigests bool) (Cla
 		}
 		claim, err := ParseClaimMarkdown(strings.Split(rel, "/")[0], rel, contents)
 		if err != nil {
-			scan.Invalid = append(scan.Invalid, InvalidClaim{Path: rel, Error: err.Error()})
+			invalidByPath[rel] = append(invalidByPath[rel], err.Error())
 			return nil
 		}
+		parsedClaim := parsedClaim{claim: claim, path: rel}
+		parsed = append(parsed, parsedClaim)
+		claimsByID[claim.ID] = append(claimsByID[claim.ID], parsedClaim)
 		if verifyDigests {
 			if err := VerifyClaimDigest(claim); err != nil {
-				scan.Invalid = append(scan.Invalid, InvalidClaim{Path: rel, Error: err.Error()})
-				return nil
+				invalidByPath[rel] = append(invalidByPath[rel], err.Error())
 			}
 		}
-		scan.Claims = append(scan.Claims, claim)
 		return nil
 	})
 	if err != nil {
 		return ClaimScan{}, err
 	}
+
+	ids := make([]string, 0, len(claimsByID))
+	for id, claims := range claimsByID {
+		if len(claims) > 1 {
+			ids = append(ids, id)
+		}
+	}
+	sort.Strings(ids)
+	for _, id := range ids {
+		claims := claimsByID[id]
+		paths := make([]string, 0, len(claims))
+		for _, parsedClaim := range claims {
+			paths = append(paths, parsedClaim.path)
+		}
+		sort.Strings(paths)
+		reason := fmt.Sprintf("duplicate canonical claim ID %q found at paths: %s", id, strings.Join(paths, ", "))
+		for _, parsedClaim := range claims {
+			invalidByPath[parsedClaim.path] = append(invalidByPath[parsedClaim.path], reason)
+		}
+	}
+
+	sort.Slice(parsed, func(i, j int) bool { return parsed[i].path < parsed[j].path })
+	for _, parsedClaim := range parsed {
+		if len(invalidByPath[parsedClaim.path]) != 0 {
+			continue
+		}
+		scan.Claims = append(scan.Claims, parsedClaim.claim)
+	}
+	invalidPaths := make([]string, 0, len(invalidByPath))
+	for path := range invalidByPath {
+		invalidPaths = append(invalidPaths, path)
+	}
+	sort.Strings(invalidPaths)
+	for _, path := range invalidPaths {
+		reasons := invalidByPath[path]
+		sort.Strings(reasons)
+		scan.Invalid = append(scan.Invalid, InvalidClaim{Path: path, Error: strings.Join(reasons, "; ")})
+	}
 	sort.Strings(scan.LegacyUnindexed)
-	sort.Slice(scan.Invalid, func(i, j int) bool { return scan.Invalid[i].Path < scan.Invalid[j].Path })
-	sort.Slice(scan.Claims, func(i, j int) bool { return scan.Claims[i].Path < scan.Claims[j].Path })
 	return scan, nil
 }
 
