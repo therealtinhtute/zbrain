@@ -2,9 +2,9 @@
 
 ## Pipeline
 
-1. Resolve the primary workspace from `zbrain workspace current` or an explicit `--workspace` flag.
-2. Include secondary workspaces only when passed with `--include`.
-3. Run `zbrain ask [--workspace <name>] [--include <name>]... <query>` to retrieve trusted context JSON.
+1. Resolve the primary workspace from `zbrain workspace current` or an explicit `--workspace "$workspace"` value.
+2. Include secondary workspaces only when the caller explicitly passes each `--include "$include"` value.
+3. Pass the query as one argv value. In a POSIX shell, use an argv array such as `args=(zbrain ask); args+=("$query"); "${args[@]}"` rather than concatenating command text.
 4. Treat `status: ready` as usable context, `status: gap` as insufficient approved memory, and `status: blocked` as an unresolved explicit conflict.
 
 ## Ranking

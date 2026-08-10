@@ -2,10 +2,12 @@
 
 ## Current Pipeline
 
-1. Capture a local snapshot with `zbrain evidence add --file <path> --origin <uri-or-path> [--media-type <type>] [--workspace <name>]`.
+Resolve the primary workspace with `zbrain workspace current`. Use `--workspace "$workspace"` only after explicit selection; evidence and mutation commands do not expand to secondary workspaces.
+
+1. Capture a local snapshot with `zbrain evidence add --file "$file" --origin "$origin" [--media-type "$media_type"] [--workspace "$workspace"]`. Pass each value as a separate argv element.
 2. Draft OKF claim concepts that reference evidence IDs when the claim is based on external facts.
 3. Approve only claims that pass their basis-specific proof rule.
-4. Run `zbrain reindex [--workspace <name>]` before trusted retrieval.
+4. Run `zbrain reindex [--workspace "$workspace"]` before trusted retrieval, passing the workspace as one argv value when explicitly selected.
 
 ## Required Guards
 
