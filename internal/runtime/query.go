@@ -149,7 +149,7 @@ func TrustedQuery(paths Paths, options TrustedQueryOptions) (TrustedQueryRespons
 			return TrustedQueryResponse{}, err
 		}
 		for _, claim := range approved {
-			if err := validateIndexedClaimBinding(paths, workspace, claim, &manifest, nil, nil); err != nil {
+			if err := validateIndexedClaimBindingInternal(paths, workspace, claim, &manifest, nil, nil, false); err != nil {
 				return TrustedQueryResponse{}, err
 			}
 			response.Claims = append(response.Claims, toQueryClaim(workspace, claim))
@@ -159,7 +159,7 @@ func TrustedQuery(paths Paths, options TrustedQueryOptions) (TrustedQueryRespons
 			return TrustedQueryResponse{}, err
 		}
 		for _, claim := range drafts {
-			if err := validateIndexedClaimBinding(paths, workspace, claim, &manifest, nil, nil); err != nil {
+			if err := validateIndexedClaimBindingInternal(paths, workspace, claim, &manifest, nil, nil, false); err != nil {
 				return TrustedQueryResponse{}, err
 			}
 			response.PromotionCandidates = append(response.PromotionCandidates, toQueryClaim(workspace, claim))
@@ -185,6 +185,10 @@ func TrustedQuery(paths Paths, options TrustedQueryOptions) (TrustedQueryRespons
 }
 
 func validateIndexedClaimBinding(paths Paths, workspace string, indexed IndexedClaim, manifest *TrustInputManifest, evidenceValidator *EvidenceValidator, trustValidator *TrustValidator) error {
+	return validateIndexedClaimBindingInternal(paths, workspace, indexed, manifest, evidenceValidator, trustValidator, true)
+}
+
+func validateIndexedClaimBindingInternal(paths Paths, workspace string, indexed IndexedClaim, manifest *TrustInputManifest, evidenceValidator *EvidenceValidator, trustValidator *TrustValidator, checkCanonicalSet bool) error {
 	canonicalRelative := filepath.ToSlash(filepath.Join("wiki", filepath.FromSlash(indexed.Path)))
 	canonicalPath, err := ResolveWorkspacePath(paths, workspace, canonicalRelative)
 	if err != nil {
@@ -197,6 +201,29 @@ func validateIndexedClaimBinding(paths Paths, workspace string, indexed IndexedC
 	canonical, err := ParseClaimMarkdown(indexed.Tier, indexed.Path, contents)
 	if err != nil {
 		return fmt.Errorf("parse canonical claim %q: %w", indexed.ID, err)
+	}
+	if manifest != nil {
+		canonicalPaths := canonicalClaimPathsFromManifest(*manifest, indexed.ID)
+		if len(canonicalPaths) > 1 {
+			return duplicateCanonicalClaimPathsError(indexed.ID, canonicalPaths)
+		}
+		if checkCanonicalSet {
+			canonicalClaims, err := (ClaimStore{Paths: paths}).readCanonicalClaimsByID(workspace, indexed.ID)
+			if err != nil {
+				return fmt.Errorf("load canonical claim set %q: %w", indexed.ID, err)
+			}
+			if len(canonicalClaims) > 1 {
+				return duplicateCanonicalClaimError(indexed.ID, canonicalClaims)
+			}
+		}
+	} else {
+		canonicalClaims, err := (ClaimStore{Paths: paths}).readCanonicalClaimsByID(workspace, indexed.ID)
+		if err != nil {
+			return fmt.Errorf("load canonical claim set %q: %w", indexed.ID, err)
+		}
+		if len(canonicalClaims) > 1 {
+			return duplicateCanonicalClaimError(indexed.ID, canonicalClaims)
+		}
 	}
 	if manifest != nil && !trustInputManifestContainsClaim(*manifest, canonicalRelative) {
 		return fmt.Errorf("indexed claim %q is not present in published trust manifest; run zbrain reindex", indexed.ID)
@@ -227,6 +254,9 @@ func validateIndexedClaimBinding(paths Paths, workspace string, indexed IndexedC
 	if canonical.Status != ClaimStatusApproved {
 		return nil
 	}
+	if err := VerifyClaimDigest(canonical); err != nil {
+		return fmt.Errorf("approved claim %q verification failed: %w", indexed.ID, err)
+	}
 	if len(canonical.EvidenceIDs) == 0 && len(canonical.SupportingClaimIDs) == 0 {
 		return nil
 	}
@@ -247,9 +277,6 @@ func validateIndexedClaimBinding(paths Paths, workspace string, indexed IndexedC
 			return validateClaimEvidence(evidenceValidator, support)
 		}
 	}
-	if err := VerifyClaimDigest(canonical); err != nil {
-		return fmt.Errorf("approved claim %q verification failed: %w", indexed.ID, err)
-	}
 	if len(canonical.EvidenceIDs) > 0 {
 		if evidenceValidator == nil {
 			return fmt.Errorf("approved claim %q evidence validator is unavailable", indexed.ID)
@@ -267,6 +294,19 @@ func validateIndexedClaimBinding(paths Paths, workspace string, indexed IndexedC
 		}
 	}
 	return nil
+}
+
+func canonicalClaimPathsFromManifest(manifest TrustInputManifest, id string) []string {
+	suffix := "/" + id + ".md"
+	paths := make([]string, 0)
+	for _, entry := range manifest.Entries {
+		if entry.Kind != TrustInputKindClaim || !strings.HasPrefix(entry.Path, "wiki/") || !strings.HasSuffix(entry.Path, suffix) {
+			continue
+		}
+		paths = append(paths, strings.TrimPrefix(entry.Path, "wiki/"))
+	}
+	sort.Strings(paths)
+	return paths
 }
 
 func trustInputManifestContainsClaim(manifest TrustInputManifest, path string) bool {
@@ -317,9 +357,12 @@ func findQueryConflicts(paths Paths, claims []QueryClaim) ([]QueryConflict, erro
 	conflicts := []QueryConflict{}
 	seen := map[string]bool{}
 	for _, queryClaim := range claims {
-		claim, err := store.Read(queryClaim.Workspace, queryClaim.ID)
+		claim, err := store.readClaimPath(queryClaim.Workspace, queryClaim.Path)
 		if err != nil {
 			return nil, err
+		}
+		if claim.ID != queryClaim.ID {
+			return nil, fmt.Errorf("query claim %q canonical path %q contains claim %q", queryClaim.ID, queryClaim.Path, claim.ID)
 		}
 		for _, other := range claim.ConflictsWith {
 			if !byWorkspace[queryClaim.Workspace][other] {
