@@ -60,6 +60,60 @@ func TestReindexPublishesRejectedStateForLegacyAndEvidence(t *testing.T) {
 	}
 }
 
+func TestRebuildRejectsDuplicateCanonicalClaimIDs(t *testing.T) {
+	paths := indexTestPaths(t)
+	id := "clm_77777777777777777777777777777777"
+	flat := finalizeApprovedStoreClaim(t, indexClaim(id, "Flat duplicate index marker", ClaimBasisOwner))
+	writeCanonicalStoreClaim(t, paths, flat)
+
+	nestedPath := "projects/topics/security/" + id + ".md"
+	nested := indexClaim(id, "Nested duplicate index marker", ClaimBasisOwner)
+	nested.Body = "nested duplicate index marker\n"
+	nested.Path = nestedPath
+	nested = finalizeApprovedStoreClaim(t, nested)
+	nestedAbsolutePath := filepath.Join(paths.WorkspacesDir, "research", "wiki", filepath.FromSlash(nestedPath))
+	if err := writeClaimAtomic(nestedAbsolutePath, nested); err != nil {
+		t.Fatalf("writeClaimAtomic(nested duplicate) error = %v", err)
+	}
+
+	flatPath := "projects/" + id + ".md"
+	flatAbsolutePath := filepath.Join(paths.WorkspacesDir, "research", "wiki", filepath.FromSlash(flatPath))
+	beforeFlat := sha256Hex(t, flatAbsolutePath)
+	beforeNested := sha256Hex(t, nestedAbsolutePath)
+	idx := IndexStore{Paths: paths}
+	summary, err := idx.Rebuild("research")
+	if err != nil {
+		t.Fatalf("Rebuild() error = %v", err)
+	}
+	if summary.Approved != 0 || summary.Invalid != 2 || summary.InvalidCount != 2 || summary.RebuildState != RebuildStatusRejected {
+		t.Fatalf("summary = %#v, want rejected duplicate state", summary)
+	}
+	if len(summary.InvalidClaims) != 2 || summary.InvalidClaims[0].Path != flatPath || summary.InvalidClaims[1].Path != nestedPath {
+		t.Fatalf("InvalidClaims = %#v, want deterministic duplicate paths", summary.InvalidClaims)
+	}
+	for _, invalid := range summary.InvalidClaims {
+		if !strings.Contains(invalid.Error, id) || !strings.Contains(invalid.Error, flatPath) || !strings.Contains(invalid.Error, nestedPath) || !strings.Contains(invalid.Error, "duplicate canonical claim ID") {
+			t.Fatalf("invalid claim = %#v, want ID/path repair reason", invalid)
+		}
+	}
+	manifest, state := readPublishedIndexState(t, idx, "research")
+	if state.Status != RebuildStatusRejected || state.InvalidCount != 2 || state.ManifestDigest != manifest.Digest {
+		t.Fatalf("published state = %#v, manifest = %#v", state, manifest)
+	}
+	if statuses := indexedClaimStatuses(t, paths, "research"); len(statuses) != 0 {
+		t.Fatalf("indexed duplicate claims = %#v, want none", statuses)
+	}
+	if _, err := os.Stat(indexDirtyPath(t, idx, "research")); !os.IsNotExist(err) {
+		t.Fatalf("dirty marker stat error = %v, want missing after rejected publication", err)
+	}
+	if after := sha256Hex(t, flatAbsolutePath); after != beforeFlat {
+		t.Fatalf("flat duplicate changed: before %s after %s", beforeFlat, after)
+	}
+	if after := sha256Hex(t, nestedAbsolutePath); after != beforeNested {
+		t.Fatalf("nested duplicate changed: before %s after %s", beforeNested, after)
+	}
+}
+
 func TestRebuildRecoversPendingTransition(t *testing.T) {
 	paths := indexTestPaths(t)
 	store := ClaimStore{Paths: paths, Now: fixedIndexNow}
@@ -685,6 +739,86 @@ func TestCheckFreshReportsStaleAfterTrustInputDeletion(t *testing.T) {
 	freshErr := idx.CheckFresh("research")
 	if freshErr == nil || !strings.Contains(freshErr.Error(), claimPath) || !strings.Contains(freshErr.Error(), "run zbrain reindex") {
 		t.Fatalf("CheckFresh() error = %v, want stale deletion error naming %q", freshErr, claimPath)
+	}
+}
+
+type tokenTestFileInfo struct {
+	sys any
+}
+
+func (info tokenTestFileInfo) Name() string       { return "token-test" }
+func (info tokenTestFileInfo) Size() int64        { return 0 }
+func (info tokenTestFileInfo) Mode() os.FileMode  { return 0 }
+func (info tokenTestFileInfo) ModTime() time.Time { return time.Time{} }
+func (info tokenTestFileInfo) IsDir() bool        { return false }
+func (info tokenTestFileInfo) Sys() any           { return info.sys }
+
+type tokenTestTimespec struct {
+	Sec  int64
+	Nsec int64
+}
+
+type tokenTestCtim struct {
+	Ctim tokenTestTimespec
+}
+
+type tokenTestCtimespec struct {
+	Ctimespec tokenTestTimespec
+}
+
+type tokenTestScalar struct {
+	Ctime     int64
+	CtimeNsec int64
+}
+
+type tokenTestMalformed struct {
+	ChangeTime string
+}
+
+func TestFileChangeToken(t *testing.T) {
+	want := int64(42)*int64(time.Second) + 123
+	cases := []struct {
+		name string
+		sys  any
+		want int64
+	}{
+		{name: "linux ctime shape", sys: tokenTestCtim{Ctim: tokenTestTimespec{Sec: 42, Nsec: 123}}, want: want},
+		{name: "darwin ctime shape", sys: tokenTestCtimespec{Ctimespec: tokenTestTimespec{Sec: 42, Nsec: 123}}, want: want},
+		{name: "scalar ctime shape", sys: tokenTestScalar{Ctime: 42, CtimeNsec: 123}, want: want},
+		{name: "pointer metadata", sys: &tokenTestCtim{Ctim: tokenTestTimespec{Sec: 42, Nsec: 123}}, want: want},
+		{name: "unsupported metadata", sys: tokenTestMalformed{}, want: unavailableFileChangeToken},
+		{name: "nil metadata", sys: nil, want: unavailableFileChangeToken},
+	}
+	for _, test := range cases {
+		t.Run(test.name, func(t *testing.T) {
+			if got := fileChangeToken(tokenTestFileInfo{sys: test.sys}); got != test.want {
+				t.Fatalf("fileChangeToken() = %d, want %d", got, test.want)
+			}
+		})
+	}
+	if got := fileChangeToken(nil); got != unavailableFileChangeToken {
+		t.Fatalf("fileChangeToken(nil) = %d, want %d", got, unavailableFileChangeToken)
+	}
+}
+
+func TestCombineChangeStampRejectsInvalidRange(t *testing.T) {
+	cases := []struct {
+		name        string
+		seconds     int64
+		nanoseconds int64
+	}{
+		{name: "negative nanoseconds", seconds: 0, nanoseconds: -1},
+		{name: "nanoseconds too large", seconds: 0, nanoseconds: int64(time.Second)},
+		{name: "positive overflow", seconds: int64(1<<63 - 1), nanoseconds: 0},
+		{name: "negative overflow", seconds: -1 << 63, nanoseconds: 0},
+		{name: "unavailable collision", seconds: -1, nanoseconds: int64(time.Second) - 1},
+	}
+	for _, test := range cases {
+		t.Run(test.name, func(t *testing.T) {
+			if got := combineChangeStamp(test.seconds, test.nanoseconds); got != unavailableFileChangeToken {
+				t.Fatalf("combineChangeStamp() = %d, want %d", got, unavailableFileChangeToken)
+			}
+		})
 	}
 }
 

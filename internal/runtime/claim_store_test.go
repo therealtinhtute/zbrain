@@ -890,6 +890,211 @@ func sha256Hex(t *testing.T, path string) string {
 	return hex.EncodeToString(sum[:])
 }
 
+func TestClaimStoreScanRejectsDuplicateCanonicalClaimIDs(t *testing.T) {
+	paths, _ := claimStoreTestPaths(t)
+	store := ClaimStore{Paths: paths, Now: fixedClaimStoreNow}
+	id := "clm_44444444444444444444444444444444"
+	flat := validStoreClaim(id, ClaimBasisOwner)
+	flat.Title = "Flat duplicate marker"
+	flat.Body = "flat duplicate marker\n"
+	writeCanonicalStoreClaim(t, paths, flat)
+
+	nestedPath := "projects/topics/security/" + id + ".md"
+	nested := flat
+	nested.Title = "Nested duplicate marker"
+	nested.Body = "nested duplicate marker\n"
+	nested.Path = nestedPath
+	writePath := filepath.Join(paths.WorkspacesDir, "research", "wiki", filepath.FromSlash(nestedPath))
+	if err := writeClaimAtomic(writePath, nested); err != nil {
+		t.Fatalf("writeClaimAtomic(nested duplicate) error = %v", err)
+	}
+
+	flatPath := "projects/" + id + ".md"
+	beforeFlat := sha256Hex(t, filepath.Join(paths.WorkspacesDir, "research", "wiki", filepath.FromSlash(flatPath)))
+	beforeNested := sha256Hex(t, writePath)
+	scan, err := store.ScanWorkspace("research")
+	if err != nil {
+		t.Fatalf("ScanWorkspace() error = %v", err)
+	}
+	if len(scan.Claims) != 0 {
+		t.Fatalf("Claims = %#v, want no ambiguous claims", scan.Claims)
+	}
+	if len(scan.Invalid) != 2 {
+		t.Fatalf("Invalid = %#v, want one entry per duplicate path", scan.Invalid)
+	}
+	wantPaths := []string{flatPath, nestedPath}
+	for index, invalid := range scan.Invalid {
+		if invalid.Path != wantPaths[index] {
+			t.Fatalf("Invalid[%d].Path = %q, want %q", index, invalid.Path, wantPaths[index])
+		}
+		for _, path := range wantPaths {
+			if !strings.Contains(invalid.Error, path) {
+				t.Fatalf("Invalid[%d].Error = %q, want path %q", index, invalid.Error, path)
+			}
+		}
+		if !strings.Contains(invalid.Error, id) || !strings.Contains(invalid.Error, "duplicate canonical claim ID") {
+			t.Fatalf("Invalid[%d].Error = %q, want deterministic duplicate-ID reason", index, invalid.Error)
+		}
+	}
+	if after := sha256Hex(t, filepath.Join(paths.WorkspacesDir, "research", "wiki", filepath.FromSlash(flatPath))); after != beforeFlat {
+		t.Fatalf("flat duplicate changed: before %s after %s", beforeFlat, after)
+	}
+	if after := sha256Hex(t, writePath); after != beforeNested {
+		t.Fatalf("nested duplicate changed: before %s after %s", beforeNested, after)
+	}
+
+	trustScan, err := store.ScanWorkspaceForTrust("research")
+	if err != nil {
+		t.Fatalf("ScanWorkspaceForTrust() error = %v", err)
+	}
+	if len(trustScan.Claims) != 0 || len(trustScan.Invalid) != 2 {
+		t.Fatalf("trust scan = %#v, want no claims and two invalid duplicate paths", trustScan)
+	}
+}
+
+func TestClaimStoreDuplicateCanonicalIDBlocksLifecycle(t *testing.T) {
+	paths, _ := claimStoreTestPaths(t)
+	store := ClaimStore{Paths: paths, Now: fixedClaimStoreNow}
+	id := "clm_55555555555555555555555555555555"
+	flat := validStoreClaim(id, ClaimBasisOwner)
+	flat.Title = "Flat lifecycle duplicate"
+	flat.Body = "flat lifecycle duplicate\n"
+	writeCanonicalStoreClaim(t, paths, flat)
+
+	nestedPath := "projects/topics/security/" + id + ".md"
+	nested := flat
+	nested.Title = "Nested lifecycle duplicate"
+	nested.Body = "nested lifecycle duplicate\n"
+	nested.Path = nestedPath
+	nestedAbsolutePath := filepath.Join(paths.WorkspacesDir, "research", "wiki", filepath.FromSlash(nestedPath))
+	if err := writeClaimAtomic(nestedAbsolutePath, nested); err != nil {
+		t.Fatalf("writeClaimAtomic(nested duplicate) error = %v", err)
+	}
+
+	flatPath := "projects/" + id + ".md"
+	flatAbsolutePath := filepath.Join(paths.WorkspacesDir, "research", "wiki", filepath.FromSlash(flatPath))
+	beforeFlat := sha256Hex(t, flatAbsolutePath)
+	beforeNested := sha256Hex(t, nestedAbsolutePath)
+	expectDuplicate := func(operation string, err error) {
+		t.Helper()
+		if err == nil {
+			t.Fatalf("%s error = nil, want duplicate-ID rejection", operation)
+		}
+		if !strings.Contains(err.Error(), "duplicate canonical claim ID") || !strings.Contains(err.Error(), id) || !strings.Contains(err.Error(), flatPath) || !strings.Contains(err.Error(), nestedPath) {
+			t.Fatalf("%s error = %v, want deterministic duplicate-ID paths", operation, err)
+		}
+	}
+
+	if _, err := store.Read("research", id); err != nil {
+		expectDuplicate("Read", err)
+	} else {
+		t.Fatalf("Read() error = nil, want duplicate-ID rejection")
+	}
+
+	flat.Body = "mutated flat duplicate\n"
+	if _, err := store.WriteDraft("research", flat); err != nil {
+		expectDuplicate("WriteDraft(flat)", err)
+	} else {
+		t.Fatalf("WriteDraft(flat) error = nil, want duplicate-ID rejection")
+	}
+	nested.Body = "mutated nested duplicate\n"
+	if _, err := store.WriteDraft("research", nested); err != nil {
+		expectDuplicate("WriteDraft(nested)", err)
+	} else {
+		t.Fatalf("WriteDraft(nested) error = nil, want duplicate-ID rejection")
+	}
+	if _, err := store.Approve("research", id); err != nil {
+		expectDuplicate("Approve", err)
+	} else {
+		t.Fatalf("Approve() error = nil, want duplicate-ID rejection")
+	}
+	if _, err := store.Revoke("research", id, "ambiguous"); err != nil {
+		expectDuplicate("Revoke", err)
+	} else {
+		t.Fatalf("Revoke() error = nil, want duplicate-ID rejection")
+	}
+	replacementID := "clm_66666666666666666666666666666666"
+	if _, err := store.WriteSupersedingDraft("research", id, validStoreClaim(replacementID, ClaimBasisOwner)); err != nil {
+		expectDuplicate("WriteSupersedingDraft", err)
+	} else {
+		t.Fatalf("WriteSupersedingDraft() error = nil, want duplicate-ID rejection")
+	}
+
+	if after := sha256Hex(t, flatAbsolutePath); after != beforeFlat {
+		t.Fatalf("flat duplicate changed: before %s after %s", beforeFlat, after)
+	}
+	if after := sha256Hex(t, nestedAbsolutePath); after != beforeNested {
+		t.Fatalf("nested duplicate changed: before %s after %s", beforeNested, after)
+	}
+	replacementPath := filepath.Join(paths.WorkspacesDir, "research", "wiki", "projects", replacementID+".md")
+	if _, err := os.Stat(replacementPath); !os.IsNotExist(err) {
+		t.Fatalf("replacement claim was created, stat error = %v", err)
+	}
+}
+
+func TestClaimStoreAliasFilenameDuplicateCanonicalID(t *testing.T) {
+	paths, _ := claimStoreTestPaths(t)
+	store := ClaimStore{Paths: paths, Now: fixedClaimStoreNow}
+	id := "clm_aaaaaaaabbbbbbbbccccccccdddddddd"
+	flat := validStoreClaim(id, ClaimBasisOwner)
+	writeCanonicalStoreClaim(t, paths, flat)
+
+	aliasPath := "projects/topics/security/alias.md"
+	alias := flat
+	alias.Path = aliasPath
+	alias.Title = "Alias duplicate"
+	alias.Body = "alias duplicate\n"
+	aliasAbsolutePath := filepath.Join(paths.WorkspacesDir, "research", "wiki", filepath.FromSlash(aliasPath))
+	if err := writeClaimAtomic(aliasAbsolutePath, alias); err != nil {
+		t.Fatalf("writeClaimAtomic(alias duplicate) error = %v", err)
+	}
+
+	flatPath := "projects/" + id + ".md"
+	flatAbsolutePath := filepath.Join(paths.WorkspacesDir, "research", "wiki", filepath.FromSlash(flatPath))
+	beforeFlat := sha256Hex(t, flatAbsolutePath)
+	beforeAlias := sha256Hex(t, aliasAbsolutePath)
+	expectDuplicate := func(operation string, err error) {
+		t.Helper()
+		if err == nil {
+			t.Fatalf("%s error = nil, want duplicate-ID rejection", operation)
+		}
+		if !strings.Contains(err.Error(), "duplicate canonical claim ID") || !strings.Contains(err.Error(), id) || !strings.Contains(err.Error(), flatPath) || !strings.Contains(err.Error(), aliasPath) {
+			t.Fatalf("%s error = %v, want duplicate-ID paths", operation, err)
+		}
+	}
+
+	if _, err := store.Read("research", id); err != nil {
+		expectDuplicate("Read", err)
+	} else {
+		t.Fatalf("Read() error = nil, want duplicate-ID rejection")
+	}
+	alias.Body = "mutated alias duplicate\n"
+	if _, err := store.WriteDraft("research", alias); err != nil {
+		expectDuplicate("WriteDraft(alias)", err)
+	} else {
+		t.Fatalf("WriteDraft(alias) error = nil, want duplicate-ID rejection")
+	}
+
+	scan, err := store.ScanWorkspace("research")
+	if err != nil {
+		t.Fatalf("ScanWorkspace() error = %v", err)
+	}
+	if len(scan.Claims) != 0 || len(scan.Invalid) != 2 {
+		t.Fatalf("scan = %#v, want no claims and two invalid duplicate paths", scan)
+	}
+	for _, invalid := range scan.Invalid {
+		if !strings.Contains(invalid.Error, id) || !strings.Contains(invalid.Error, flatPath) || !strings.Contains(invalid.Error, aliasPath) {
+			t.Fatalf("invalid claim = %#v, want both duplicate paths", invalid)
+		}
+	}
+	if after := sha256Hex(t, flatAbsolutePath); after != beforeFlat {
+		t.Fatalf("flat duplicate changed: before %s after %s", beforeFlat, after)
+	}
+	if after := sha256Hex(t, aliasAbsolutePath); after != beforeAlias {
+		t.Fatalf("alias duplicate changed: before %s after %s", beforeAlias, after)
+	}
+}
+
 func TestNestedClaimBoundary(t *testing.T) {
 	paths, _ := claimStoreTestPaths(t)
 	store := ClaimStore{Paths: paths, Now: fixedClaimStoreNow}

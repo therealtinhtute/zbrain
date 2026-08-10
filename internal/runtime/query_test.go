@@ -567,6 +567,95 @@ func TestTrustedQueryReturnsApprovedClaimsAndPromotionCandidatesSeparately(t *te
 	}
 }
 
+func TestCanonicalIndexBindingRejectsDuplicateCanonicalClaimID(t *testing.T) {
+	paths := queryTestPaths(t)
+	store := ClaimStore{Paths: paths, Now: fixedQueryNow}
+	id := "clm_88888888888888888888888888888888"
+	flat := queryClaim(id, "Flat duplicate query marker", ClaimBasisOwner)
+	flat.Body = "duplicate binding query marker\n"
+	if _, err := store.WriteDraft("research", flat); err != nil {
+		t.Fatalf("WriteDraft(flat) error = %v", err)
+	}
+	if _, err := store.Approve("research", id); err != nil {
+		t.Fatalf("Approve(flat) error = %v", err)
+	}
+	idx := IndexStore{Paths: paths}
+	if _, err := idx.Rebuild("research"); err != nil {
+		t.Fatalf("Rebuild() error = %v", err)
+	}
+	indexed, err := idx.Search("research", SearchOptions{Query: "duplicate binding", Statuses: []ClaimStatus{ClaimStatusApproved}, Limit: 10})
+	if err != nil {
+		t.Fatalf("Search() error = %v", err)
+	}
+	if len(indexed) != 1 || indexed[0].ID != id {
+		t.Fatalf("indexed = %#v, want one flat claim", indexed)
+	}
+	nestedPath := "projects/topics/security/alias.md"
+	nested := queryClaim(id, "Nested duplicate query marker", ClaimBasisOwner)
+	nested.Body = "nested duplicate query marker\n"
+	nested.Path = nestedPath
+	nested = finalizeApprovedStoreClaim(t, nested)
+	nestedAbsolutePath := filepath.Join(paths.WorkspacesDir, "research", "wiki", filepath.FromSlash(nestedPath))
+	if err := writeClaimAtomic(nestedAbsolutePath, nested); err != nil {
+		t.Fatalf("writeClaimAtomic(nested duplicate) error = %v", err)
+	}
+	manifest, err := BuildTrustInputManifest(paths, "research")
+	if err != nil {
+		t.Fatalf("BuildTrustInputManifest() error = %v", err)
+	}
+
+	if err := validateIndexedClaimBinding(paths, "research", indexed[0], &manifest, nil, nil); err == nil || !strings.Contains(err.Error(), "duplicate canonical claim ID") || !strings.Contains(err.Error(), id) || !strings.Contains(err.Error(), nestedPath) {
+		t.Fatalf("validateIndexedClaimBinding() error = %v, want duplicate-ID rejection", err)
+	}
+	if _, err := TrustedQuery(paths, TrustedQueryOptions{Query: "duplicate binding", Limit: 10}); err == nil {
+		t.Fatalf("TrustedQuery() error = nil, want duplicate canonical input rejection")
+	}
+}
+
+func TestCanonicalIndexBindingRejectsApprovedOwnerDigestMismatch(t *testing.T) {
+	paths := queryTestPaths(t)
+	store := ClaimStore{Paths: paths, Now: fixedQueryNow}
+	claim := queryClaim("clm_99999999999999999999999999999999", "Owner digest binding", ClaimBasisOwner)
+	claim.Body = "owner digest binding marker\n"
+	if _, err := store.WriteDraft("research", claim); err != nil {
+		t.Fatalf("WriteDraft() error = %v", err)
+	}
+	if _, err := store.Approve("research", claim.ID); err != nil {
+		t.Fatalf("Approve() error = %v", err)
+	}
+	idx := IndexStore{Paths: paths}
+	if _, err := idx.Rebuild("research"); err != nil {
+		t.Fatalf("Rebuild() error = %v", err)
+	}
+	indexed, err := idx.Search("research", SearchOptions{Query: "owner digest", Statuses: []ClaimStatus{ClaimStatusApproved}, Limit: 10})
+	if err != nil {
+		t.Fatalf("Search() error = %v", err)
+	}
+	if len(indexed) != 1 || indexed[0].ID != claim.ID {
+		t.Fatalf("indexed = %#v, want one approved owner claim", indexed)
+	}
+
+	claimPath := "projects/" + claim.ID + ".md"
+	canonical, err := store.readClaimPath("research", claimPath)
+	if err != nil {
+		t.Fatalf("readClaimPath() error = %v", err)
+	}
+	canonical.Basis = ClaimBasisDerived
+	canonicalPath := filepath.Join(paths.WorkspacesDir, "research", "wiki", filepath.FromSlash(claimPath))
+	if err := writeClaimAtomic(canonicalPath, canonical); err != nil {
+		t.Fatalf("writeClaimAtomic() error = %v", err)
+	}
+	manifest, err := BuildTrustInputManifest(paths, "research")
+	if err != nil {
+		t.Fatalf("BuildTrustInputManifest() error = %v", err)
+	}
+
+	err = validateIndexedClaimBinding(paths, "research", indexed[0], &manifest, nil, nil)
+	if err == nil || !strings.Contains(err.Error(), "verification failed") || !strings.Contains(err.Error(), "verification digest mismatch") {
+		t.Fatalf("validateIndexedClaimBinding() error = %v, want approved owner digest rejection", err)
+	}
+}
+
 func TestCanonicalIndexBinding(t *testing.T) {
 	tests := []struct {
 		name     string
