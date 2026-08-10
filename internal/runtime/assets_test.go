@@ -51,16 +51,9 @@ var documentedEmbeddedAssetPaths = []string{
 	"skills/zbrain-ingest/references/pipeline.md",
 	"skills/zbrain-learn/SKILL.md",
 	"skills/zbrain-research/SKILL.md",
-	"skills/zbrain-research/references/fetch-methods.md",
-	"skills/zbrain-research/scripts/fetch.sh",
-	"skills/zbrain-research/scripts/fetch_local.py",
 	"templates/axiom.md",
-	"templates/evidence-apply-checkpoint.json",
 	"templates/evidence-index.md",
 	"templates/evidence-manifest.yaml",
-	"templates/evidence-pending-external.md",
-	"templates/evidence-qa-answers.md",
-	"templates/evidence-qa-todo.json",
 	"templates/evidence-source.yaml",
 	"templates/mental-model.md",
 	"templates/project.md",
@@ -157,6 +150,138 @@ func bundledAssetPaths(t *testing.T) []string {
 		t.Fatalf("walk bundled assets: %v", err)
 	}
 	return paths
+}
+
+func TestSkillWorkspaceScope(t *testing.T) {
+	contents := make(map[string]string)
+	if err := fsWalkBundled(func(path string, body string) {
+		contents[path] = body
+	}); err != nil {
+		t.Fatalf("walk bundled assets: %v", err)
+	}
+
+	for path, body := range contents {
+		if !strings.Contains(body, "--workspace") && !strings.Contains(body, "--include") {
+			continue
+		}
+		if !strings.Contains(body, "zbrain workspace current") {
+			t.Errorf("%s uses workspace flags without primary-workspace resolution", path)
+		}
+		if !strings.Contains(body, "explicit") {
+			t.Errorf("%s uses workspace flags without explicit scope consent", path)
+		}
+		if strings.Contains(body, "--include") && !strings.Contains(body, "secondary") {
+			t.Errorf("%s uses --include without naming secondary workspace scope", path)
+		}
+	}
+
+	required := map[string][]string{
+		"agents/wiki-planner.md": {
+			"active workspace only",
+			"secondary workspace",
+		},
+		"engine/system-prompt.md": {
+			"active workspace only",
+		},
+	}
+	for path, tokens := range required {
+		body, ok := contents[path]
+		if !ok {
+			t.Fatalf("missing bundled asset %q", path)
+		}
+		for _, token := range tokens {
+			if !strings.Contains(body, token) {
+				t.Errorf("%s is missing workspace scope guidance %q", path, token)
+			}
+		}
+	}
+}
+
+func TestSkillShellSafety(t *testing.T) {
+	forbidden := []string{
+		`"{question}"`,
+		`'<claim body>\n'`,
+		`--workspace <`,
+		`--include <`,
+		`--file <`,
+		`--origin <`,
+		`--tier <`,
+		`--title <`,
+		`--basis <`,
+		`--evidence <`,
+		`--support <`,
+		`--conflicts-with <`,
+		`--reason <`,
+		` <query>`,
+	}
+	contents := make(map[string]string)
+	if err := fsWalkBundled(func(path string, body string) {
+		contents[path] = body
+	}); err != nil {
+		t.Fatalf("walk bundled assets: %v", err)
+	}
+	for path, body := range contents {
+		for _, token := range forbidden {
+			if strings.Contains(body, token) {
+				t.Errorf("%s contains unsafe shell placeholder %q", path, token)
+			}
+		}
+	}
+
+	required := map[string][]string{
+		"skills/zbrain-ask/SKILL.md": {
+			`args+=(--workspace "$workspace")`,
+			`args+=(--include "$include")`,
+			`args+=("$question")`,
+			`"${args[@]}"`,
+		},
+		"skills/zbrain-learn/SKILL.md": {
+			`printf '%s\n' "$body" | "${draft_args[@]}"`,
+		},
+		"engine/claude-rules.md": {
+			`Never concatenate user text into a shell command string.`,
+		},
+	}
+	for path, tokens := range required {
+		body, ok := contents[path]
+		if !ok {
+			t.Fatalf("missing bundled asset %q", path)
+		}
+		for _, token := range tokens {
+			if !strings.Contains(body, token) {
+				t.Errorf("%s is missing safe argv guidance %q", path, token)
+			}
+		}
+	}
+}
+
+func TestActiveAssetScope(t *testing.T) {
+	forbidden := []string{
+		"curl",
+		"wget",
+		"urllib.request.urlopen",
+		"defuddle.md",
+		"r.jina.ai",
+		"--use-proxy",
+		"fetch_local.py",
+		"fetch.sh",
+		"evidence-apply",
+		"evidence-qa",
+		"pending-external",
+		"zbrain analysis",
+		"zbrain qa",
+		"zbrain apply",
+		"zbrain fetch",
+	}
+	if err := fsWalkBundled(func(path string, body string) {
+		for _, token := range forbidden {
+			if strings.Contains(body, token) {
+				t.Errorf("%s contains out-of-scope active asset token %q", path, token)
+			}
+		}
+	}); err != nil {
+		t.Fatalf("walk bundled assets: %v", err)
+	}
 }
 
 func TestBundledAssetsDoNotContainStaleRuntimeInstructions(t *testing.T) {

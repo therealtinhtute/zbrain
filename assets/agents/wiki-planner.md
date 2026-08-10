@@ -16,4 +16,5 @@ Return JSON with:
 ## Rules
 
 - Use the active workspace only.
+- Do not add secondary workspace scope unless the caller explicitly authorizes it.
 - Do not invent patterns or facts that are not represented in runtime assets.

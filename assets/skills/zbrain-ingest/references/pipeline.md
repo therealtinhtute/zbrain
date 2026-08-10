@@ -2,10 +2,10 @@
 
 The previous learn/ingest/apply pipeline is not implemented in the current Go runtime.
 
-Current supported flow:
+Current supported flow; pass each caller-controlled value as a separate argv element. Resolve the primary workspace with `zbrain workspace current`; use `--workspace "$workspace"` only after explicit selection, and use `--include "$include"` only for an explicitly permitted read-only secondary workspace.
 
-1. `zbrain evidence add --file <path> --origin <uri-or-path> [--media-type <type>] [--workspace <name>]`
-2. `zbrain claim draft --tier <tier> --title <title> --basis <owner|evidence|derived> [--evidence <id>]... [--support <id>]... [--conflicts-with <id>]... [--workspace <name>]`
-3. `zbrain claim approve <id> [--workspace <name>]`
-4. `zbrain reindex [--workspace <name>]`
-5. `zbrain ask [--workspace <name>] [--include <name>]... <query>`
+1. `zbrain evidence add --file "$file" --origin "$origin" [--media-type "$media_type"] [--workspace "$workspace"]`
+2. `zbrain claim draft --tier "$tier" --title "$title" --basis "$basis" [--evidence "$evidence_id"]... [--support "$support_id"]... [--conflicts-with "$conflict_id"]... [--workspace "$workspace"]`
+3. `zbrain claim approve "$id" [--workspace "$workspace"]`
+4. `zbrain reindex [--workspace "$workspace"]`
+5. `zbrain ask [--workspace "$workspace"] [--include "$include"]... "$query"`

@@ -5,22 +5,39 @@ zbrain is a local-first trusted memory CLI. It returns versioned JSON context fo
 ### Workspace Resolution
 
 1. Run `zbrain workspace current` to identify the primary workspace.
-2. Use `--workspace <name>` only when the caller explicitly names a primary workspace.
-3. Use `--include <name>` only when the caller explicitly permits a read-only secondary workspace.
+2. Use `--workspace "$workspace"` only when the caller explicitly names a primary workspace.
+3. Use `--include "$include"` only when the caller explicitly permits a read-only secondary workspace.
 4. If no workspace resolves, stop and ask the user to create one.
+
+### Argument Handling
+
+Pass each caller-controlled value as a separate argv element. Never concatenate user text into a shell command string. In a POSIX shell, build an argv array:
+
+```bash
+args=(zbrain ask)
+# Add only after explicit consent:
+args+=(--workspace "$workspace")
+for include in "${includes[@]}"; do
+  args+=(--include "$include")
+done
+args+=("$query")
+"${args[@]}"
+```
+
+In the command summaries below, `"$value"` means one argv value and `[...]` means optional argument construction, not literal shell text.
 
 ### Trusted Memory Flow
 
 | Need | Command |
 |---|---|
-| Capture a local evidence snapshot | `zbrain evidence add --file <path> --origin <uri-or-path> [--media-type <type>] [--workspace <name>]` |
-| Draft an OKF claim concept from stdin | `zbrain claim draft --tier <tier> --title <title> --basis <owner|evidence|derived> [--evidence <id>]... [--support <id>]... [--conflicts-with <id>]... [--workspace <name>]` |
-| Promote a valid draft claim | `zbrain claim approve <id> [--workspace <name>]` |
-| Replace an approved claim | `zbrain claim supersede <id> --tier <tier> --title <title> --basis <owner|evidence|derived> [--evidence <id>]... [--support <id>]... [--conflicts-with <id>]... [--workspace <name>]` then approve the replacement |
-| Revoke a claim | `zbrain claim revoke <id> --reason <text> [--workspace <name>]` |
-| Convert legacy claim files | `zbrain migrate okf [--workspace <name>]` |
-| Rebuild the derived index | `zbrain reindex [--workspace <name>]` |
-| Retrieve trusted context | `zbrain ask [--workspace <name>] [--include <workspace>]... <query>` |
+| Capture a local evidence snapshot | `zbrain evidence add --file "$file" --origin "$origin" [--media-type "$media_type"] [--workspace "$workspace"]` |
+| Draft an OKF claim concept from stdin | `zbrain claim draft --tier "$tier" --title "$title" --basis "$basis" [--evidence "$evidence_id"]... [--support "$support_id"]... [--conflicts-with "$conflict_id"]... [--workspace "$workspace"]` |
+| Promote a valid draft claim | `zbrain claim approve "$id" [--workspace "$workspace"]` |
+| Replace an approved claim | `zbrain claim supersede "$id" --tier "$tier" --title "$title" --basis "$basis" [--evidence "$evidence_id"]... [--support "$support_id"]... [--conflicts-with "$conflict_id"]... [--workspace "$workspace"]` then approve the replacement |
+| Revoke a claim | `zbrain claim revoke "$id" --reason "$reason" [--workspace "$workspace"]` |
+| Convert legacy claim files | `zbrain migrate okf [--workspace "$workspace"]` |
+| Rebuild the derived index | `zbrain reindex [--workspace "$workspace"]` |
+| Retrieve trusted context | `zbrain ask [--workspace "$workspace"] [--include "$include"]... "$query"` |
 
 ### Invariants
 
