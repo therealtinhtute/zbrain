@@ -12,7 +12,7 @@ import (
 	zruntime "github.com/therealtinhtute/zbrain/internal/runtime"
 )
 
-const Version = "0.1.0-go"
+const Version = "0.1.1"
 
 var (
 	noFlags  = map[string]struct{}{}
