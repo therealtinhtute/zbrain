@@ -1307,6 +1307,39 @@ func TestIndexOperationsRejectSymlinkedIndexDirectory(t *testing.T) {
 	}
 }
 
+func TestIndexOperationsAllowSymlinkedAncestorPath(t *testing.T) {
+	tmp := t.TempDir()
+	realRoot := filepath.Join(tmp, "real")
+	if err := os.MkdirAll(realRoot, 0o755); err != nil {
+		t.Fatalf("MkdirAll(realRoot) error = %v", err)
+	}
+	linkedRoot := filepath.Join(tmp, "linked")
+	if err := os.Symlink(realRoot, linkedRoot); err != nil {
+		t.Fatalf("Symlink(linkedRoot) error = %v", err)
+	}
+	paths, err := ResolvePaths(Options{
+		CWD:        linkedRoot,
+		HomeDir:    linkedRoot,
+		RuntimeDir: filepath.Join(linkedRoot, ".zbrain"),
+	})
+	if err != nil {
+		t.Fatalf("ResolvePaths() error = %v", err)
+	}
+	if _, err := EnsureConfig(paths.ConfigFile); err != nil {
+		t.Fatalf("EnsureConfig() error = %v", err)
+	}
+	if err := CreateWorkspace(paths, "research", fixedIndexNow()); err != nil {
+		t.Fatalf("CreateWorkspace() error = %v", err)
+	}
+	idx := IndexStore{Paths: paths}
+	if err := idx.MarkDirty("research"); err != nil {
+		t.Fatalf("MarkDirty() error = %v", err)
+	}
+	if _, err := os.Stat(indexDirtyPath(t, idx, "research")); err != nil {
+		t.Fatalf("Stat(dirty) error = %v", err)
+	}
+}
+
 func TestIndexOperationsRejectSymlinkedIndexFiles(t *testing.T) {
 	paths := indexTestPaths(t)
 	idx := IndexStore{Paths: paths}
