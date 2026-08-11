@@ -14,7 +14,11 @@ func TestTransitionJournalPath(t *testing.T) {
 	if err != nil {
 		t.Fatalf("PendingTransitionPath() error = %v", err)
 	}
-	want := filepath.Join(paths.WorkspacesDir, "research", ".zbrain", pendingTransitionFileName)
+	workspaceRoot, err := ValidateWorkspace(paths, "research")
+	if err != nil {
+		t.Fatalf("ValidateWorkspace() error = %v", err)
+	}
+	want := filepath.Join(workspaceRoot, ".zbrain", pendingTransitionFileName)
 	if journalPath != want {
 		t.Fatalf("PendingTransitionPath() = %q, want %q", journalPath, want)
 	}
