@@ -17,6 +17,9 @@ zbrain-win-x64.exe
 workspaces/
 .cache/
 
+# Local agent integration (machine-local symlinks into ~/.zbrain/; assets/ is the source of truth)
+.claude/
+
 # Session scratch (local planning artifacts — never in repo)
 .kit/
 plans/
