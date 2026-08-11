@@ -1,5 +1,10 @@
 # zbrain V2 — Architecture Proposal
 
+> **Status: historical.** This proposal describes the pre-reset Bun/TypeScript
+> implementation, removed in the Go-native rewrite. Several principles carried
+> over (files-as-truth, wiki/evidence separation, fail-closed retrieval) — see
+> `README.md` for the current architecture.
+
 > Derived from `AUDIT.md`. V2 exists to fix the three load-bearing gaps:
 > **(C1)** the evidence gate is bypassed at retrieval, **(L)** memory can never be forgotten/corrected, **(D)** dual source of truth + no tests.
 

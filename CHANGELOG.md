@@ -1,5 +1,27 @@
 # CHANGELOG
 
+## 0.1.1 (2026-08-10)
+
+Go-native rewrite of the CLI. The pre-reset Bun/TypeScript implementation
+(2.1.0 and earlier, below) was removed on 2026-07-29 and is kept for history
+only.
+
+### Added
+
+- Go command surface: `setup`, `workspace create|current`, `evidence add`,
+  `claim draft|approve|supersede|revoke`, `migrate okf`, `reindex`, `ask`,
+  `version`
+- Embedded runtime assets (`assets/`) extracted by `setup`; `ZBRAIN_HOME`
+  override for isolated runs
+
+### Changed
+
+- Trust hardening: content-digest verification at approval, fail-closed
+  retrieval on stale/dirty indexes, canonical claim identity binding,
+  symlink-safe index paths, coordinated workspace generation
+- Runtime file permissions are owner-only: `0700` directories, `0600`
+  mutable metadata, `0400` immutable evidence snapshots
+
 ## 2.1.0 (2026-07-03)
 
 ### Added
