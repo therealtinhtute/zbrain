@@ -4,6 +4,18 @@
 
 The current slice stores canonical OKF-style Markdown claim concepts, immutable local evidence snapshots, and a disposable SQLite FTS5 index. `zbrain ask` returns trusted context JSON only; it does not call an LLM.
 
+**License:** [MIT](LICENSE) · **Contributing:** [CONTRIBUTING.md](CONTRIBUTING.md) · [Changelog](CHANGELOG.md)
+
+## Install
+
+Requires Go 1.24+.
+
+```bash
+go install github.com/therealtinhtute/zbrain@latest
+```
+
+Then run `zbrain setup`. Use `ZBRAIN_HOME` to isolate test runs from real runtime data.
+
 ## Current command surface
 
 ```text
