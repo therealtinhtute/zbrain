@@ -111,9 +111,6 @@ func validateIndexBoundaryPath(path string, directory bool) error {
 			if err != nil {
 				return err
 			}
-			if resolved != candidate {
-				return fmt.Errorf("%q contains a symlink", path)
-			}
 			if candidate == clean && directory && !info.IsDir() {
 				return fmt.Errorf("%q is not a directory", path)
 			}
