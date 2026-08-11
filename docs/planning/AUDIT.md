@@ -1,5 +1,9 @@
 # zbrain — Deep Technical Audit
 
+> **Status: historical.** This audit covers the pre-reset Bun/TypeScript codebase
+> (`src/core/*.ts`), which was removed in the Go-native rewrite. Keep for reference;
+> it does not describe the current implementation.
+
 > Scope: full repository at `master` (commit `fa873e1`). MVP-1.
 > Vision audited against: *"A personal LLM wiki that AI agents can use safely."*
 > Optimization axes: Simplicity · Correctness · Agent usability · Maintainability · OSS friendliness · Local-first.
