@@ -3,13 +3,12 @@
 > Current authority for the Go-native trusted-memory runtime.
 >
 > This document defines the trust contract that `zbrain ask`, claim storage,
-> evidence storage, and the disposable index must uphold. Future retrieval
-> designs such as vectors, hybrid search, MCP, and sync belong to
-> [`references/memory-engine-spec.md`](references/memory-engine-spec.md) and are
-> not authorized by this document.
+> evidence storage, and the disposable index must uphold. The trusted-agent
+> gateway slice is authorized below; optional hybrid retrieval remains a later
+> milestone and must preserve this fail-closed contract.
 
-**Status:** current · **Created:** 2026-08-03 · **Canonical sources:** workspace
-Markdown and immutable evidence snapshots
+**Status:** current · **Created:** 2026-08-03 · **Amended:** 2026-08-13 ·
+**Canonical sources:** workspace Markdown and immutable evidence snapshots
 
 ## 1. Product Boundary
 
@@ -41,12 +40,17 @@ zbrain claim revoke <id> --reason <reason> [--workspace <name>]
 zbrain migrate okf [--workspace <name>]
 zbrain reindex [--workspace <name>]
 zbrain ask [--workspace <name>] [--include <name>]... <query>
+zbrain status [--workspace <name>]
+zbrain doctor [--workspace <name>] [--probe-embedder]
 zbrain version
 ```
 
 The command surface is authoritative from `zbrain --help`. Documentation and
 embedded skills must not name commands or integrations that are absent from
 that output.
+
+The planned gateway commands are specified separately and are not shipped until
+their implementation milestones pass: `zbrain mcp serve` and `zbrain view`.
 
 ## 3. Scope
 
@@ -62,16 +66,20 @@ that output.
 - Trusted context JSON from `zbrain ask`.
 - Explicit migration from legacy `schema: zbrain.claim/v1` documents to OKF
   claim concepts.
+- Shared read-only trust diagnostics, a typed local MCP stdio gateway, optional
+  cryptographic evidence spans, and a loopback read-only viewer.
 
 ### Out of scope
 
-- LLM or model-provider calls.
-- MCP integration.
-- Vector databases and semantic search.
+- LLM or model-provider calls from zbrain core.
+- HTTP or remote MCP transport.
+- Vector databases or semantic search as a required path. Optional hybrid
+  retrieval is a later backward-compatible milestone.
 - Network crawling or web research.
 - Hosted sync, team authentication, background services, or GUI.
 - Session transcript storage.
 - Generic OKF editing for arbitrary concept types.
+- Viewer mutation APIs, approval UI, or remote binds.
 - Git-backed versioning, backup, or synchronization of the runtime directory.
 
 ## 4. Runtime and Ownership Model
@@ -202,6 +210,12 @@ silently trusted without metadata binding. Derived claims must reference approve
 supporting claims or verified evidence. Owner claims require owner confirmation
 metadata.
 
+Claims may additionally declare `sources[].spans` entries. Each span uses
+1-based inclusive coordinates over the exact UTF-8 raw evidence snapshot and a
+`sha256:span-v1:<hex>` digest binding snapshot digest, coordinates, and exact
+raw bytes. Approval and rebuild reject missing, moved, out-of-range, binary, or
+digest-mismatched spans. Legacy claims with only `evidence_ids` remain valid.
+
 ## 8. Derived Index and Freshness
 
 Each workspace index is disposable and rebuildable from canonical Markdown and
@@ -257,7 +271,8 @@ make the trust state visible:
 - an explicit error when the index is dirty, missing, or stale.
 
 Approved claim results may include identity, tier, title, description, source
-references, and relevance metadata. The query layer must not promote drafts,
+references, citation spans, and relevance metadata. The query schema is version
+2 while all version-1 fields remain stable. The query layer must not promote drafts,
 raw evidence, invalid claims, or conflicts into trusted context merely to avoid
 a gap.
 
@@ -271,8 +286,17 @@ a gap.
 6. Keep command handlers thin and runtime behavior in `internal/runtime/`.
 7. Keep the implementation Go-native and minimal.
 8. Every behavior change gets focused tests and an isolated runtime smoke.
-9. Do not add vector search, MCP, LLM calls, or hosted sync under this spec;
-   those require a separate scope decision.
+9. MCP is stdio-only and exposes typed operations over shared runtime services;
+   it never grants owner approval, stores secrets, fetches remote sources, or
+   calls an LLM.
+10. Every canonical MCP mutation returns `index_fresh:false` and
+    `next_action:"memory_reindex"`; mutation never auto-reindexes.
+11. Owner approval, supersession, and revoke require a short-lived one-time
+    challenge grant. Challenge and token hashes are runtime metadata, never
+    canonical trust inputs.
+12. Optional hybrid retrieval may add a loopback OpenAI-compatible embedder,
+    same-index vectors, and lexical fallback only in a separately verified
+    milestone.
 
 ## 11. Release Gate
 
