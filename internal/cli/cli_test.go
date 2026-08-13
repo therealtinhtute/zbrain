@@ -76,6 +76,7 @@ func TestCLIHelpParity(t *testing.T) {
 		{name: "migrate", args: []string{"migrate", "okf", "--help"}, want: []string{"Usage: zbrain migrate okf [--workspace <name>]"}},
 		{name: "reindex", args: []string{"reindex", "--help"}, want: []string{"Usage: zbrain reindex [--workspace <name>]"}},
 		{name: "ask", args: []string{"ask", "--help"}, want: []string{"--workspace <name>", "--include <name>"}},
+		{name: "status", args: []string{"status", "--help"}, want: []string{"status"}},
 	}
 
 	for _, test := range cases {

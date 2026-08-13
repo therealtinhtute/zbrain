@@ -80,10 +80,18 @@ type ClaimTransition struct {
 }
 
 type ClaimSource struct {
-	ID       string `yaml:"id" json:"id"`
-	Resource string `yaml:"resource" json:"resource"`
-	Title    string `yaml:"title,omitempty" json:"title,omitempty"`
-	Digest   string `yaml:"digest" json:"digest"`
+	ID       string         `yaml:"id" json:"id"`
+	Resource string         `yaml:"resource" json:"resource"`
+	Title    string         `yaml:"title,omitempty" json:"title,omitempty"`
+	Digest   string         `yaml:"digest" json:"digest"`
+	Spans    []EvidenceSpan `yaml:"spans,omitempty" json:"spans,omitempty"`
+}
+
+type EvidenceSpan struct {
+	EvidenceID string `yaml:"evidence_id" json:"evidence_id"`
+	StartLine  int    `yaml:"start_line" json:"start_line"`
+	EndLine    int    `yaml:"end_line" json:"end_line"`
+	Digest     string `yaml:"digest" json:"digest"`
 }
 
 type ClaimGenerated struct {
@@ -259,6 +267,16 @@ func ValidateClaim(claim Claim) error {
 	}
 	if !isKnownClaimBasis(claim.Basis) {
 		return fmt.Errorf("claim basis %q is not supported", claim.Basis)
+	}
+	for _, source := range claim.Sources {
+		for _, span := range source.Spans {
+			if !evidenceIDPattern.MatchString(span.EvidenceID) || span.StartLine < 1 || span.EndLine < span.StartLine {
+				return fmt.Errorf("claim evidence span has invalid evidence or line range")
+			}
+			if !strings.HasPrefix(span.Digest, "sha256:span-v1:") {
+				return fmt.Errorf("claim evidence span digest must use sha256:span-v1:<hex>")
+			}
+		}
 	}
 	if _, err := time.Parse(time.RFC3339, claim.CreatedAt); err != nil {
 		return fmt.Errorf("claim generated.at must be RFC3339: %w", err)

@@ -1,6 +1,7 @@
 package runtime
 
 import (
+	"bytes"
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
@@ -12,6 +13,7 @@ import (
 	"sort"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"gopkg.in/yaml.v3"
 )
@@ -360,6 +362,9 @@ func validateClaimEvidence(validator *EvidenceValidator, claim Claim) error {
 		}
 		currentDigest := validator.snapshotDigests[id]
 		if source.Digest == currentDigest {
+			if err := validateEvidenceSpans(validator, id, source, currentDigest); err != nil {
+				return err
+			}
 			continue
 		}
 		if isLegacyEvidenceDigest(source.Digest) {
@@ -368,6 +373,62 @@ func validateClaimEvidence(validator *EvidenceValidator, claim Claim) error {
 		return fmt.Errorf("evidence %s digest mismatch: approved %s, current %s", id, source.Digest, currentDigest)
 	}
 	return nil
+}
+
+func validateEvidenceSpans(validator *EvidenceValidator, evidenceID string, source ClaimSource, snapshotDigest string) error {
+	if len(source.Spans) == 0 {
+		return nil
+	}
+	rawPath, err := validator.store.evidenceFilePath(validator.workspace, evidenceID, "raw")
+	if err != nil {
+		return err
+	}
+	raw, err := os.ReadFile(rawPath)
+	if err != nil {
+		return fmt.Errorf("evidence %s: read span bytes: %w", evidenceID, err)
+	}
+	if !utf8.Valid(raw) {
+		return fmt.Errorf("evidence %s spans require valid UTF-8 raw evidence", evidenceID)
+	}
+	lines := splitEvidenceLines(raw)
+	for _, span := range source.Spans {
+		if span.EvidenceID != evidenceID {
+			return fmt.Errorf("evidence span id %s does not match source %s", span.EvidenceID, evidenceID)
+		}
+		if span.StartLine < 1 || span.EndLine < span.StartLine || span.EndLine > len(lines) {
+			return fmt.Errorf("evidence %s span line range %d-%d is out of range", evidenceID, span.StartLine, span.EndLine)
+		}
+		want := EvidenceSpanDigest(snapshotDigest, span.StartLine, span.EndLine, bytes.Join(lines[span.StartLine-1:span.EndLine], nil))
+		if span.Digest != want {
+			return fmt.Errorf("evidence %s span digest mismatch", evidenceID)
+		}
+	}
+	return nil
+}
+
+func splitEvidenceLines(raw []byte) [][]byte {
+	if len(raw) == 0 {
+		return [][]byte{{}}
+	}
+	lines := make([][]byte, 0, 1)
+	start := 0
+	for i, b := range raw {
+		if b == '\n' {
+			lines = append(lines, raw[start:i+1])
+			start = i + 1
+		}
+	}
+	if start < len(raw) {
+		lines = append(lines, raw[start:])
+	}
+	return lines
+}
+
+func EvidenceSpanDigest(snapshotDigest string, startLine, endLine int, rawBytes []byte) string {
+	hash := sha256.New()
+	fmt.Fprintf(hash, "zbrain.span/v1\nsnapshot:%s\nrange:%d-%d\n", snapshotDigest, startLine, endLine)
+	hash.Write(rawBytes)
+	return "sha256:span-v1:" + hex.EncodeToString(hash.Sum(nil))
 }
 
 func isEvidenceSHA256(value string) bool {

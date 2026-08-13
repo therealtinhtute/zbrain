@@ -72,6 +72,28 @@ func TestClaimRoundTripPreservesBodyAndMetadata(t *testing.T) {
 	}
 }
 
+func TestEvidenceSpanRoundTripAndValidation(t *testing.T) {
+	claim := validOwnerClaim()
+	evidenceID := "evd_0123456789abcdef0123456789abcdef"
+	claim.EvidenceIDs = []string{evidenceID}
+	claim.Sources = []ClaimSource{{ID: evidenceID, Resource: "evidence://snapshot", Digest: "sha256:evidence-v1:" + strings.Repeat("a", 64), Spans: []EvidenceSpan{{EvidenceID: evidenceID, StartLine: 2, EndLine: 3, Digest: "sha256:span-v1:" + strings.Repeat("b", 64)}}}}
+	rendered, err := RenderClaimMarkdown(claim)
+	if err != nil {
+		t.Fatalf("RenderClaimMarkdown() error = %v", err)
+	}
+	parsed, err := ParseClaimMarkdown("projects", "projects/"+claim.ID+".md", rendered)
+	if err != nil {
+		t.Fatalf("ParseClaimMarkdown() error = %v", err)
+	}
+	if len(parsed.Sources) != 1 || len(parsed.Sources[0].Spans) != 1 || parsed.Sources[0].Spans[0].StartLine != 2 {
+		t.Fatalf("span round trip = %#v", parsed.Sources)
+	}
+	claim.Sources[0].Spans[0].StartLine = 0
+	if err := ValidateClaim(claim); err == nil {
+		t.Fatal("ValidateClaim() error = nil for invalid span")
+	}
+}
+
 func TestClaimVerificationDigestRoundTrip(t *testing.T) {
 	tests := []struct {
 		name string

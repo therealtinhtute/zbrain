@@ -19,16 +19,25 @@ type IndexStore struct {
 }
 
 type IndexSummary struct {
-	Workspace      string         `json:"workspace"`
-	Approved       int            `json:"approved"`
-	Draft          int            `json:"draft"`
-	Invalid        int            `json:"invalid"`
-	InvalidCount   int            `json:"invalid_count"`
-	InvalidClaims  []InvalidClaim `json:"invalid_claims,omitempty"`
-	Legacy         int            `json:"legacy"`
-	RebuildState   RebuildStatus  `json:"rebuild_state"`
-	ManifestDigest string         `json:"manifest_digest"`
-	RebuiltAt      string         `json:"rebuilt_at"`
+	Workspace      string           `json:"workspace"`
+	Approved       int              `json:"approved"`
+	Draft          int              `json:"draft"`
+	Invalid        int              `json:"invalid"`
+	InvalidCount   int              `json:"invalid_count"`
+	InvalidClaims  []InvalidClaim   `json:"invalid_claims,omitempty"`
+	Legacy         int              `json:"legacy"`
+	RebuildState   RebuildStatus    `json:"rebuild_state"`
+	ManifestDigest string           `json:"manifest_digest"`
+	RebuiltAt      string           `json:"rebuilt_at"`
+	Embedding      EmbeddingSummary `json:"embedding"`
+}
+
+type EmbeddingSummary struct {
+	Strategy string `json:"strategy"`
+	Model    string `json:"model,omitempty"`
+	Indexed  int    `json:"indexed"`
+	Eligible int    `json:"eligible"`
+	Degraded string `json:"degraded_reason,omitempty"`
 }
 
 type SearchOptions struct {
