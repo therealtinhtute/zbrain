@@ -61,6 +61,17 @@ type App struct {
 	Now    func() time.Time
 }
 
+type commandExitError struct {
+	Code    int
+	Message string
+}
+
+func (e commandExitError) Error() string { return e.Message }
+func (e commandExitError) ExitCode() int { return e.Code }
+func exitCodeError(code int, message string) error {
+	return commandExitError{Code: code, Message: message}
+}
+
 func New() (App, error) {
 	paths, err := zruntime.ResolvePaths(zruntime.Options{})
 	if err != nil {
@@ -115,12 +126,103 @@ func (app App) Run(args []string) error {
 		return app.runReindex(args[1:])
 	case "ask":
 		return app.runAsk(args[1:])
+	case "status":
+		return app.runStatus(args[1:])
+	case "doctor":
+		return app.runDoctor(args[1:])
 	default:
 		if strings.HasPrefix(args[0], "-") {
 			return unknownFlag(args[0])
 		}
 		return fmt.Errorf("unknown command: %s", args[0])
 	}
+}
+
+func (app App) runStatus(args []string) error {
+	if helpRequested(args) {
+		fmt.Fprintln(app.Stdout, "Usage: zbrain status [--workspace <name>]")
+		return nil
+	}
+	workspace, rest, err := parseWorkspaceFlag(args)
+	if err != nil {
+		return err
+	}
+	if len(rest) > 0 {
+		return errors.New("usage: zbrain status [--workspace <name>]")
+	}
+	workspace, err = app.resolveWorkspace(workspace)
+	if err != nil {
+		return err
+	}
+	idx := zruntime.IndexStore{Paths: app.Paths}
+	summary := zruntime.IndexSummary{Workspace: workspace, Embedding: zruntime.EmbeddingSummary{Strategy: "lexical", Degraded: "embeddings not configured"}}
+	if scan, scanErr := (zruntime.ClaimStore{Paths: app.Paths, Now: app.Now}).ScanWorkspaceForTrust(workspace); scanErr == nil {
+		summary.Approved = len(scan.Claims)
+		summary.Invalid = len(scan.Invalid)
+		summary.InvalidCount = len(scan.Invalid)
+		summary.InvalidClaims = scan.Invalid
+	}
+	if err := idx.CheckFresh(workspace); err != nil {
+		summary.RebuildState = zruntime.RebuildStatusRejected
+		if summary.Invalid == 0 {
+			summary.InvalidClaims = []zruntime.InvalidClaim{{Path: "", Error: err.Error()}}
+		}
+	}
+	return writeJSON(app.Stdout, struct {
+		SchemaVersion int `json:"schema_version"`
+		zruntime.IndexSummary
+	}{2, summary})
+}
+
+func (app App) runDoctor(args []string) error {
+	if helpRequested(args) {
+		fmt.Fprintln(app.Stdout, "Usage: zbrain doctor [--workspace <name>] [--probe-embedder]")
+		return nil
+	}
+	probe := false
+	filtered := make([]string, 0, len(args))
+	for _, arg := range args {
+		if arg == "--probe-embedder" {
+			probe = true
+			continue
+		}
+		filtered = append(filtered, arg)
+	}
+	workspace, rest, err := parseWorkspaceFlag(filtered)
+	if err != nil {
+		return err
+	}
+	if len(rest) > 0 {
+		return errors.New("usage: zbrain doctor [--workspace <name>] [--probe-embedder]")
+	}
+	workspace, err = app.resolveWorkspace(workspace)
+	if err != nil {
+		return err
+	}
+	findings := []string{}
+	if err := (zruntime.IndexStore{Paths: app.Paths}).CheckFresh(workspace); err != nil {
+		findings = append(findings, err.Error())
+	}
+	if probe {
+		findings = append(findings, "embedder probe unavailable: no embedder configured")
+	}
+	status := "healthy"
+	if len(findings) > 0 {
+		status = "degraded"
+	}
+	if err := writeJSON(app.Stdout, struct {
+		SchemaVersion int      `json:"schema_version"`
+		Workspace     string   `json:"workspace"`
+		Status        string   `json:"status"`
+		Findings      []string `json:"findings"`
+		NextAction    string   `json:"next_action"`
+	}{2, workspace, status, findings, "zbrain reindex"}); err != nil {
+		return err
+	}
+	if len(findings) > 0 {
+		return exitCodeError(2, "doctor found domain findings")
+	}
+	return nil
 }
 
 func (app App) runSetup(args []string) error {
@@ -618,6 +720,8 @@ Commands:
   migrate okf [--workspace <name>]
   reindex [--workspace <name>]
   ask [--workspace <name>] [--include <name>]... <query>
+  status [--workspace <name>]
+  doctor [--workspace <name>] [--probe-embedder]
   version
 
 Use `+"`zbrain <command> --help`"+` for command-specific help.

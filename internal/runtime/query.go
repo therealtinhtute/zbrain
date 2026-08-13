@@ -46,16 +46,17 @@ type TrustedQueryResponse struct {
 }
 
 type QueryClaim struct {
-	Workspace   string      `json:"workspace"`
-	ID          string      `json:"id"`
-	Path        string      `json:"path"`
-	Tier        string      `json:"tier"`
-	Type        string      `json:"type"`
-	Status      ClaimStatus `json:"status"`
-	Title       string      `json:"title"`
-	Description string      `json:"description,omitempty"`
-	StaleAfter  string      `json:"stale_after,omitempty"`
-	Score       float64     `json:"score"`
+	Workspace   string        `json:"workspace"`
+	ID          string        `json:"id"`
+	Path        string        `json:"path"`
+	Tier        string        `json:"tier"`
+	Type        string        `json:"type"`
+	Status      ClaimStatus   `json:"status"`
+	Title       string        `json:"title"`
+	Description string        `json:"description,omitempty"`
+	StaleAfter  string        `json:"stale_after,omitempty"`
+	Score       float64       `json:"score"`
+	Sources     []ClaimSource `json:"sources,omitempty"`
 }
 
 type QueryConflict struct {
@@ -152,7 +153,13 @@ func TrustedQuery(paths Paths, options TrustedQueryOptions) (TrustedQueryRespons
 			if err := validateIndexedClaimBindingInternal(paths, workspace, claim, &manifest, nil, nil, false); err != nil {
 				return TrustedQueryResponse{}, err
 			}
-			response.Claims = append(response.Claims, toQueryClaim(workspace, claim))
+			queryClaim := toQueryClaim(workspace, claim)
+			canonical, readErr := (ClaimStore{Paths: paths}).Read(workspace, claim.ID)
+			if readErr != nil {
+				return TrustedQueryResponse{}, readErr
+			}
+			queryClaim.Sources = canonical.Sources
+			response.Claims = append(response.Claims, queryClaim)
 		}
 		drafts, err := idx.searchUnlockedInternal(workspace, SearchOptions{Query: options.Query, Statuses: []ClaimStatus{ClaimStatusDraft}, Limit: limit}, false, false)
 		if err != nil {

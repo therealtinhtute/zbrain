@@ -14,6 +14,9 @@ func main() {
 	}
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
+		if exit, ok := err.(interface{ ExitCode() int }); ok {
+			os.Exit(exit.ExitCode())
+		}
 		os.Exit(1)
 	}
 }
