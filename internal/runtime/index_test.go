@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -14,6 +15,21 @@ func TestIndexFTS5Capability(t *testing.T) {
 	idx := IndexStore{Paths: paths}
 	if err := idx.AssertFTS5(); err != nil {
 		t.Fatalf("AssertFTS5() error = %v", err)
+	}
+}
+
+func TestIndexBoundaryAcceptsDarwinPrivatePathAlias(t *testing.T) {
+	if runtime.GOOS != "darwin" {
+		t.Skip("Darwin path aliases are not present on this platform")
+	}
+	path := filepath.Join(os.TempDir(), "zbrain", "indexes")
+	resolvedRoot, err := filepath.EvalSymlinks(os.TempDir())
+	if err != nil {
+		t.Fatalf("EvalSymlinks(temp dir) error = %v", err)
+	}
+	resolved := filepath.Join(resolvedRoot, "zbrain", "indexes")
+	if !samePathAfterPlatformAlias(path, resolved) {
+		t.Fatalf("samePathAfterPlatformAlias(%q, %q) = false", path, resolved)
 	}
 }
 

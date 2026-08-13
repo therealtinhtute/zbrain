@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"sort"
 	"strings"
 	"time"
@@ -111,7 +112,7 @@ func validateIndexBoundaryPath(path string, directory bool) error {
 			if err != nil {
 				return err
 			}
-			if resolved != candidate {
+			if !samePathAfterPlatformAlias(candidate, resolved) {
 				return fmt.Errorf("%q contains a symlink", path)
 			}
 			if candidate == clean && directory && !info.IsDir() {
@@ -128,6 +129,40 @@ func validateIndexBoundaryPath(path string, directory bool) error {
 		}
 		candidate = parent
 	}
+}
+
+func samePathAfterPlatformAlias(path string, resolved string) bool {
+	if path == resolved || runtime.GOOS != "darwin" {
+		return path == resolved
+	}
+
+	relative, err := filepath.Rel(string(filepath.Separator), path)
+	if err != nil || relative == "." || strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
+		return false
+	}
+	parts := strings.Split(relative, string(filepath.Separator))
+	if len(parts) == 0 || parts[0] == "" {
+		return false
+	}
+	alias := filepath.Join(string(filepath.Separator), parts[0])
+	info, err := os.Lstat(alias)
+	if err != nil || info.Mode()&os.ModeSymlink == 0 {
+		return false
+	}
+	canonicalAlias, err := filepath.Abs(filepath.Join(string(filepath.Separator), "private", parts[0]))
+	if err != nil {
+		return false
+	}
+	actualAlias, err := filepath.EvalSymlinks(alias)
+	if err != nil {
+		return false
+	}
+	actualAlias, err = filepath.Abs(actualAlias)
+	if err != nil || actualAlias != canonicalAlias {
+		return false
+	}
+	expected := filepath.Join(string(filepath.Separator), "private", relative)
+	return resolved == expected
 }
 
 func (store IndexStore) AssertFTS5() error {

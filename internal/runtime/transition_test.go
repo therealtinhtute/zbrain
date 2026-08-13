@@ -14,7 +14,11 @@ func TestTransitionJournalPath(t *testing.T) {
 	if err != nil {
 		t.Fatalf("PendingTransitionPath() error = %v", err)
 	}
-	want := filepath.Join(paths.WorkspacesDir, "research", ".zbrain", pendingTransitionFileName)
+	canonicalRoot, err := filepath.EvalSymlinks(filepath.Join(paths.WorkspacesDir, "research"))
+	if err != nil {
+		t.Fatalf("EvalSymlinks(workspace) error = %v", err)
+	}
+	want := filepath.Join(canonicalRoot, ".zbrain", pendingTransitionFileName)
 	if journalPath != want {
 		t.Fatalf("PendingTransitionPath() = %q, want %q", journalPath, want)
 	}
