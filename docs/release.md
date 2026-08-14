@@ -2,37 +2,55 @@
 
 ## Build
 
-zbrain is a standalone Go binary. Build it with the repository target:
+zbrain is a standalone Go binary. Build it with:
 
 ```bash
 make build
 ```
 
 This runs `go build -o dist/zbrain ./cmd/zbrain` and produces `dist/zbrain`.
-No JavaScript runtime, package manager, or external retrieval service is required.
+The binary needs no JavaScript runtime, package manager, external database, or
+retrieval service.
 
-## Packaging Strategy
+## Packaging strategy
 
 Build on the target platform with the same Go-native command. The binary embeds
-the runtime content from `assets/`; `zbrain setup` extracts `README.md`,
-`agents/`, `engine/`, `skills/`, and `templates/` directly under the selected
-runtime root. Workspace seed assets are skipped; `workspace create` and
-`reindex` create workspace and index paths as needed.
+runtime content from `assets/`; `zbrain setup` extracts `README.md`, `agents/`,
+`engine/`, `skills/`, and `templates/` under `ZBRAIN_HOME` or the default
+`~/.zbrain/`. Any embedded `workspaces/` seed is skipped. `workspace create`
+creates active workspace paths, and `reindex` creates the disposable SQLite
+FTS5 index.
 
-## Acceptance and Smoke Checks
+Do not package secrets, populated personal workspaces, evidence snapshots, or
+runtime output from another operator.
 
-Verify the command surface and run the isolated smoke target:
+## Command and smoke checks
+
+Verify the root command surface and command groups:
 
 ```bash
 go run ./cmd/zbrain --help
+go run ./cmd/zbrain workspace --help
+go run ./cmd/zbrain evidence --help
+go run ./cmd/zbrain claim --help
+go run ./cmd/zbrain migrate --help
+go run ./cmd/zbrain reindex --help
+go run ./cmd/zbrain ask --help
+go run ./cmd/zbrain status --help
+go run ./cmd/zbrain doctor --help
+```
+
+Run the isolated smoke target:
+
+```bash
 make smoke
 ```
 
-The smoke target builds the binary, checks help output, creates an isolated
-`ZBRAIN_HOME`, runs setup and workspace creation, captures evidence, drafts and
-approves a claim, rebuilds the index, and queries trusted context.
+The target builds the binary, runs setup and workspace creation with a
+temporary `ZBRAIN_HOME`, captures evidence, drafts and approves a claim,
+rebuilds the index, and queries trusted context.
 
-## Trust Release Gates
+## Trust release gates
 
 Run all quality and trust gates before release:
 
@@ -40,14 +58,16 @@ Run all quality and trust gates before release:
 go test ./...
 go vet ./...
 go test -race ./internal/runtime ./internal/cli
+make build
+make smoke
 git diff --check
 ```
 
-These tests cover freshness invalidation, dependency and evidence rejection,
+These checks cover freshness invalidation, evidence and dependency rejection,
 canonical-input preservation, rejected rebuild fail-closed behavior, and
 interrupted supersession recovery.
 
-## Scale Gate
+## Scale gate
 
 The 100k-claim query benchmark must keep p95 below two seconds:
 
@@ -57,13 +77,14 @@ ZBRAIN_BENCH_100K=1 go test ./internal/runtime -run '^TestAskP95At100K$' -count=
 
 A benchmark result above two seconds is a release blocker.
 
-## Release Checklist
+## Release checklist
 
-1. `go run ./cmd/zbrain --help` matches the documented command surface.
-2. `go test ./...` passes.
-3. `go vet ./...` passes.
-4. `go test -race ./internal/runtime ./internal/cli` passes.
-5. `make build` passes.
-6. `make smoke` passes with isolated `ZBRAIN_HOME`.
-7. The 100k-claim query p95 is at or below two seconds.
-8. `git diff --check` passes.
+1. `go run ./cmd/zbrain --help` matches the documented shipped surface.
+2. Every documented command group returns the expected `--help` output.
+3. `go test ./...` passes.
+4. `go vet ./...` passes.
+5. `go test -race ./internal/runtime ./internal/cli` passes.
+6. `make build` passes.
+7. `make smoke` passes with isolated `ZBRAIN_HOME`.
+8. The 100k-claim query p95 is at or below two seconds.
+9. `git diff --check` passes.

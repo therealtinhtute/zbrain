@@ -1,13 +1,23 @@
 # Bundled Assets
 
-The root `assets/` directory is the only source of truth for runtime content bundled into `zbrain`.
+The root §assets/§ directory is the source of truth for runtime content bundled
+into the Go binary through §assets/embed.go§.
 
-`zbrain setup` extracts the embedded files directly under the selected runtime root:
+§zbrain setup§ walks the embedded filesystem and copies these paths directly
+under the selected runtime root:
 
-- `README.md`
-- `agents/`
-- `engine/`
-- `skills/`
-- `templates/`
+- §README.md§
+- §agents/§
+- §engine/§
+- §skills/§ and skill references
+- §templates/§
 
-The embedded `workspaces/` seed is skipped during extraction so setup never creates an active workspace. `workspace create` creates workspace content, and `reindex` creates the disposable index.
+The extractor skips any embedded §workspaces/§ seed content. Setup therefore
+does not activate a workspace; §zbrain workspace create <name>§ creates the
+selected workspace and §zbrain reindex§ creates its disposable SQLite FTS5
+index under the runtime §indexes/§ directory.
+
+When authoring assets, preserve the runtime contracts: skill files need
+§name§, §description§, and §version§ frontmatter; templates must keep the
+placeholder tokens expected by the Go scaffold logic; and evidence metadata
+must keep the §source.yaml§ shape used by §internal/runtime/evidence.go§.

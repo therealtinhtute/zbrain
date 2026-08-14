@@ -49,12 +49,24 @@ The command surface is authoritative from `zbrain --help`. Documentation and
 embedded skills must not name commands or integrations that are absent from
 that output.
 
-The planned gateway commands are specified separately and are not shipped until
-their implementation milestones pass: `zbrain mcp serve` and `zbrain view`.
+### Authorized future milestones (not shipped)
+
+The following command names and integrations are design-authorized only. They
+are not present in the current CLI help and must not be documented or treated
+as available runtime behavior until their implementation milestones pass:
+
+- `zbrain mcp serve`: a typed local stdio MCP gateway over shared runtime
+  services;
+- `zbrain view`: a loopback read-only viewer;
+- owner-pinned gateway mutation challenges and optional evidence-span-aware
+  gateway operations.
+
+Their separate design contract is documented in
+[`docs/trusted-agent-gateway-spec.md`](docs/trusted-agent-gateway-spec.md).
 
 ## 3. Scope
 
-### In scope
+### Shipped runtime scope
 
 - Standalone Go binary with embedded runtime assets.
 - Workspace setup and active-workspace resolution.
@@ -66,8 +78,16 @@ their implementation milestones pass: `zbrain mcp serve` and `zbrain view`.
 - Trusted context JSON from `zbrain ask`.
 - Explicit migration from legacy `schema: zbrain.claim/v1` documents to OKF
   claim concepts.
-- Shared read-only trust diagnostics, a typed local MCP stdio gateway, optional
-  cryptographic evidence spans, and a loopback read-only viewer.
+- Shared read-only trust diagnostics through `zbrain status` and
+  `zbrain doctor`.
+- Cryptographic evidence spans when declared by a claim.
+
+### Authorized future scope
+
+The typed local MCP stdio gateway and loopback read-only viewer are authorized
+future milestones, not shipped scope. They must reuse the shipped runtime
+trust boundary and cannot weaken workspace isolation, approval requirements,
+evidence validation, or fail-closed query behavior.
 
 ### Out of scope
 
@@ -286,6 +306,9 @@ a gap.
 6. Keep command handlers thin and runtime behavior in `internal/runtime/`.
 7. Keep the implementation Go-native and minimal.
 8. Every behavior change gets focused tests and an isolated runtime smoke.
+
+The following are future gateway constraints, not shipped CLI behavior:
+
 9. MCP is stdio-only and exposes typed operations over shared runtime services;
    it never grants owner approval, stores secrets, fetches remote sources, or
    calls an LLM.
@@ -304,6 +327,7 @@ The trusted-memory slice is releasable only when all of these pass:
 
 ```bash
 go test ./...
+go vet ./...
 make build
 make smoke
 ```
