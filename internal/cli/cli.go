@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -9,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	zmcp "github.com/therealtinhtute/zbrain/internal/mcp"
 	zruntime "github.com/therealtinhtute/zbrain/internal/runtime"
 )
 
@@ -130,6 +132,8 @@ func (app App) Run(args []string) error {
 		return app.runStatus(args[1:])
 	case "doctor":
 		return app.runDoctor(args[1:])
+	case "mcp":
+		return app.runMCP(args[1:])
 	default:
 		if strings.HasPrefix(args[0], "-") {
 			return unknownFlag(args[0])
@@ -223,6 +227,39 @@ func (app App) runDoctor(args []string) error {
 		return exitCodeError(2, "doctor found domain findings")
 	}
 	return nil
+}
+
+func (app App) runMCP(args []string) error {
+	if len(args) == 0 {
+		return errors.New("mcp requires a subcommand: serve")
+	}
+	if helpRequested(args) {
+		app.printMCPHelp()
+		return nil
+	}
+	if strings.HasPrefix(args[0], "-") {
+		return unknownFlag(args[0])
+	}
+	if args[0] != "serve" {
+		return errors.New("mcp requires subcommand: serve")
+	}
+	if helpRequested(args[1:]) {
+		app.printMCPServeHelp()
+		return nil
+	}
+	_, rest, err := parseFlags(args[1:], noFlags)
+	if err != nil {
+		return err
+	}
+	if len(rest) > 0 {
+		return errors.New("usage: zbrain mcp serve")
+	}
+	return zmcp.Serve(context.Background(), zmcp.Options{
+		Paths:   app.Paths,
+		Now:     app.Now,
+		Version: Version,
+		Stderr:  app.Stderr,
+	})
 }
 
 func (app App) runSetup(args []string) error {
@@ -722,6 +759,7 @@ Commands:
   ask [--workspace <name>] [--include <name>]... <query>
   status [--workspace <name>]
   doctor [--workspace <name>] [--probe-embedder]
+  mcp serve
   version
 
 Use `+"`zbrain <command> --help`"+` for command-specific help.
@@ -863,5 +901,19 @@ Return trusted context JSON without calling an LLM.
 Options:
   --workspace <name>       Primary workspace; defaults to the current workspace
   --include <name>         Explicit read-only secondary workspace; repeatable
+`)
+}
+
+func (app App) printMCPHelp() {
+	fmt.Fprint(app.Stdout, `Usage: zbrain mcp serve
+
+Serve the trusted-agent MCP gateway over stdio.
+`)
+}
+
+func (app App) printMCPServeHelp() {
+	fmt.Fprint(app.Stdout, `Usage: zbrain mcp serve
+
+Run the MCP stdio gateway. stdout is protocol-only; diagnostics go to stderr.
 `)
 }
