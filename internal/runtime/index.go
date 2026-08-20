@@ -1025,6 +1025,50 @@ func (store IndexStore) searchUnlocked(workspace string, options SearchOptions) 
 	return store.searchUnlockedInternal(workspace, options, true, true)
 }
 
+// claimsByIDsUnlocked returns approved indexed claims matching the given IDs.
+// IDs that are not present in the index are ignored. The caller must already
+// hold the workspace lock and have validated index freshness.
+func (store IndexStore) claimsByIDsUnlocked(workspace string, ids []string) ([]IndexedClaim, error) {
+	if len(ids) == 0 {
+		return nil, nil
+	}
+	databasePath, _, err := store.validatedIndexPaths(workspace)
+	if err != nil {
+		return nil, err
+	}
+	db, err := sql.Open("sqlite", databasePath)
+	if err != nil {
+		return nil, err
+	}
+	defer db.Close()
+	placeholders := strings.TrimRight(strings.Repeat("?,", len(ids)), ",")
+	queryArgs := make([]any, 0, len(ids)+1)
+	queryArgs = append(queryArgs, string(ClaimStatusApproved))
+	for _, id := range ids {
+		queryArgs = append(queryArgs, id)
+	}
+	rows, err := db.Query(`
+select id, path, tier, type, status, title, description, stale_after, tags, body, verification_digest
+from claims
+where status = ? and id in (`+placeholders+`)`, queryArgs...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	results := []IndexedClaim{}
+	for rows.Next() {
+		var result IndexedClaim
+		if err := rows.Scan(&result.ID, &result.Path, &result.Tier, &result.Type, &result.Status, &result.Title, &result.Description, &result.StaleAfter, &result.indexedTags, &result.indexedBody, &result.verificationDigest); err != nil {
+			return nil, err
+		}
+		results = append(results, result)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return results, nil
+}
+
 func (store IndexStore) searchUnlockedInternal(workspace string, options SearchOptions, checkFresh bool, checkIntegrity bool) ([]IndexedClaim, error) {
 	databasePath, _, err := store.validatedIndexPaths(workspace)
 	if err != nil {

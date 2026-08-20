@@ -60,6 +60,55 @@ func TestLoopbackEmbedderNormalized(t *testing.T) {
 	}
 }
 
+func TestLoopbackEmbedderSearchVectors(t *testing.T) {
+	paths := indexTestPaths(t)
+	store := EmbeddingStore{Paths: paths}
+	records := []EmbeddingRecord{
+		{ClaimID: "clm_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", Dimension: 384, Vector: make([]float32, 384)},
+		{ClaimID: "clm_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", Dimension: 384, Vector: make([]float32, 384)},
+	}
+	// First claim embeds "quantum entanglement observer", second embeds "weather report".
+	embedder := NewLoopbackEmbedder()
+	vectors, err := embedder.Embed([]string{"quantum entanglement observer", "weather report"})
+	if err != nil {
+		t.Fatalf("Embed() error = %v", err)
+	}
+	copy(records[0].Vector, vectors[0])
+	copy(records[1].Vector, vectors[1])
+	if err := store.StoreVectors("research", records); err != nil {
+		t.Fatalf("StoreVectors() error = %v", err)
+	}
+
+	ids, err := store.SearchVectors("research", "quantum entanglement observer", 10)
+	if err != nil {
+		t.Fatalf("SearchVectors() error = %v", err)
+	}
+	if len(ids) == 0 || ids[0] != records[0].ClaimID {
+		t.Fatalf("SearchVectors() = %v, want %q first", ids, records[0].ClaimID)
+	}
+
+	// Missing database falls back to nil.
+	ids, err = store.SearchVectors("missing", "quantum", 10)
+	if err != nil {
+		t.Fatalf("SearchVectors(missing) error = %v", err)
+	}
+	if ids != nil {
+		t.Fatalf("SearchVectors(missing) = %v, want nil", ids)
+	}
+
+	// Empty store falls back to nil.
+	if err := store.Close("research"); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+	ids, err = store.SearchVectors("research", "quantum", 10)
+	if err != nil {
+		t.Fatalf("SearchVectors(empty) error = %v", err)
+	}
+	if ids != nil {
+		t.Fatalf("SearchVectors(empty) = %v, want nil", ids)
+	}
+}
+
 func TestLoopbackEmbedderStoreRoundTrip(t *testing.T) {
 	paths := indexTestPaths(t)
 	store := EmbeddingStore{Paths: paths}

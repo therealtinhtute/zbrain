@@ -8,6 +8,7 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 
@@ -175,6 +176,93 @@ func (store EmbeddingStore) StoreVectors(workspace string, records []EmbeddingRe
 	}
 	target := store.DatabasePath(workspace)
 	return os.Rename(tmpPath, target)
+}
+
+// SearchVectors returns the top-k most similar claim IDs for the given query.
+// Returns nil, nil when no embedding database exists (caller falls back to lexical).
+func (store EmbeddingStore) SearchVectors(workspace, query string, limit int) ([]string, error) {
+	path := store.DatabasePath(workspace)
+	if _, err := os.Stat(path); err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	if limit <= 0 {
+		limit = 10
+	}
+	db, err := sql.Open("sqlite", path)
+	if err != nil {
+		return nil, err
+	}
+	defer db.Close()
+	rows, err := db.Query("select claim_id, vector, dimension from embeddings")
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	type storedVector struct {
+		claimID string
+		vector  []float32
+	}
+	var stored []storedVector
+	for rows.Next() {
+		var claimID string
+		var blob []byte
+		var dim int
+		if err := rows.Scan(&claimID, &blob, &dim); err != nil {
+			return nil, err
+		}
+		if len(blob) != 4*dim {
+			return nil, fmt.Errorf("embedding vector byte length mismatch for %q: %d bytes, want %d", claimID, len(blob), 4*dim)
+		}
+		vec := make([]float32, dim)
+		for i := range vec {
+			vec[i] = math.Float32frombits(binary.LittleEndian.Uint32(blob[4*i:]))
+		}
+		stored = append(stored, storedVector{claimID: claimID, vector: vec})
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	if len(stored) == 0 {
+		return nil, nil
+	}
+	embedder := NewLoopbackEmbedder()
+	queryVecs, err := embedder.Embed([]string{query})
+	if err != nil {
+		return nil, err
+	}
+	queryVec := queryVecs[0]
+	type scoredClaim struct {
+		id    string
+		score float64
+	}
+	scored := make([]scoredClaim, len(stored))
+	for i, s := range stored {
+		if len(s.vector) != len(queryVec) {
+			return nil, fmt.Errorf("embedding dimension mismatch for %q: %d, want %d", s.claimID, len(s.vector), len(queryVec))
+		}
+		var dot float64
+		for j := range queryVec {
+			dot += float64(queryVec[j]) * float64(s.vector[j])
+		}
+		scored[i] = scoredClaim{id: s.claimID, score: dot}
+	}
+	sort.Slice(scored, func(i, j int) bool {
+		if scored[i].score != scored[j].score {
+			return scored[i].score > scored[j].score
+		}
+		return scored[i].id < scored[j].id
+	})
+	if len(scored) > limit {
+		scored = scored[:limit]
+	}
+	ids := make([]string, len(scored))
+	for i, s := range scored {
+		ids[i] = s.id
+	}
+	return ids, nil
 }
 
 // Count returns the number of stored embeddings for a workspace.

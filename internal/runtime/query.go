@@ -31,6 +31,10 @@ type TrustedQueryOptions struct {
 	Includes  []string
 	Query     string
 	Limit     int
+	// Embedding enables hybrid retrieval: lexical search merged with vector
+	// search when the workspace has an embedding database. When the database
+	// is missing, behavior is identical to pure lexical search.
+	Embedding bool `json:"embedding,omitempty"`
 }
 
 type TrustedQueryResponse struct {
@@ -149,6 +153,12 @@ func TrustedQuery(paths Paths, options TrustedQueryOptions) (TrustedQueryRespons
 		if err != nil {
 			return TrustedQueryResponse{}, err
 		}
+		if options.Embedding {
+			approved, err = mergeVectorResults(paths, idx, workspace, approved, options.Query, limit)
+			if err != nil {
+				return TrustedQueryResponse{}, err
+			}
+		}
 		for _, claim := range approved {
 			if err := validateIndexedClaimBindingInternal(paths, workspace, claim, &manifest, nil, nil, false); err != nil {
 				return TrustedQueryResponse{}, err
@@ -189,6 +199,77 @@ func TrustedQuery(paths Paths, options TrustedQueryOptions) (TrustedQueryRespons
 		return response, nil
 	}
 	return response, nil
+}
+
+// mergeVectorResults performs hybrid retrieval: it searches the embedding store
+// for vector matches and merges them with the lexical results by interleaving
+// rank, deduplicating by claim ID, and returning the top-k total. Returns the
+// original approved slice unchanged when the embedding database is missing or
+// has no vectors.
+func mergeVectorResults(paths Paths, idx IndexStore, workspace string, approved []IndexedClaim, query string, limit int) ([]IndexedClaim, error) {
+	embStore := EmbeddingStore{Paths: paths}
+	vecIDs, err := embStore.SearchVectors(workspace, query, limit)
+	if err != nil {
+		return nil, fmt.Errorf("vector search: %w", err)
+	}
+	if vecIDs == nil {
+		return approved, nil
+	}
+	vecClaims, err := idx.claimsByIDsUnlocked(workspace, vecIDs)
+	if err != nil {
+		return nil, fmt.Errorf("vector claim lookup: %w", err)
+	}
+	if len(vecClaims) == 0 {
+		return approved, nil
+	}
+	// Reorder the looked-up claims to match the vector similarity rank order.
+	byID := make(map[string]IndexedClaim, len(vecClaims))
+	for _, claim := range vecClaims {
+		byID[claim.ID] = claim
+	}
+	ordered := make([]IndexedClaim, 0, len(vecIDs))
+	for _, id := range vecIDs {
+		if claim, ok := byID[id]; ok {
+			ordered = append(ordered, claim)
+		}
+	}
+	return interleaveClaims(approved, ordered, limit), nil
+}
+
+// interleaveClaims merges two rank-ordered claim lists by alternating rank,
+// deduplicating by claim ID, and truncating to limit. Scores are reassigned to
+// combined rank positions so a later ascending score sort preserves the
+// interleaved order.
+func interleaveClaims(lexical, vector []IndexedClaim, limit int) []IndexedClaim {
+	merged := make([]IndexedClaim, 0, limit)
+	seen := map[string]bool{}
+	longest := len(lexical)
+	if len(vector) > longest {
+		longest = len(vector)
+	}
+	for i := 0; i < longest && len(merged) < limit; i++ {
+		if i < len(lexical) {
+			claim := lexical[i]
+			if !seen[claim.ID] {
+				seen[claim.ID] = true
+				merged = append(merged, claim)
+			}
+		}
+		if len(merged) >= limit {
+			break
+		}
+		if i < len(vector) {
+			claim := vector[i]
+			if !seen[claim.ID] {
+				seen[claim.ID] = true
+				merged = append(merged, claim)
+			}
+		}
+	}
+	for i := range merged {
+		merged[i].Score = float64(i)
+	}
+	return merged
 }
 
 func validateIndexedClaimBinding(paths Paths, workspace string, indexed IndexedClaim, manifest *TrustInputManifest, evidenceValidator *EvidenceValidator, trustValidator *TrustValidator) error {
