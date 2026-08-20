@@ -12,6 +12,7 @@ import (
 
 	zmcp "github.com/therealtinhtute/zbrain/internal/mcp"
 	zruntime "github.com/therealtinhtute/zbrain/internal/runtime"
+	"github.com/therealtinhtute/zbrain/internal/view"
 )
 
 const Version = "0.1.1"
@@ -134,6 +135,8 @@ func (app App) Run(args []string) error {
 		return app.runDoctor(args[1:])
 	case "mcp":
 		return app.runMCP(args[1:])
+	case "view":
+		return app.runView(args[1:])
 	default:
 		if strings.HasPrefix(args[0], "-") {
 			return unknownFlag(args[0])
@@ -208,7 +211,13 @@ func (app App) runDoctor(args []string) error {
 		findings = append(findings, err.Error())
 	}
 	if probe {
-		findings = append(findings, "embedder probe unavailable: no embedder configured")
+		embStore := zruntime.EmbeddingStore{Paths: app.Paths}
+		count, err := embStore.Count(workspace)
+		if err != nil {
+			findings = append(findings, fmt.Sprintf("embedder probe error: %v", err))
+		} else if count == 0 {
+			findings = append(findings, "embedder probe unavailable: no embeddings found; run zbrain reindex --embed")
+		}
 	}
 	status := "healthy"
 	if len(findings) > 0 {
@@ -262,6 +271,26 @@ func (app App) runMCP(args []string) error {
 	})
 }
 
+func (app App) runView(args []string) error {
+	if helpRequested(args) {
+		app.printViewHelp()
+		return nil
+	}
+	_, rest, err := parseFlags(args, noFlags)
+	if err != nil {
+		return err
+	}
+	if len(rest) > 0 {
+		return errors.New("usage: zbrain view")
+	}
+	srv := view.Server{
+		Stdout: app.Stdout,
+		Stderr: app.Stderr,
+		Paths:  app.Paths,
+	}
+	return srv.Run()
+}
+
 func (app App) runSetup(args []string) error {
 	if helpRequested(args) {
 		app.printSetupHelp()
@@ -313,18 +342,27 @@ func (app App) runReindex(args []string) error {
 		app.printReindexHelp()
 		return nil
 	}
-	workspace, rest, err := parseWorkspaceFlag(args)
+	embed := false
+	filtered := make([]string, 0, len(args))
+	for _, arg := range args {
+		if arg == "--embed" {
+			embed = true
+			continue
+		}
+		filtered = append(filtered, arg)
+	}
+	workspace, rest, err := parseWorkspaceFlag(filtered)
 	if err != nil {
 		return err
 	}
 	if len(rest) > 0 {
-		return errors.New("usage: zbrain reindex [--workspace <name>]")
+		return errors.New("usage: zbrain reindex [--workspace <name>] [--embed]")
 	}
 	workspace, err = app.resolveWorkspace(workspace)
 	if err != nil {
 		return err
 	}
-	summary, err := (zruntime.IndexStore{Paths: app.Paths}).Rebuild(workspace)
+	summary, err := (zruntime.IndexStore{Paths: app.Paths}).RebuildWithOptions(workspace, zruntime.RebuildOptions{Embedding: embed})
 	if err != nil {
 		return err
 	}
@@ -755,11 +793,12 @@ Commands:
   claim supersede <id> --tier <tier> --title <title> --basis <owner|evidence|derived> [--evidence <id>]... [--support <id>]... [--conflicts-with <id>]... [--workspace <name>]
   claim revoke <id> --reason <text> [--workspace <name>]
   migrate okf [--workspace <name>]
-  reindex [--workspace <name>]
+  reindex [--workspace <name>] [--embed]
   ask [--workspace <name>] [--include <name>]... <query>
   status [--workspace <name>]
   doctor [--workspace <name>] [--probe-embedder]
   mcp serve
+  view
   version
 
 Use `+"`zbrain <command> --help`"+` for command-specific help.
@@ -887,9 +926,22 @@ func (app App) printMigrateOKFHelp() {
 }
 
 func (app App) printReindexHelp() {
-	fmt.Fprint(app.Stdout, `Usage: zbrain reindex [--workspace <name>]
+	fmt.Fprint(app.Stdout, `Usage: zbrain reindex [--workspace <name>] [--embed]
 
 Rebuild the disposable workspace index.
+
+Options:
+  --embed        Also compute and store loopback embedding vectors
+`)
+}
+
+func (app App) printViewHelp() {
+	fmt.Fprint(app.Stdout, `Usage: zbrain view
+
+Serve the embedded read-only viewer over loopback (127.0.0.1).
+
+The viewer binds loopback only, sends strict CSP and nosniff headers,
+has no CORS, and returns 405 for every mutation method.
 `)
 }
 
