@@ -9,7 +9,34 @@
 <body>
 <main id="app">
 <h1>zbrain</h1>
-<p class="status">trusted memory viewer</p>
+<p class="status">trusted memory viewer{{if .Workspace}} · workspace: {{.Workspace}}{{end}}</p>
+<section id="claims">
+<h2>Approved claims</h2>
+{{if .Claims}}
+<ul class="claims">
+{{range .Claims}}
+<li class="claim" id="{{.Claim.ID}}">
+<h3 class="claim-title">{{.Claim.Title}}</h3>
+<p class="claim-meta">{{.Claim.ID}} · {{.Claim.Tier}} · {{.Claim.Status}}</p>
+<div class="claim-body">{{.Claim.Body}}</div>
+{{if .Evidence}}
+<div class="evidence-list">
+<h4>Evidence</h4>
+{{range .Evidence}}
+<div class="evidence">
+<p class="evidence-meta">{{.Evidence.ID}} · {{.Evidence.Origin}} · {{.Evidence.MediaType}}</p>
+<pre class="evidence-content">{{.Content}}</pre>
+</div>
+{{end}}
+</div>
+{{end}}
+</li>
+{{end}}
+</ul>
+{{else}}
+<p class="status">No approved claims.</p>
+{{end}}
+</section>
 </main>
 </body>
 </html>

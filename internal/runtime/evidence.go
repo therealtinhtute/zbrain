@@ -217,6 +217,18 @@ func (store EvidenceStore) Verify(workspace string, id string) error {
 	return validator.Verify(id)
 }
 
+// ReadRaw returns the raw captured bytes of an evidence snapshot.
+func (store EvidenceStore) ReadRaw(workspace string, id string) ([]byte, error) {
+	if !evidenceIDPattern.MatchString(id) {
+		return nil, fmt.Errorf("evidence id must match evd_<32 lowercase hex chars>")
+	}
+	rawPath, err := store.evidenceFilePath(workspace, id, "raw")
+	if err != nil {
+		return nil, err
+	}
+	return os.ReadFile(rawPath)
+}
+
 func (validator *EvidenceValidator) Verify(id string) error {
 	if result, cached := validator.cache[id]; cached {
 		return result
