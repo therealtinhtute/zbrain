@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
 	"errors"
@@ -9,6 +10,8 @@ import (
 	"os"
 	"strings"
 	"time"
+
+	"golang.org/x/term"
 
 	zmcp "github.com/therealtinhtute/zbrain/internal/mcp"
 	zruntime "github.com/therealtinhtute/zbrain/internal/runtime"
@@ -137,6 +140,8 @@ func (app App) Run(args []string) error {
 		return app.runMCP(args[1:])
 	case "view":
 		return app.runView(args[1:])
+	case "approval":
+		return app.runApproval(args[1:])
 	default:
 		if strings.HasPrefix(args[0], "-") {
 			return unknownFlag(args[0])
@@ -289,6 +294,157 @@ func (app App) runView(args []string) error {
 		Paths:  app.Paths,
 	}
 	return srv.Run()
+}
+
+func (app App) runApproval(args []string) error {
+	if len(args) == 0 {
+		return errors.New("approval requires a subcommand: show or grant")
+	}
+	if helpRequested(args) {
+		app.printApprovalHelp()
+		return nil
+	}
+	if strings.HasPrefix(args[0], "-") {
+		return unknownFlag(args[0])
+	}
+	switch args[0] {
+	case "show":
+		return app.runApprovalShow(args[1:])
+	case "grant":
+		return app.runApprovalGrant(args[1:])
+	default:
+		return fmt.Errorf("unknown approval subcommand: %s", args[0])
+	}
+}
+
+func (app App) runApprovalShow(args []string) error {
+	if helpRequested(args) {
+		app.printApprovalShowHelp()
+		return nil
+	}
+	_, rest, err := parseFlags(args, noFlags)
+	if err != nil {
+		return err
+	}
+	if len(rest) != 1 {
+		return errors.New("usage: zbrain approval show <challenge-id>")
+	}
+	challenge, workspace, err := app.findChallenge(rest[0])
+	if err != nil {
+		return err
+	}
+	return writeJSON(app.Stdout, struct {
+		SchemaVersion      int    `json:"schema_version"`
+		ChallengeID        string `json:"challenge_id"`
+		ActionDigestSuffix string `json:"action_digest_suffix"`
+		Operation          string `json:"operation"`
+		ClaimID            string `json:"claim_id"`
+		Workspace          string `json:"workspace"`
+		ExpiresAt          string `json:"expires_at"`
+	}{1, challenge.ID, actionDigestSuffix(challenge.ActionDigest), string(challenge.Operation), challenge.ClaimID, workspace, challenge.ExpiresAt})
+}
+
+func (app App) runApprovalGrant(args []string) error {
+	if helpRequested(args) {
+		app.printApprovalGrantHelp()
+		return nil
+	}
+	_, rest, err := parseFlags(args, noFlags)
+	if err != nil {
+		return err
+	}
+	if len(rest) != 1 {
+		return errors.New("usage: zbrain approval grant <challenge-id>")
+	}
+	challenge, workspace, err := app.findChallenge(rest[0])
+	if err != nil {
+		return err
+	}
+	reader, err := newApprovalLineReader(app.Stdin)
+	if err != nil {
+		return err
+	}
+	fmt.Fprintf(app.Stderr, "action digest: %s\n", challenge.ActionDigest)
+	fmt.Fprintf(app.Stderr, "confirm the last 16 hex characters of the action digest: ")
+	confirm, err := reader.readLine()
+	if err != nil {
+		return err
+	}
+	fmt.Fprintln(app.Stderr)
+	suffix := actionDigestSuffix(challenge.ActionDigest)
+	if strings.TrimSpace(confirm) != suffix {
+		return errors.New("approval grant denied: digest suffix mismatch")
+	}
+	fmt.Fprintf(app.Stderr, "one-time token: ")
+	token, err := reader.readLine()
+	if err != nil {
+		return err
+	}
+	fmt.Fprintln(app.Stderr)
+	token = strings.TrimSpace(token)
+	consumed, err := (zruntime.ChallengeStore{Paths: app.Paths, Now: app.Now}).Consume(workspace, challenge.ID, token)
+	if err != nil {
+		return err
+	}
+	return writeJSON(app.Stdout, struct {
+		SchemaVersion int    `json:"schema_version"`
+		ChallengeID   string `json:"challenge_id"`
+		Token         string `json:"token"`
+	}{1, consumed.ID, token})
+}
+
+// findChallenge resolves a challenge ID to its owning workspace, preferring the
+// current workspace and then falling back to a full scan of every workspace.
+func (app App) findChallenge(challengeID string) (zruntime.Challenge, string, error) {
+	store := zruntime.ChallengeStore{Paths: app.Paths, Now: app.Now}
+	if current, err := zruntime.ResolveCurrentWorkspace(app.Paths); err == nil {
+		if challenge, err := store.Read(current.Workspace, challengeID); err == nil {
+			return challenge, current.Workspace, nil
+		}
+	}
+	return store.FindChallenge(challengeID)
+}
+
+func actionDigestSuffix(digest string) string {
+	if len(digest) < 16 {
+		return digest
+	}
+	return digest[len(digest)-16:]
+}
+
+// approvalLineReader reads confirmation lines from an interactive TTY without
+// echo, or from an injected non-file reader (tests). Real piped stdin fails
+// closed so the ceremony cannot be scripted.
+type approvalLineReader struct {
+	file *os.File
+	scan *bufio.Scanner
+}
+
+func newApprovalLineReader(stdin io.Reader) (*approvalLineReader, error) {
+	if file, ok := stdin.(*os.File); ok {
+		if !term.IsTerminal(int(file.Fd())) {
+			return nil, errors.New("approval grant requires an interactive terminal (TTY)")
+		}
+		return &approvalLineReader{file: file}, nil
+	}
+	return &approvalLineReader{scan: bufio.NewScanner(stdin)}, nil
+}
+
+func (reader *approvalLineReader) readLine() (string, error) {
+	if reader.file != nil {
+		value, err := term.ReadPassword(int(reader.file.Fd()))
+		if err != nil {
+			return "", err
+		}
+		return string(value), nil
+	}
+	if !reader.scan.Scan() {
+		if err := reader.scan.Err(); err != nil {
+			return "", err
+		}
+		return "", errors.New("approval grant requires the confirmation input")
+	}
+	return reader.scan.Text(), nil
 }
 
 func (app App) runSetup(args []string) error {
@@ -799,6 +955,8 @@ Commands:
   doctor [--workspace <name>] [--probe-embedder]
   mcp serve
   view
+  approval show <challenge-id>
+  approval grant <challenge-id>
   version
 
 Use `+"`zbrain <command> --help`"+` for command-specific help.
@@ -942,6 +1100,30 @@ Serve the embedded read-only viewer over loopback (127.0.0.1).
 
 The viewer binds loopback only, sends strict CSP and nosniff headers,
 has no CORS, and returns 405 for every mutation method.
+`)
+}
+
+func (app App) printApprovalHelp() {
+	fmt.Fprint(app.Stdout, `Usage:
+  zbrain approval show <challenge-id>
+  zbrain approval grant <challenge-id>
+
+Run the local owner-pinned approval ceremony for a lifecycle challenge.
+`)
+}
+
+func (app App) printApprovalShowHelp() {
+	fmt.Fprint(app.Stdout, `Usage: zbrain approval show <challenge-id>
+
+Print the challenge action summary as JSON.
+`)
+}
+
+func (app App) printApprovalGrantHelp() {
+	fmt.Fprint(app.Stdout, `Usage: zbrain approval grant <challenge-id>
+
+Confirm the last 16 hex characters of the action digest in an interactive
+TTY, then consume the one-time token and print it as JSON.
 `)
 }
 

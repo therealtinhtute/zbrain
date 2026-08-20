@@ -6,6 +6,7 @@ import (
 	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -162,6 +163,36 @@ func (store ChallengeStore) Read(workspace string, challengeID string) (Challeng
 	}
 	defer func() { _ = lock.Close() }()
 	return store.readChallengeUnlocked(workspace, challengeID)
+}
+
+// FindChallenge resolves a challenge ID to its owning workspace by scanning
+// every workspace directory under the runtime. Challenge IDs are globally
+// unique, so at most one workspace can own a challenge. A non-missing read
+// error is surfaced rather than masked by a later workspace.
+func (store ChallengeStore) FindChallenge(challengeID string) (Challenge, string, error) {
+	if !challengeIDPattern.MatchString(challengeID) {
+		return Challenge{}, "", fmt.Errorf("challenge id must match chg_<32 lowercase hex chars>")
+	}
+	entries, err := os.ReadDir(store.Paths.WorkspacesDir)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return Challenge{}, "", fmt.Errorf("challenge %s not found in any workspace", challengeID)
+		}
+		return Challenge{}, "", fmt.Errorf("list workspaces: %w", err)
+	}
+	for _, entry := range entries {
+		if !entry.IsDir() || !IsSafeWorkspaceName(entry.Name()) {
+			continue
+		}
+		challenge, err := store.Read(entry.Name(), challengeID)
+		if err == nil {
+			return challenge, entry.Name(), nil
+		}
+		if !errors.Is(err, os.ErrNotExist) {
+			return Challenge{}, "", err
+		}
+	}
+	return Challenge{}, "", fmt.Errorf("challenge %s not found in any workspace", challengeID)
 }
 
 // Verify validates a plaintext token against a fresh, unconsumed challenge

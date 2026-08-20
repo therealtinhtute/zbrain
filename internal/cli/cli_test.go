@@ -77,6 +77,9 @@ func TestCLIHelpParity(t *testing.T) {
 		{name: "reindex", args: []string{"reindex", "--help"}, want: []string{"Usage: zbrain reindex [--workspace <name>]"}},
 		{name: "ask", args: []string{"ask", "--help"}, want: []string{"--workspace <name>", "--include <name>"}},
 		{name: "status", args: []string{"status", "--help"}, want: []string{"status"}},
+		{name: "approval", args: []string{"approval", "--help"}, want: []string{"approval show <challenge-id>", "approval grant <challenge-id>"}},
+		{name: "approval show", args: []string{"approval", "show", "--help"}, want: []string{"Usage: zbrain approval show <challenge-id>"}},
+		{name: "approval grant", args: []string{"approval", "grant", "--help"}, want: []string{"Usage: zbrain approval grant <challenge-id>"}},
 	}
 
 	for _, test := range cases {
@@ -108,6 +111,8 @@ func TestUnknownFlag(t *testing.T) {
 		{"migrate", "okf", "--bogus", "value"},
 		{"reindex", "--bogus"},
 		{"ask", "query", "--bogus", "value"},
+		{"approval", "show", "--bogus", "value"},
+		{"approval", "grant", "--bogus", "value"},
 		{"version", "--bogus"},
 	}
 
@@ -1139,6 +1144,120 @@ func TestRunAskUsesOnlyExplicitIncludes(t *testing.T) {
 	decodeJSON(t, stdout(app), &included)
 	if included.Status != "ready" || len(included.Claims) != 1 || included.Claims[0].Workspace != "personal" {
 		t.Fatalf("included response = %#v", included)
+	}
+}
+
+func TestApprovalCeremony(t *testing.T) {
+	app, _ := testApp(t)
+	setupResearchApp(t, &app)
+	app.Stdout = &bytes.Buffer{}
+	app.Stdin = strings.NewReader("Ceremony claim\n")
+	if err := app.Run([]string{"claim", "draft", "--tier", "projects", "--title", "Ceremony Claim", "--basis", "owner"}); err != nil {
+		t.Fatalf("Run(claim draft) error = %v", err)
+	}
+	var draft struct {
+		ID string `json:"id"`
+	}
+	decodeJSON(t, stdout(app), &draft)
+	app.Stdout = &bytes.Buffer{}
+	if err := app.Run([]string{"claim", "approve", draft.ID}); err != nil {
+		t.Fatalf("Run(claim approve) error = %v", err)
+	}
+
+	store := zruntime.ChallengeStore{Paths: app.Paths, Now: app.Now}
+	prepared, err := store.Prepare("research", zruntime.ChallengePrepare{
+		Workspace: "research",
+		Operation: zruntime.ChallengeOperationApprove,
+		ClaimID:   draft.ID,
+	})
+	if err != nil {
+		t.Fatalf("Prepare() error = %v", err)
+	}
+	challengeID := prepared.Challenge.ID
+	suffix := actionDigestSuffix(prepared.Challenge.ActionDigest)
+
+	// Show prints the challenge summary as JSON.
+	app.Stdout = &bytes.Buffer{}
+	if err := app.Run([]string{"approval", "show", challengeID}); err != nil {
+		t.Fatalf("Run(approval show) error = %v", err)
+	}
+	var shown struct {
+		SchemaVersion      int    `json:"schema_version"`
+		ChallengeID        string `json:"challenge_id"`
+		ActionDigestSuffix string `json:"action_digest_suffix"`
+		Operation          string `json:"operation"`
+		ClaimID            string `json:"claim_id"`
+		Workspace          string `json:"workspace"`
+		ExpiresAt          string `json:"expires_at"`
+	}
+	decodeJSON(t, stdout(app), &shown)
+	if shown.SchemaVersion != 1 || shown.ChallengeID != challengeID || shown.ActionDigestSuffix != suffix || shown.Operation != "approve" || shown.ClaimID != draft.ID || shown.Workspace != "research" || shown.ExpiresAt != prepared.Challenge.ExpiresAt {
+		t.Fatalf("show output = %#v", shown)
+	}
+
+	// Grant with the correct suffix and token returns the one-time token.
+	app.Stdout = &bytes.Buffer{}
+	app.Stdin = strings.NewReader(suffix + "\n" + prepared.Token + "\n")
+	if err := app.Run([]string{"approval", "grant", challengeID}); err != nil {
+		t.Fatalf("Run(approval grant) error = %v", err)
+	}
+	var granted struct {
+		SchemaVersion int    `json:"schema_version"`
+		ChallengeID   string `json:"challenge_id"`
+		Token         string `json:"token"`
+	}
+	decodeJSON(t, stdout(app), &granted)
+	if granted.SchemaVersion != 1 || granted.ChallengeID != challengeID || granted.Token != prepared.Token {
+		t.Fatalf("grant output = %#v", granted)
+	}
+
+	// A consumed challenge cannot be granted again.
+	app.Stdout = &bytes.Buffer{}
+	app.Stdin = strings.NewReader(suffix + "\n" + prepared.Token + "\n")
+	if err := app.Run([]string{"approval", "grant", challengeID}); err == nil {
+		t.Fatalf("Run(approval grant consumed) error = nil, want already consumed")
+	}
+
+	// An incorrect suffix fails before the token is consumed.
+	second, err := store.Prepare("research", zruntime.ChallengePrepare{
+		Workspace: "research",
+		Operation: zruntime.ChallengeOperationApprove,
+		ClaimID:   draft.ID,
+	})
+	if err != nil {
+		t.Fatalf("Prepare(second) error = %v", err)
+	}
+	app.Stdout = &bytes.Buffer{}
+	app.Stdin = strings.NewReader("0000000000000000\n" + second.Token + "\n")
+	if err := app.Run([]string{"approval", "grant", second.Challenge.ID}); err == nil || !strings.Contains(err.Error(), "suffix") {
+		t.Fatalf("Run(approval grant wrong suffix) error = %v, want suffix mismatch", err)
+	}
+	if _, err := store.Read("research", second.Challenge.ID); err != nil {
+		t.Fatalf("Read(second challenge) error = %v", err)
+	}
+}
+
+func TestApprovalGrantRequiresTTY(t *testing.T) {
+	app, _ := testApp(t)
+	setupResearchApp(t, &app)
+	store := zruntime.ChallengeStore{Paths: app.Paths, Now: app.Now}
+	prepared, err := store.Prepare("research", zruntime.ChallengePrepare{
+		Workspace: "research",
+		Operation: zruntime.ChallengeOperationApprove,
+		ClaimID:   "clm_0123456789abcdef0123456789abcdef",
+	})
+	if err != nil {
+		t.Fatalf("Prepare() error = %v", err)
+	}
+	app.Stdout = &bytes.Buffer{}
+	devNull, err := os.Open(os.DevNull)
+	if err != nil {
+		t.Fatalf("Open(os.DevNull) error = %v", err)
+	}
+	defer devNull.Close()
+	app.Stdin = devNull
+	if err := app.Run([]string{"approval", "grant", prepared.Challenge.ID}); err == nil || !strings.Contains(err.Error(), "TTY") {
+		t.Fatalf("Run(approval grant non-TTY) error = %v, want interactive terminal error", err)
 	}
 }
 
