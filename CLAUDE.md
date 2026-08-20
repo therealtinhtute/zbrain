@@ -99,3 +99,7 @@ Runtime and workspace layout:
 Runtime ownership permissions are owner-only: directories use `0700`, mutable
 metadata and canonical Markdown use `0600`, immutable evidence snapshots and
 metadata use `0400`, and derived index databases/dirty markers use `0600`.
+
+<!-- ZHARNESS:BEGIN -->
+@AGENTS.md
+<!-- ZHARNESS:END -->
