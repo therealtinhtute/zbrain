@@ -86,9 +86,8 @@ func (s *Server) handler() http.Handler {
 	mux.HandleFunc("/", s.handlePage)
 
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// Reject mutation methods — 405 for every non-GET/HEAD.
-		switch r.Method {
-		case http.MethodPut, http.MethodPost, http.MethodDelete, http.MethodPatch:
+		// Reject every method except the read-only GET/HEAD allow-list.
+		if r.Method != http.MethodGet && r.Method != http.MethodHead {
 			setSecurityHeaders(w)
 			w.WriteHeader(http.StatusMethodNotAllowed)
 			return

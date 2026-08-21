@@ -17,6 +17,27 @@ type ClaimStore struct {
 	Now   func() time.Time
 }
 
+// ClaimMutationOptions carries optional provenance for callers that execute a
+// lifecycle transition through a prepared owner challenge. Empty options keep
+// the existing CLI owner provenance and serialized shape.
+type ClaimMutationOptions struct {
+	VerifiedBy    string
+	Authorization *ClaimTransitionAuthorization
+}
+
+func (options ClaimMutationOptions) normalized() (ClaimMutationOptions, error) {
+	normalized := options
+	if strings.TrimSpace(normalized.VerifiedBy) == "" {
+		normalized.VerifiedBy = "owner"
+	} else {
+		normalized.VerifiedBy = strings.TrimSpace(normalized.VerifiedBy)
+	}
+	if err := ValidateClaimTransitionAuthorization(normalized.Authorization); err != nil {
+		return ClaimMutationOptions{}, err
+	}
+	return normalized, nil
+}
+
 type ClaimScan struct {
 	Claims          []Claim
 	LegacyUnindexed []string
@@ -112,6 +133,12 @@ func (store ClaimStore) writeDraftUnlocked(workspace string, claim Claim) (Claim
 }
 
 func (store ClaimStore) Approve(workspace string, id string) (Claim, error) {
+	return store.ApproveWithOptions(workspace, id, ClaimMutationOptions{})
+}
+
+// ApproveWithOptions promotes a draft while preserving the default CLI owner
+// provenance unless an explicit caller provenance is supplied.
+func (store ClaimStore) ApproveWithOptions(workspace string, id string, options ClaimMutationOptions) (Claim, error) {
 	lock, err := acquireWorkspaceLock(store.Paths, workspace, true)
 	if err != nil {
 		return Claim{}, err
@@ -120,106 +147,19 @@ func (store ClaimStore) Approve(workspace string, id string) (Claim, error) {
 	if err := recoverPendingTransitionForMutationUnlocked(store.Paths, workspace); err != nil {
 		return Claim{}, err
 	}
-	return store.approveUnlocked(workspace, id)
+	return store.approveUnlockedWithOptions(workspace, id, options)
 }
 
 func (store ClaimStore) approveUnlocked(workspace string, id string) (Claim, error) {
-	claim, err := store.Read(workspace, id)
-	if err != nil {
-		return Claim{}, err
-	}
-	if claim.Status != ClaimStatusDraft {
-		return Claim{}, fmt.Errorf("claim %s is %s; only draft claims can be approved", id, claim.Status)
-	}
-	if err := ValidateClaimApproval(claim); err != nil {
-		return Claim{}, err
-	}
-	evidenceValidator, err := store.validateApprovalReferences(workspace, claim)
-	if err != nil {
-		return Claim{}, err
-	}
-	sources, err := store.claimSources(workspace, claim.EvidenceIDs, evidenceValidator)
-	if err != nil {
-		return Claim{}, err
-	}
+	return store.approveUnlockedWithOptions(workspace, id, ClaimMutationOptions{})
+}
 
-	seenOldIDs := make(map[string]struct{}, len(claim.Supersedes))
-	oldClaims := make([]Claim, 0, len(claim.Supersedes))
-	for _, oldID := range claim.Supersedes {
-		if _, ok := seenOldIDs[oldID]; ok {
-			return Claim{}, fmt.Errorf("claim %s supersedes duplicate claim %s", id, oldID)
-		}
-		seenOldIDs[oldID] = struct{}{}
-		old, err := store.Read(workspace, oldID)
-		if err != nil {
-			return Claim{}, err
-		}
-		if old.Status != ClaimStatusApproved {
-			return Claim{}, fmt.Errorf("claim %s is %s; only approved claims can be superseded", oldID, old.Status)
-		}
-		oldClaims = append(oldClaims, old)
-	}
-
-	verifiedAt := store.now().UTC().Format(time.RFC3339)
-	claim.Schema = ""
-	claim.Type = OKFClaimType
-	claim.Status = ClaimStatusApproved
-	claim.Sources = sources
-	claim.VerifiedAt = verifiedAt
-	claim.VerifiedBy = "owner"
-	claim.VerifiedDigest = ""
-	transitionKind := ClaimTransitionApprove
-	if len(oldClaims) > 0 {
-		transitionKind = ClaimTransitionSupersede
-	}
-	claim.Transitions = appendClaimTransition(claim, ClaimTransition{
-		Kind:            transitionKind,
-		At:              verifiedAt,
-		By:              claim.VerifiedBy,
-		RelatedClaimIDs: append([]string(nil), claim.Supersedes...),
-	})
-	digest, err := ClaimVerificationDigest(claim)
+func (store ClaimStore) approveUnlockedWithOptions(workspace string, id string, options ClaimMutationOptions) (Claim, error) {
+	plan, err := store.prepareApproveUnlocked(workspace, id, options)
 	if err != nil {
 		return Claim{}, err
 	}
-	claim.VerifiedDigest = digest
-
-	for i := range oldClaims {
-		oldClaims[i].Status = ClaimStatusSuperseded
-		oldClaims[i].Transitions = appendClaimTransition(oldClaims[i], ClaimTransition{
-			Kind:                    ClaimTransitionSupersede,
-			At:                      verifiedAt,
-			By:                      claim.VerifiedBy,
-			RelatedClaimIDs:         []string{claim.ID},
-			PriorVerificationDigest: oldClaims[i].VerifiedDigest,
-		})
-	}
-	var pending *PendingTransition
-	if len(oldClaims) > 0 {
-		prepared, err := store.pendingSupersession(workspace, claim, oldClaims)
-		if err != nil {
-			return Claim{}, err
-		}
-		pending = &prepared
-	}
-	if _, err := beginCanonicalMutationUnlocked(store.Paths, workspace); err != nil {
-		return Claim{}, err
-	}
-	if pending != nil {
-		if err := writePendingTransitionUnlocked(store.Paths, workspace, *pending); err != nil {
-			return Claim{}, err
-		}
-		runWorkspaceGenerationTestHook(workspaceGenerationHookBeforeCanonicalWrite)
-		if err := recoverPendingTransitionUnlocked(store.Paths, workspace); err != nil {
-			return Claim{}, err
-		}
-		return claim, nil
-	}
-	runWorkspaceGenerationTestHook(workspaceGenerationHookBeforeCanonicalWrite)
-	if err := store.writeExisting(workspace, claim); err != nil {
-		return Claim{}, err
-	}
-	return claim, nil
+	return store.commitApproveUnlocked(workspace, plan)
 }
 
 func (store ClaimStore) WriteSupersedingDraft(workspace string, currentID string, replacement Claim) (Claim, error) {
@@ -243,6 +183,12 @@ func (store ClaimStore) WriteSupersedingDraft(workspace string, currentID string
 }
 
 func (store ClaimStore) Revoke(workspace string, id string, reason string) (Claim, error) {
+	return store.RevokeWithOptions(workspace, id, reason, ClaimMutationOptions{})
+}
+
+// RevokeWithOptions revokes an approved claim while preserving the default
+// CLI owner provenance unless an explicit caller provenance is supplied.
+func (store ClaimStore) RevokeWithOptions(workspace string, id string, reason string, options ClaimMutationOptions) (Claim, error) {
 	lock, err := acquireWorkspaceLock(store.Paths, workspace, true)
 	if err != nil {
 		return Claim{}, err
@@ -251,33 +197,15 @@ func (store ClaimStore) Revoke(workspace string, id string, reason string) (Clai
 	if err := recoverPendingTransitionForMutationUnlocked(store.Paths, workspace); err != nil {
 		return Claim{}, err
 	}
-	claim, err := store.Read(workspace, id)
+	return store.revokeUnlockedWithOptions(workspace, id, reason, options)
+}
+
+func (store ClaimStore) revokeUnlockedWithOptions(workspace string, id string, reason string, options ClaimMutationOptions) (Claim, error) {
+	plan, err := store.prepareRevokeUnlocked(workspace, id, reason, options)
 	if err != nil {
 		return Claim{}, err
 	}
-	if strings.TrimSpace(reason) == "" {
-		return Claim{}, fmt.Errorf("revoke reason is required")
-	}
-	if claim.Status != ClaimStatusApproved {
-		return Claim{}, fmt.Errorf("claim %s is %s; only approved claims can be revoked", id, claim.Status)
-	}
-	claim.Status = ClaimStatusRevoked
-	claim.Transitions = appendClaimTransition(claim, ClaimTransition{
-		Kind:                    ClaimTransitionRevoke,
-		At:                      store.now().UTC().Format(time.RFC3339),
-		By:                      "owner",
-		Reason:                  strings.TrimSpace(reason),
-		RelatedClaimIDs:         []string{id},
-		PriorVerificationDigest: claim.VerifiedDigest,
-	})
-	if _, err := beginCanonicalMutationUnlocked(store.Paths, workspace); err != nil {
-		return Claim{}, err
-	}
-	runWorkspaceGenerationTestHook(workspaceGenerationHookBeforeCanonicalWrite)
-	if err := store.writeExisting(workspace, claim); err != nil {
-		return Claim{}, err
-	}
-	return claim, nil
+	return store.commitRevokeUnlocked(workspace, plan)
 }
 
 func (store ClaimStore) Read(workspace string, id string) (Claim, error) {
@@ -788,7 +716,16 @@ func appendUniqueClaimID(ids []string, id string) []string {
 func appendClaimTransition(claim Claim, transition ClaimTransition) []ClaimTransition {
 	transitions := append([]ClaimTransition(nil), claim.Transitions...)
 	transition.RelatedClaimIDs = append([]string(nil), transition.RelatedClaimIDs...)
+	transition.Authorization = cloneClaimTransitionAuthorization(transition.Authorization)
 	return append(transitions, transition)
+}
+
+func cloneClaimTransitionAuthorization(authorization *ClaimTransitionAuthorization) *ClaimTransitionAuthorization {
+	if authorization == nil {
+		return nil
+	}
+	clone := *authorization
+	return &clone
 }
 
 func (store ClaimStore) validateApprovalReferences(workspace string, claim Claim) (*EvidenceValidator, error) {

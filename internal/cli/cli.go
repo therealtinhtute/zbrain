@@ -167,13 +167,14 @@ func (app App) runStatus(args []string) error {
 		return err
 	}
 	idx := zruntime.IndexStore{Paths: app.Paths}
-	summary := zruntime.IndexSummary{Workspace: workspace, Embedding: zruntime.EmbeddingSummary{Strategy: "lexical", Degraded: "embeddings not configured"}}
+	summary := zruntime.IndexSummary{Workspace: workspace}
 	if scan, scanErr := (zruntime.ClaimStore{Paths: app.Paths, Now: app.Now}).ScanWorkspaceForTrust(workspace); scanErr == nil {
 		summary.Approved = len(scan.Claims)
 		summary.Invalid = len(scan.Invalid)
 		summary.InvalidCount = len(scan.Invalid)
 		summary.InvalidClaims = scan.Invalid
 	}
+	summary.Embedding = (zruntime.EmbeddingStore{Paths: app.Paths}).Summary(workspace, summary.Approved)
 	if err := idx.CheckFresh(workspace); err != nil {
 		summary.RebuildState = zruntime.RebuildStatusRejected
 		if summary.Invalid == 0 {
@@ -341,7 +342,8 @@ func (app App) runApprovalShow(args []string) error {
 		ClaimID            string `json:"claim_id"`
 		Workspace          string `json:"workspace"`
 		ExpiresAt          string `json:"expires_at"`
-	}{1, challenge.ID, actionDigestSuffix(challenge.ActionDigest), string(challenge.Operation), challenge.ClaimID, workspace, challenge.ExpiresAt})
+		TokenExpiresAt     string `json:"token_expires_at"`
+	}{1, challenge.ID, actionDigestSuffix(challenge.ActionDigest), string(challenge.Operation), challenge.ClaimID, workspace, challenge.ExpiresAt, challenge.TokenExpiresAt})
 }
 
 func (app App) runApprovalGrant(args []string) error {
@@ -375,14 +377,8 @@ func (app App) runApprovalGrant(args []string) error {
 	if strings.TrimSpace(confirm) != suffix {
 		return errors.New("approval grant denied: digest suffix mismatch")
 	}
-	fmt.Fprintf(app.Stderr, "one-time token: ")
-	token, err := reader.readLine()
-	if err != nil {
-		return err
-	}
 	fmt.Fprintln(app.Stderr)
-	token = strings.TrimSpace(token)
-	consumed, err := (zruntime.ChallengeStore{Paths: app.Paths, Now: app.Now}).Consume(workspace, challenge.ID, token)
+	granted, err := (zruntime.ChallengeStore{Paths: app.Paths, Now: app.Now}).Grant(workspace, challenge.ID)
 	if err != nil {
 		return err
 	}
@@ -390,7 +386,7 @@ func (app App) runApprovalGrant(args []string) error {
 		SchemaVersion int    `json:"schema_version"`
 		ChallengeID   string `json:"challenge_id"`
 		Token         string `json:"token"`
-	}{1, consumed.ID, token})
+	}{1, granted.ID, granted.Token})
 }
 
 // findChallenge resolves a challenge ID to its owning workspace, preferring the
@@ -479,14 +475,23 @@ func (app App) runAsk(args []string) error {
 		app.printAskHelp()
 		return nil
 	}
-	workspace, includes, rest, err := parseWorkspaceIncludeFlags(args)
+	embed := false
+	filtered := make([]string, 0, len(args))
+	for _, arg := range args {
+		if arg == "--embed" {
+			embed = true
+			continue
+		}
+		filtered = append(filtered, arg)
+	}
+	workspace, includes, rest, err := parseWorkspaceIncludeFlags(filtered)
 	if err != nil {
 		return err
 	}
 	if len(rest) == 0 {
-		return errors.New("usage: zbrain ask [--workspace <name>] [--include <name>]... <query>")
+		return errors.New("usage: zbrain ask [--workspace <name>] [--include <name>]... [--embed] <query>")
 	}
-	response, err := zruntime.TrustedQuery(app.Paths, zruntime.TrustedQueryOptions{Workspace: workspace, Includes: includes, Query: strings.Join(rest, " "), Limit: 10})
+	response, err := zruntime.TrustedQuery(app.Paths, zruntime.TrustedQueryOptions{Workspace: workspace, Includes: includes, Query: strings.Join(rest, " "), Limit: 10, Embedding: embed})
 	if err != nil {
 		return err
 	}
@@ -950,7 +955,7 @@ Commands:
   claim revoke <id> --reason <text> [--workspace <name>]
   migrate okf [--workspace <name>]
   reindex [--workspace <name>] [--embed]
-  ask [--workspace <name>] [--include <name>]... <query>
+  ask [--workspace <name>] [--include <name>]... [--embed] <query>
   status [--workspace <name>]
   doctor [--workspace <name>] [--probe-embedder]
   mcp serve
@@ -1099,7 +1104,7 @@ func (app App) printViewHelp() {
 Serve the embedded read-only viewer over loopback (127.0.0.1).
 
 The viewer binds loopback only, sends strict CSP and nosniff headers,
-has no CORS, and returns 405 for every mutation method.
+has no CORS, and returns 405 for every method other than GET and HEAD.
 `)
 }
 
@@ -1123,18 +1128,19 @@ func (app App) printApprovalGrantHelp() {
 	fmt.Fprint(app.Stdout, `Usage: zbrain approval grant <challenge-id>
 
 Confirm the last 16 hex characters of the action digest in an interactive
-TTY, then consume the one-time token and print it as JSON.
+TTY, then verify and print the one-time token as JSON for later apply.
 `)
 }
 
 func (app App) printAskHelp() {
-	fmt.Fprint(app.Stdout, `Usage: zbrain ask [--workspace <name>] [--include <name>]... <query>
+	fmt.Fprint(app.Stdout, `Usage: zbrain ask [--workspace <name>] [--include <name>]... [--embed] <query>
 
 Return trusted context JSON without calling an LLM.
 
 Options:
   --workspace <name>       Primary workspace; defaults to the current workspace
   --include <name>         Explicit read-only secondary workspace; repeatable
+  --embed                  Also use local embedding vectors; defaults to lexical-only
 `)
 }
 

@@ -4,13 +4,55 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
+	"github.com/modelcontextprotocol/go-sdk/jsonrpc"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
 	zruntime "github.com/therealtinhtute/zbrain/internal/runtime"
 )
+
+type lifecycleIn struct {
+	Operation               string    `json:"operation" jsonschema:"prepare or apply"`
+	Action                  string    `json:"action,omitempty" jsonschema:"approve, supersede, or revoke for prepare"`
+	Workspace               string    `json:"workspace,omitempty" jsonschema:"target workspace; defaults to the current workspace for prepare; apply resolves the challenge owner"`
+	ClaimID                 string    `json:"claim_id,omitempty" jsonschema:"target claim ID for prepare or optional apply assertion"`
+	ChallengeID             string    `json:"challenge_id,omitempty" jsonschema:"challenge ID for apply"`
+	Token                   string    `json:"token,omitempty" jsonschema:"one-time challenge token for apply"`
+	CanonicalDraftDigest    string    `json:"canonical_draft_digest,omitempty" jsonschema:"canonical draft digest bound to the action"`
+	SupersededIDs           *[]string `json:"superseded_ids,omitempty" jsonschema:"canonical superseded claim IDs bound to the action"`
+	PriorVerificationDigest string    `json:"prior_verification_digest,omitempty" jsonschema:"prior verification digest bound to the action"`
+	RevokeReason            string    `json:"revoke_reason,omitempty" jsonschema:"reason bound to a revoke action"`
+}
+
+type lifecycleActionSummary struct {
+	Action                  string   `json:"action"`
+	Workspace               string   `json:"workspace"`
+	ClaimID                 string   `json:"claim_id"`
+	CanonicalDraftDigest    string   `json:"canonical_draft_digest"`
+	SupersededIDs           []string `json:"superseded_ids"`
+	PriorVerificationDigest string   `json:"prior_verification_digest"`
+	RevokeReason            string   `json:"revoke_reason"`
+}
+
+type lifecycleResult struct {
+	SchemaVersion  int                    `json:"schema_version"`
+	Operation      string                 `json:"operation"`
+	Action         string                 `json:"action"`
+	Workspace      string                 `json:"workspace"`
+	ClaimID        string                 `json:"claim_id"`
+	ChallengeID    string                 `json:"challenge_id"`
+	ActionSummary  lifecycleActionSummary `json:"action_summary"`
+	ActionDigest   string                 `json:"action_digest"`
+	ExpiresAt      string                 `json:"expires_at"`
+	TokenExpiresAt string                 `json:"token_expires_at,omitempty"`
+	Token          string                 `json:"token,omitempty"`
+	Status         zruntime.ClaimStatus   `json:"status,omitempty"`
+	VerifiedBy     string                 `json:"verified_by,omitempty"`
+	Claim          *zruntime.Claim        `json:"claim,omitempty"`
+}
 
 // registerTools registers the seven typed gateway tools.
 //
@@ -42,6 +84,7 @@ func registerTools(server *mcp.Server, opts Options) error {
 		Query     string   `json:"query" jsonschema:"the trusted-memory query"`
 		Workspace string   `json:"workspace,omitempty" jsonschema:"workspace to query; defaults to the current workspace"`
 		Include   []string `json:"include,omitempty" jsonschema:"read-only secondary workspace to include"`
+		Embedding bool     `json:"embedding,omitempty" jsonschema:"enable local hybrid embedding retrieval; defaults to false"`
 	}
 
 	mcp.AddTool(server, &mcp.Tool{
@@ -60,6 +103,7 @@ func registerTools(server *mcp.Server, opts Options) error {
 			Includes:  in.Include,
 			Query:     in.Query,
 			Limit:     10,
+			Embedding: in.Embedding,
 		})
 		if err != nil {
 			return nil, nil, err
@@ -79,16 +123,14 @@ func registerTools(server *mcp.Server, opts Options) error {
 		if err != nil {
 			return nil, nil, err
 		}
-		summary := zruntime.IndexSummary{
-			Workspace: workspace,
-			Embedding: zruntime.EmbeddingSummary{Strategy: "lexical", Degraded: "embeddings not configured"},
-		}
+		summary := zruntime.IndexSummary{Workspace: workspace}
 		if scan, scanErr := (zruntime.ClaimStore{Paths: opts.Paths, Now: opts.Now}).ScanWorkspaceForTrust(workspace); scanErr == nil {
 			summary.Approved = len(scan.Claims)
 			summary.Invalid = len(scan.Invalid)
 			summary.InvalidCount = len(scan.Invalid)
 			summary.InvalidClaims = scan.Invalid
 		}
+		summary.Embedding = (zruntime.EmbeddingStore{Paths: opts.Paths}).Summary(workspace, summary.Approved)
 		if err := (zruntime.IndexStore{Paths: opts.Paths}).CheckFresh(workspace); err != nil {
 			summary.RebuildState = zruntime.RebuildStatusRejected
 			if summary.Invalid == 0 {
@@ -104,6 +146,7 @@ func registerTools(server *mcp.Server, opts Options) error {
 
 	type reindexIn struct {
 		Workspace string `json:"workspace,omitempty" jsonschema:"workspace whose derived index to rebuild; defaults to the current workspace"`
+		Embedding bool   `json:"embedding,omitempty" jsonschema:"enable local loopback embedding; defaults to false"`
 	}
 
 	mcp.AddTool(server, &mcp.Tool{
@@ -114,7 +157,7 @@ func registerTools(server *mcp.Server, opts Options) error {
 		if err != nil {
 			return nil, nil, err
 		}
-		summary, err := (zruntime.IndexStore{Paths: opts.Paths}).Rebuild(workspace)
+		summary, err := (zruntime.IndexStore{Paths: opts.Paths}).RebuildWithOptions(workspace, zruntime.RebuildOptions{Embedding: in.Embedding})
 		if err != nil {
 			return nil, nil, err
 		}
@@ -151,7 +194,7 @@ func registerTools(server *mcp.Server, opts Options) error {
 			return nil, nil, err
 		}
 		out := struct {
-			SchemaVersion int `json:"schema_version"`
+			SchemaVersion int    `json:"schema_version"`
 			Workspace     string `json:"workspace"`
 			zruntime.Evidence
 		}{1, workspace, evidence}
@@ -212,20 +255,269 @@ func registerTools(server *mcp.Server, opts Options) error {
 		return jsonResult(out)
 	})
 
-	type lifecycleIn struct {
-		Operation string `json:"operation" jsonschema:"prepare or apply"`
-		Workspace string `json:"workspace,omitempty" jsonschema:"target workspace; defaults to the current workspace"`
-		ClaimID   string `json:"claim_id,omitempty" jsonschema:"target claim ID"`
-	}
-
 	mcp.AddTool(server, &mcp.Tool{
 		Name:        "claim_lifecycle",
-		Description: "Owner-pinned lifecycle challenge. Fails closed: prepare and apply are unavailable until the owner-pinned-lifecycle phase lands.",
+		Description: "Prepare an owner-pinned lifecycle challenge or apply one valid one-time token; no approval UI or HTTP mutation endpoint is exposed.",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, in lifecycleIn) (*mcp.CallToolResult, any, error) {
-		return nil, nil, fmt.Errorf("claim_lifecycle %s is unavailable: the owner-pinned-lifecycle phase has not landed yet", in.Operation)
+		switch in.Operation {
+		case "prepare":
+			return prepareLifecycle(opts, in)
+		case "apply":
+			return applyLifecycle(opts, req, in)
+		default:
+			return nil, nil, invalidLifecycleParams("operation must be prepare or apply")
+		}
 	})
 
 	return nil
+}
+
+func prepareLifecycle(opts Options, in lifecycleIn) (*mcp.CallToolResult, any, error) {
+	if strings.TrimSpace(in.Action) == "" {
+		return nil, nil, invalidLifecycleParams("action is required for prepare")
+	}
+	action, err := lifecycleAction(in.Action)
+	if err != nil {
+		return nil, nil, err
+	}
+	workspace, err := resolveWorkspace(opts, in.Workspace)
+	if err != nil {
+		return nil, nil, err
+	}
+	claimID := strings.TrimSpace(in.ClaimID)
+	if claimID == "" {
+		return nil, nil, invalidLifecycleParams("claim_id is required for prepare")
+	}
+	store := zruntime.ClaimStore{Paths: opts.Paths, Now: opts.Now}
+	claim, err := store.Read(workspace, claimID)
+	if err != nil {
+		return nil, nil, err
+	}
+	canonicalDigest, err := store.CanonicalDraftDigest(workspace, claimID)
+	if err != nil {
+		return nil, nil, err
+	}
+	if in.CanonicalDraftDigest != "" && in.CanonicalDraftDigest != canonicalDigest {
+		return nil, nil, fmt.Errorf("canonical draft digest does not match the current claim")
+	}
+
+	supersededIDs := append([]string(nil), claim.Supersedes...)
+	sort.Strings(supersededIDs)
+	if in.SupersededIDs != nil && !sameLifecycleIDs(*in.SupersededIDs, supersededIDs) {
+		return nil, nil, fmt.Errorf("superseded IDs do not match the current claim")
+	}
+
+	priorVerificationDigest := ""
+	switch action {
+	case zruntime.ChallengeOperationSupersede:
+		priorVerificationDigest, err = supersededPriorVerificationDigest(store, workspace, supersededIDs)
+		if err != nil {
+			return nil, nil, err
+		}
+	case zruntime.ChallengeOperationRevoke:
+		if claim.Status == zruntime.ClaimStatusApproved {
+			if err := zruntime.VerifyClaimDigest(claim); err != nil {
+				return nil, nil, fmt.Errorf("verify claim %s before revoke: %w", claimID, err)
+			}
+			priorVerificationDigest = claim.VerifiedDigest
+		}
+	}
+	if in.PriorVerificationDigest != "" && in.PriorVerificationDigest != priorVerificationDigest {
+		return nil, nil, fmt.Errorf("prior verification digest does not match the current claim")
+	}
+
+	revokeReason := in.RevokeReason
+	if action == zruntime.ChallengeOperationRevoke {
+		if strings.TrimSpace(revokeReason) == "" {
+			return nil, nil, invalidLifecycleParams("revoke_reason is required for revoke")
+		}
+	} else if revokeReason != "" {
+		return nil, nil, fmt.Errorf("revoke_reason is only valid for revoke")
+	}
+
+	prepared, err := store.PrepareChallenge(workspace, zruntime.ChallengePrepare{
+		Workspace:               workspace,
+		Operation:               action,
+		ClaimID:                 claimID,
+		CanonicalDraftDigest:    canonicalDigest,
+		SupersededIDs:           supersededIDs,
+		PriorVerificationDigest: priorVerificationDigest,
+		RevokeReason:            revokeReason,
+	})
+	if err != nil {
+		return nil, nil, err
+	}
+	challenge := prepared.Challenge
+	result := lifecycleResult{
+		SchemaVersion: 1,
+		Operation:     "prepare",
+		Action:        string(challenge.Operation),
+		Workspace:     workspace,
+		ClaimID:       challenge.ClaimID,
+		ChallengeID:   challenge.ID,
+		ActionSummary: lifecycleActionSummaryFromChallenge(challenge),
+		ActionDigest:  challenge.ActionDigest,
+		ExpiresAt:     challenge.ExpiresAt,
+	}
+	return jsonResult(result)
+}
+
+func applyLifecycle(opts Options, req *mcp.CallToolRequest, in lifecycleIn) (*mcp.CallToolResult, any, error) {
+	challengeID := strings.TrimSpace(in.ChallengeID)
+	if challengeID == "" {
+		return nil, nil, invalidLifecycleParams("challenge_id is required for apply")
+	}
+	if in.Token == "" {
+		return nil, nil, invalidLifecycleParams("token is required for apply")
+	}
+
+	challengeStore := zruntime.ChallengeStore{Paths: opts.Paths, Now: opts.Now}
+	challenge, workspace, err := challengeStore.FindChallenge(challengeID)
+	if err != nil {
+		return nil, nil, err
+	}
+	if in.Workspace != "" && in.Workspace != workspace {
+		return nil, nil, fmt.Errorf("workspace %q does not own challenge %s", in.Workspace, challengeID)
+	}
+	if in.ClaimID != "" && strings.TrimSpace(in.ClaimID) != challenge.ClaimID {
+		return nil, nil, fmt.Errorf("claim_id does not match challenge %s", challengeID)
+	}
+	if in.Action != "" {
+		action, err := lifecycleAction(in.Action)
+		if err != nil {
+			return nil, nil, err
+		}
+		if action != challenge.Operation {
+			return nil, nil, fmt.Errorf("action %q does not match challenge %s action %q", in.Action, challengeID, challenge.Operation)
+		}
+	}
+	if in.CanonicalDraftDigest != "" && in.CanonicalDraftDigest != challenge.CanonicalDraftDigest {
+		return nil, nil, fmt.Errorf("canonical draft digest does not match challenge %s", challengeID)
+	}
+	if in.SupersededIDs != nil && !sameLifecycleIDs(*in.SupersededIDs, challenge.SupersededIDs) {
+		return nil, nil, fmt.Errorf("superseded IDs do not match challenge %s", challengeID)
+	}
+	if in.PriorVerificationDigest != "" && in.PriorVerificationDigest != challenge.PriorVerificationDigest {
+		return nil, nil, fmt.Errorf("prior verification digest does not match challenge %s", challengeID)
+	}
+	if in.RevokeReason != "" && in.RevokeReason != challenge.RevokeReason {
+		return nil, nil, fmt.Errorf("revoke reason does not match challenge %s", challengeID)
+	}
+
+	claim, err := (zruntime.ClaimStore{Paths: opts.Paths, Now: opts.Now}).ApplyChallenge(
+		workspace,
+		challengeID,
+		in.Token,
+		zruntime.ClaimMutationOptions{
+			VerifiedBy: "owner:mcp",
+			Authorization: &zruntime.ClaimTransitionAuthorization{
+				ChallengeID: challenge.ID,
+				Method:      "mcp.claim_lifecycle",
+				MCPClient:   mcpClientName(req),
+			},
+		},
+	)
+	if err != nil {
+		return nil, nil, err
+	}
+	result := lifecycleResult{
+		SchemaVersion:  1,
+		Operation:      "apply",
+		Action:         string(challenge.Operation),
+		Workspace:      workspace,
+		ClaimID:        claim.ID,
+		ChallengeID:    challenge.ID,
+		ActionSummary:  lifecycleActionSummaryFromChallenge(challenge),
+		ActionDigest:   challenge.ActionDigest,
+		ExpiresAt:      challenge.ExpiresAt,
+		TokenExpiresAt: challenge.TokenExpiresAt,
+		Status:         claim.Status,
+		VerifiedBy:     claim.VerifiedBy,
+		Claim:          &claim,
+	}
+	return jsonResult(result)
+}
+
+func lifecycleAction(action string) (zruntime.ChallengeOperation, error) {
+	switch strings.TrimSpace(action) {
+	case string(zruntime.ChallengeOperationApprove):
+		return zruntime.ChallengeOperationApprove, nil
+	case string(zruntime.ChallengeOperationSupersede):
+		return zruntime.ChallengeOperationSupersede, nil
+	case string(zruntime.ChallengeOperationRevoke):
+		return zruntime.ChallengeOperationRevoke, nil
+	default:
+		return "", invalidLifecycleParams("action must be approve, supersede, or revoke")
+	}
+}
+
+func supersededPriorVerificationDigest(store zruntime.ClaimStore, workspace string, ids []string) (string, error) {
+	if len(ids) == 0 {
+		return "", nil
+	}
+	claim, err := store.Read(workspace, ids[0])
+	if err != nil {
+		return "", err
+	}
+	if claim.Status != zruntime.ClaimStatusApproved {
+		return "", fmt.Errorf("claim %s is %s; only approved claims can be superseded", claim.ID, claim.Status)
+	}
+	if err := zruntime.VerifyClaimDigest(claim); err != nil {
+		return "", fmt.Errorf("verify superseded claim %s: %w", claim.ID, err)
+	}
+	return claim.VerifiedDigest, nil
+}
+
+func sameLifecycleIDs(left []string, right []string) bool {
+	leftCopy := append([]string(nil), left...)
+	rightCopy := append([]string(nil), right...)
+	sort.Strings(leftCopy)
+	sort.Strings(rightCopy)
+	if len(leftCopy) != len(rightCopy) {
+		return false
+	}
+	for i := range leftCopy {
+		if leftCopy[i] != rightCopy[i] {
+			return false
+		}
+	}
+	return true
+}
+
+func lifecycleActionSummaryFromChallenge(challenge zruntime.Challenge) lifecycleActionSummary {
+	supersededIDs := append([]string(nil), challenge.SupersededIDs...)
+	if supersededIDs == nil {
+		supersededIDs = []string{}
+	}
+	return lifecycleActionSummary{
+		Action:                  string(challenge.Operation),
+		Workspace:               challenge.Workspace,
+		ClaimID:                 challenge.ClaimID,
+		CanonicalDraftDigest:    challenge.CanonicalDraftDigest,
+		SupersededIDs:           supersededIDs,
+		PriorVerificationDigest: challenge.PriorVerificationDigest,
+		RevokeReason:            challenge.RevokeReason,
+	}
+}
+
+func mcpClientName(req *mcp.CallToolRequest) string {
+	if req == nil || req.Session == nil {
+		return "unknown"
+	}
+	params := req.Session.InitializeParams()
+	if params == nil || params.ClientInfo == nil {
+		return "unknown"
+	}
+	name := strings.TrimSpace(params.ClientInfo.Name)
+	version := strings.TrimSpace(params.ClientInfo.Version)
+	if name == "" || version == "" {
+		return "unknown"
+	}
+	return name + "/" + version
+}
+
+func invalidLifecycleParams(message string) error {
+	return &jsonrpc.Error{Code: jsonrpc.CodeInvalidParams, Message: message}
 }
 
 // resolveWorkspace resolves an explicit workspace name or falls back to the
