@@ -45,8 +45,40 @@ candidates, raw evidence is untrusted source data, and dirty, stale, rejected,
 or conflicting trust states fail closed. `ZBRAIN_HOME` isolates runtime data;
 secondary workspaces are read only and require explicit `--include`.
 
-The shipped CLI does not include MCP or viewer commands. Those remain separate
-authorized future milestones and must not be documented as current behavior.
+The shipped CLI includes `zbrain mcp serve`, the owner-pinned
+`zbrain approval show` / `zbrain approval grant` ceremony, and the read-only
+`zbrain view` command. MCP is stdio-only; approval is granted locally and
+applied through the MCP lifecycle flow, not through an HTTP mutation endpoint.
+Keep these surfaces aligned with [`docs/trusted-agent-gateway-spec.md`](docs/trusted-agent-gateway-spec.md).
+
+## Gateway, approval, and retrieval surfaces
+
+`zbrain mcp serve` speaks MCP over stdio: stdout is protocol-only and
+diagnostics belong on stderr. The first-release gateway exposes the
+workspace, trusted-memory, evidence, draft, status, reindex, and lifecycle
+operations plus read-only claim/evidence resources. It must not grow grant UI
+or mutation HTTP endpoints.
+
+Lifecycle mutations are owner-pinned. The agent calls `claim_lifecycle` with
+`prepare`; the owner inspects the result with `zbrain approval show
+<challenge-id>`, then runs `zbrain approval grant <challenge-id>` in an
+interactive TTY. `prepare` never exposes a token; the grant ceremony issues
+one and returns it to the owner to hand to the agent. The agent calls
+`claim_lifecycle` with `apply`. A challenge lasts 15 minutes from preparation;
+the token lasts up to 5 minutes from grant and never outlives the challenge.
+Grant records owner approval without consuming the token, and apply consumes it
+once. Replays, expiry, digest or workspace mismatches, and stale canonical
+state must fail closed.
+
+Lexical retrieval remains the default. `zbrain ask --embed` and the MCP
+`memory_ask`/`memory_reindex` `embedding: true` option explicitly opt into the
+local loopback embedding path; `false` is the default. Missing or empty
+embedding sidecars must fall back to lexical retrieval without network I/O.
+
+The viewer is read-only and binds to `127.0.0.1`. It serves embedded assets,
+escapes Markdown and raw evidence, sends strict CSP and `X-Content-Type-Options:
+nosniff`, emits no CORS headers, and returns `405 Method Not Allowed` for
+every method other than `GET` and `HEAD`.
 
 ## Local workflow
 
@@ -93,12 +125,13 @@ go vet ./...
 make build
 make smoke
 git diff --check
+CGO_ENABLED=0 go build ./cmd/zbrain
 ```
 
-For concurrency-sensitive runtime changes, also run:
+For concurrency-sensitive runtime or gateway/viewer changes, also run:
 
 ```bash
-go test -race ./internal/runtime ./internal/cli
+go test -race ./internal/runtime ./internal/cli ./internal/view ./internal/mcp
 ```
 
 For query-scale changes, run the existing benchmark when available:
