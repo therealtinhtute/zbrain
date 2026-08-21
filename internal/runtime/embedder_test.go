@@ -169,6 +169,7 @@ func TestLoopbackEmbedderRebuildStoresVectors(t *testing.T) {
 		t.Fatalf("Approve() error = %v", err)
 	}
 	idx := IndexStore{Paths: paths}
+	store := EmbeddingStore{Paths: paths}
 
 	// Rebuild without --embed must not produce embeddings.
 	summary, err := idx.RebuildWithOptions("research", RebuildOptions{Embedding: false})
@@ -184,6 +185,10 @@ func TestLoopbackEmbedderRebuildStoresVectors(t *testing.T) {
 	}
 	if count != 0 {
 		t.Fatalf("embedding count = %d, want 0 without --embed", count)
+	}
+	status := store.Summary("research", 1)
+	if status.Strategy != "lexical" || status.Indexed != 0 || status.Eligible != 0 || status.Degraded == "" {
+		t.Fatalf("Summary(without embed) = %#v, want lexical degraded status", status)
 	}
 
 	// Rebuild with --embed stores vectors for approved claims.
@@ -206,6 +211,10 @@ func TestLoopbackEmbedderRebuildStoresVectors(t *testing.T) {
 	}
 	if count != 1 {
 		t.Fatalf("embedding count = %d, want 1", count)
+	}
+	status = store.Summary("research", 1)
+	if status.Strategy != "loopback" || status.Model != "zbrain/loopback-v1" || status.Indexed != 1 || status.Eligible != 1 || status.Degraded != "" {
+		t.Fatalf("Summary(with embed) = %#v, want loopback coverage", status)
 	}
 
 	// Rebuild without --embed clears previously stored embeddings.

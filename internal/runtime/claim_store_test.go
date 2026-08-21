@@ -700,6 +700,267 @@ func TestClaimStoreRejectsApprovedInPlaceOverwrite(t *testing.T) {
 	}
 }
 
+func TestClaimMutationAuthorizationMetadata(t *testing.T) {
+	paths, _ := claimStoreTestPaths(t)
+	store := ClaimStore{Paths: paths, Now: fixedClaimStoreNow}
+	authorization := func(id string) *ClaimTransitionAuthorization {
+		return &ClaimTransitionAuthorization{
+			ChallengeID: id,
+			Method:      "claim_lifecycle.apply",
+			MCPClient:   "mcp-client/1.0",
+		}
+	}
+
+	first := validStoreClaim("clm_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", ClaimBasisOwner)
+	if _, err := store.WriteDraft("research", first); err != nil {
+		t.Fatalf("WriteDraft(first) error = %v", err)
+	}
+	approved, err := store.ApproveWithOptions("research", first.ID, ClaimMutationOptions{
+		VerifiedBy:    "owner:mcp",
+		Authorization: authorization("chg_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
+	})
+	if err != nil {
+		t.Fatalf("ApproveWithOptions() error = %v", err)
+	}
+	if approved.VerifiedBy != "owner:mcp" || approved.Transitions[0].Authorization == nil {
+		t.Fatalf("approval provenance = %#v", approved)
+	}
+	if got := approved.Transitions[0].Authorization; got.ChallengeID != "chg_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" || got.Method != "claim_lifecycle.apply" || got.MCPClient != "mcp-client/1.0" {
+		t.Fatalf("approval authorization = %#v", got)
+	}
+
+	replacement := validStoreClaim("clm_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", ClaimBasisOwner)
+	replacement.Body = "Replacement body\n"
+	if _, err := store.WriteSupersedingDraft("research", approved.ID, replacement); err != nil {
+		t.Fatalf("WriteSupersedingDraft() error = %v", err)
+	}
+	superseded, err := store.ApproveWithOptions("research", replacement.ID, ClaimMutationOptions{
+		VerifiedBy:    "owner:mcp",
+		Authorization: authorization("chg_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"),
+	})
+	if err != nil {
+		t.Fatalf("ApproveWithOptions(supersede) error = %v", err)
+	}
+	if got := superseded.Transitions[0].Authorization; got == nil || got.ChallengeID != "chg_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb" {
+		t.Fatalf("replacement authorization = %#v", got)
+	}
+	old, err := store.Read("research", approved.ID)
+	if err != nil {
+		t.Fatalf("Read(old) error = %v", err)
+	}
+	if got := old.Transitions[1].Authorization; got == nil || got.ChallengeID != "chg_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb" || got.Method != "claim_lifecycle.apply" || got.MCPClient != "mcp-client/1.0" {
+		t.Fatalf("supersession authorization = %#v", got)
+	}
+
+	revoked, err := store.RevokeWithOptions("research", superseded.ID, "wrong scope", ClaimMutationOptions{
+		VerifiedBy:    "owner:mcp",
+		Authorization: authorization("chg_cccccccccccccccccccccccccccccccc"),
+	})
+	if err != nil {
+		t.Fatalf("RevokeWithOptions() error = %v", err)
+	}
+	if revoked.VerifiedBy != "owner:mcp" {
+		t.Fatalf("revocation verified.by = %q", revoked.VerifiedBy)
+	}
+	if got := revoked.Transitions[len(revoked.Transitions)-1].Authorization; got == nil || got.ChallengeID != "chg_cccccccccccccccccccccccccccccccc" {
+		t.Fatalf("revocation authorization = %#v", got)
+	}
+	if err := VerifyClaimDigest(revoked); err != nil {
+		t.Fatalf("VerifyClaimDigest(revoked) error = %v", err)
+	}
+}
+
+func TestPrepareAndApplyChallengeAtomicallyAuthorizesApproval(t *testing.T) {
+	paths, _ := claimStoreTestPaths(t)
+	store := ClaimStore{Paths: paths, Now: fixedClaimStoreNow}
+	claim := validStoreClaim("clm_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", ClaimBasisOwner)
+	if _, err := store.WriteDraft("research", claim); err != nil {
+		t.Fatalf("WriteDraft() error = %v", err)
+	}
+	prepared, err := store.PrepareChallenge("research", ChallengePrepare{
+		Workspace: "research",
+		Operation: ChallengeOperationApprove,
+		ClaimID:   claim.ID,
+	})
+	if err != nil {
+		t.Fatalf("PrepareChallenge() error = %v", err)
+	}
+	if _, err := store.ApplyChallenge("research", prepared.Challenge.ID, "not-issued", ClaimMutationOptions{}); err == nil || !strings.Contains(err.Error(), "has not been owner-granted") {
+		t.Fatalf("ApplyChallenge(before grant) error = %v, want owner-grant rejection", err)
+	}
+	unchanged, err := store.Read("research", claim.ID)
+	if err != nil {
+		t.Fatalf("Read(after ungranted apply) error = %v", err)
+	}
+	if unchanged.Status != ClaimStatusDraft || unchanged.VerifiedDigest != "" || len(unchanged.Transitions) != 0 {
+		t.Fatalf("claim changed after ungranted apply: %#v", unchanged)
+	}
+	unconsumed, err := (ChallengeStore{Paths: paths, Now: fixedClaimStoreNow}).Read("research", prepared.Challenge.ID)
+	if err != nil {
+		t.Fatalf("Read(challenge after ungranted apply) error = %v", err)
+	}
+	if unconsumed.Granted || unconsumed.Consumed {
+		t.Fatalf("challenge changed after ungranted apply: %#v", unconsumed)
+	}
+	granted, err := (ChallengeStore{Paths: paths, Now: fixedClaimStoreNow}).Grant("research", prepared.Challenge.ID)
+	if err != nil {
+		t.Fatalf("Grant() error = %v", err)
+	}
+	token := granted.Token
+	approved, err := store.ApplyChallenge("research", prepared.Challenge.ID, token, ClaimMutationOptions{
+		VerifiedBy: "owner:mcp",
+		Authorization: &ClaimTransitionAuthorization{
+			ChallengeID: prepared.Challenge.ID,
+			Method:      "claim_lifecycle.apply",
+			MCPClient:   "mcp-client/1.0",
+		},
+	})
+	if err != nil {
+		t.Fatalf("ApplyChallenge() error = %v", err)
+	}
+	if approved.Status != ClaimStatusApproved || approved.VerifiedBy != "owner:mcp" {
+		t.Fatalf("ApplyChallenge() claim = %#v", approved)
+	}
+	if got := approved.Transitions[0].Authorization; got == nil || got.ChallengeID != prepared.Challenge.ID {
+		t.Fatalf("ApplyChallenge() authorization = %#v", got)
+	}
+	if _, err := store.ApplyChallenge("research", prepared.Challenge.ID, token, ClaimMutationOptions{}); err == nil || !strings.Contains(err.Error(), "already consumed") {
+		t.Fatalf("ApplyChallenge(replay) error = %v, want consumed", err)
+	}
+}
+
+func TestApplyChallengeAuthorizesSupersedeAndRevoke(t *testing.T) {
+	paths, _ := claimStoreTestPaths(t)
+	store := ClaimStore{Paths: paths, Now: fixedClaimStoreNow}
+	old := validStoreClaim("clm_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", ClaimBasisOwner)
+	if _, err := store.WriteDraft("research", old); err != nil {
+		t.Fatalf("WriteDraft(old) error = %v", err)
+	}
+	oldApproved, err := store.Approve("research", old.ID)
+	if err != nil {
+		t.Fatalf("Approve(old) error = %v", err)
+	}
+	replacement := validStoreClaim("clm_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", ClaimBasisOwner)
+	replacement, err = store.WriteSupersedingDraft("research", oldApproved.ID, replacement)
+	if err != nil {
+		t.Fatalf("WriteSupersedingDraft() error = %v", err)
+	}
+	supersedingDigest, err := store.CanonicalDraftDigest("research", replacement.ID)
+	if err != nil {
+		t.Fatalf("CanonicalDraftDigest(replacement) error = %v", err)
+	}
+	supersedeChallenge, err := store.PrepareChallenge("research", ChallengePrepare{
+		Workspace:               "research",
+		Operation:               ChallengeOperationSupersede,
+		ClaimID:                 replacement.ID,
+		CanonicalDraftDigest:    supersedingDigest,
+		SupersededIDs:           replacement.Supersedes,
+		PriorVerificationDigest: oldApproved.VerifiedDigest,
+	})
+	if err != nil {
+		t.Fatalf("PrepareChallenge(supersede) error = %v", err)
+	}
+	grantedSupersede, err := (ChallengeStore{Paths: paths, Now: fixedClaimStoreNow}).Grant("research", supersedeChallenge.Challenge.ID)
+	if err != nil {
+		t.Fatalf("Grant(supersede) error = %v", err)
+	}
+	supersedeToken := grantedSupersede.Token
+	superseded, err := store.ApplyChallenge("research", supersedeChallenge.Challenge.ID, supersedeToken, ClaimMutationOptions{
+		VerifiedBy: "owner:mcp",
+		Authorization: &ClaimTransitionAuthorization{
+			ChallengeID: supersedeChallenge.Challenge.ID,
+			Method:      "claim_lifecycle.apply",
+			MCPClient:   "mcp-client/1.0",
+		},
+	})
+	if err != nil {
+		t.Fatalf("ApplyChallenge(supersede) error = %v", err)
+	}
+	if superseded.Status != ClaimStatusApproved || superseded.Transitions[0].Kind != ClaimTransitionSupersede {
+		t.Fatalf("superseded replacement = %#v", superseded)
+	}
+	oldAfter, err := store.Read("research", old.ID)
+	if err != nil {
+		t.Fatalf("Read(old after supersede) error = %v", err)
+	}
+	if oldAfter.Status != ClaimStatusSuperseded || oldAfter.Transitions[1].Authorization == nil || oldAfter.Transitions[1].Authorization.ChallengeID != supersedeChallenge.Challenge.ID {
+		t.Fatalf("old supersession metadata = %#v", oldAfter)
+	}
+
+	revokeDigest, err := store.CanonicalDraftDigest("research", replacement.ID)
+	if err != nil {
+		t.Fatalf("CanonicalDraftDigest(revoke) error = %v", err)
+	}
+	revokeChallenge, err := store.PrepareChallenge("research", ChallengePrepare{
+		Workspace:               "research",
+		Operation:               ChallengeOperationRevoke,
+		ClaimID:                 replacement.ID,
+		CanonicalDraftDigest:    revokeDigest,
+		SupersededIDs:           replacement.Supersedes,
+		PriorVerificationDigest: superseded.VerifiedDigest,
+		RevokeReason:            "wrong scope",
+	})
+	if err != nil {
+		t.Fatalf("PrepareChallenge(revoke) error = %v", err)
+	}
+	grantedRevoke, err := (ChallengeStore{Paths: paths, Now: fixedClaimStoreNow}).Grant("research", revokeChallenge.Challenge.ID)
+	if err != nil {
+		t.Fatalf("Grant(revoke) error = %v", err)
+	}
+	revokeToken := grantedRevoke.Token
+	revoked, err := store.ApplyChallenge("research", revokeChallenge.Challenge.ID, revokeToken, ClaimMutationOptions{
+		VerifiedBy: "owner:mcp",
+		Authorization: &ClaimTransitionAuthorization{
+			ChallengeID: revokeChallenge.Challenge.ID,
+			Method:      "claim_lifecycle.apply",
+			MCPClient:   "mcp-client/1.0",
+		},
+	})
+	if err != nil {
+		t.Fatalf("ApplyChallenge(revoke) error = %v", err)
+	}
+	if revoked.Status != ClaimStatusRevoked || revoked.Transitions[len(revoked.Transitions)-1].Authorization == nil || revoked.Transitions[len(revoked.Transitions)-1].Authorization.ChallengeID != revokeChallenge.Challenge.ID {
+		t.Fatalf("revoked metadata = %#v", revoked)
+	}
+}
+
+func TestApplyChallengeRejectsStaleCanonicalDigestBeforeConsumption(t *testing.T) {
+	paths, _ := claimStoreTestPaths(t)
+	store := ClaimStore{Paths: paths, Now: fixedClaimStoreNow}
+	claim := validStoreClaim("clm_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", ClaimBasisOwner)
+	if _, err := store.WriteDraft("research", claim); err != nil {
+		t.Fatalf("WriteDraft() error = %v", err)
+	}
+	digest, err := store.CanonicalDraftDigest("research", claim.ID)
+	if err != nil {
+		t.Fatalf("CanonicalDraftDigest() error = %v", err)
+	}
+	prepared, err := store.PrepareChallenge("research", ChallengePrepare{
+		Workspace:            "research",
+		Operation:            ChallengeOperationApprove,
+		ClaimID:              claim.ID,
+		CanonicalDraftDigest: digest,
+	})
+	if err != nil {
+		t.Fatalf("PrepareChallenge() error = %v", err)
+	}
+	grantedStale, err := (ChallengeStore{Paths: paths, Now: fixedClaimStoreNow}).Grant("research", prepared.Challenge.ID)
+	if err != nil {
+		t.Fatalf("Grant() error = %v", err)
+	}
+	token := grantedStale.Token
+	claim.Body = "Changed after challenge\n"
+	if _, err := store.WriteDraft("research", claim); err != nil {
+		t.Fatalf("WriteDraft(changed) error = %v", err)
+	}
+	if _, err := store.ApplyChallenge("research", prepared.Challenge.ID, token, ClaimMutationOptions{}); err == nil || !strings.Contains(err.Error(), "canonical draft digest is stale") {
+		t.Fatalf("ApplyChallenge(stale) error = %v, want stale digest", err)
+	}
+	if _, err := (ChallengeStore{Paths: paths, Now: fixedClaimStoreNow}).Verify("research", prepared.Challenge.ID, token); err != nil {
+		t.Fatalf("Verify(after stale apply) error = %v, want token unconsumed", err)
+	}
+}
+
 func claimStoreTestPaths(t *testing.T) (Paths, string) {
 	t.Helper()
 	tmp := t.TempDir()
