@@ -3,6 +3,7 @@ package runtime
 import (
 	"crypto/rand"
 	"crypto/sha256"
+	"crypto/subtle"
 	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
@@ -17,10 +18,16 @@ import (
 )
 
 // ChallengeSchemaVersion identifies the persisted challenge record shape.
-const ChallengeSchemaVersion = "zbrain.challenge/v1"
+// Security-critical challenge records are fail-closed across schema changes.
+const ChallengeSchemaVersion = "zbrain.challenge/v3"
 
-// challengeLifetime is the owner-pinned challenge TTL.
-const challengeLifetime = 15 * time.Minute
+const (
+	// challengeLifetime is the owner-pinned challenge TTL.
+	challengeLifetime = 15 * time.Minute
+	// challengeTokenLifetime is independent from the challenge TTL. A valid
+	// challenge may outlive the one-time grant token it carries.
+	challengeTokenLifetime = 5 * time.Minute
+)
 
 // ChallengeOperation is the lifecycle operation a challenge pins.
 type ChallengeOperation string
@@ -44,28 +51,38 @@ type ChallengePrepare struct {
 }
 
 // Challenge is the persisted owner-pinned challenge record. Only the token
-// SHA-256 is stored; the plaintext one-time token is never persisted.
+// SHA-256 is stored; the plaintext one-time token is never persisted. The
+// owner-granted marker is persisted so apply cannot bypass the local ceremony.
 type Challenge struct {
-	Schema                  string              `json:"schema"`
-	ID                      string              `json:"id"`
-	Workspace               string              `json:"workspace"`
-	Operation               ChallengeOperation  `json:"operation"`
-	ClaimID                 string              `json:"claim_id"`
-	CanonicalDraftDigest    string              `json:"canonical_draft_digest,omitempty"`
-	SupersededIDs           []string            `json:"superseded_ids,omitempty"`
-	PriorVerificationDigest string              `json:"prior_verification_digest,omitempty"`
-	RevokeReason            string              `json:"revoke_reason,omitempty"`
-	ActionDigest            string              `json:"action_digest"`
-	TokenSHA256             string              `json:"token_sha256"`
-	ExpiresAt               string              `json:"expires_at"`
-	Consumed                bool                `json:"consumed"`
+	Schema                  string             `json:"schema"`
+	ID                      string             `json:"id"`
+	Workspace               string             `json:"workspace"`
+	Operation               ChallengeOperation `json:"operation"`
+	ClaimID                 string             `json:"claim_id"`
+	CanonicalDraftDigest    string             `json:"canonical_draft_digest,omitempty"`
+	SupersededIDs           []string           `json:"superseded_ids,omitempty"`
+	PriorVerificationDigest string             `json:"prior_verification_digest,omitempty"`
+	RevokeReason            string             `json:"revoke_reason,omitempty"`
+	ActionDigest            string             `json:"action_digest"`
+	TokenSHA256             string             `json:"token_sha256"`
+	ExpiresAt               string             `json:"expires_at"`
+	TokenExpiresAt          string             `json:"token_expires_at"`
+	Granted                 bool               `json:"granted"`
+	GrantedAt               string             `json:"granted_at,omitempty"`
+	Consumed                bool               `json:"consumed"`
 }
 
-// PreparedChallenge returns a prepared challenge together with its plaintext
-// one-time token. The token is handed to the caller and never persisted.
+// PreparedChallenge contains the owner-pinned action summary. No token is
+// issued until the local owner ceremony calls Grant.
 type PreparedChallenge struct {
 	Challenge Challenge
-	Token     string
+}
+
+// GrantedChallenge contains the owner-approved challenge and the plaintext
+// one-time token released exactly once by Grant. The token is never persisted.
+type GrantedChallenge struct {
+	Challenge
+	Token string
 }
 
 // ChallengeStore prepares and verifies owner-pinned lifecycle challenges.
@@ -110,8 +127,8 @@ func ComputeChallengeActionDigest(prepare ChallengePrepare) string {
 }
 
 // Prepare creates a new owner-pinned challenge. It binds every listed input
-// into the action digest, generates a one-time token, persists only the token
-// SHA-256, and expires the challenge after 15 minutes.
+// into the action digest and persists no token until the local owner ceremony
+// releases one through Grant.
 func (store ChallengeStore) Prepare(workspace string, prepare ChallengePrepare) (PreparedChallenge, error) {
 	lock, err := acquireWorkspaceLock(store.Paths, workspace, true)
 	if err != nil {
@@ -129,12 +146,9 @@ func (store ChallengeStore) prepareUnlocked(workspace string, prepare ChallengeP
 	if err != nil {
 		return PreparedChallenge{}, err
 	}
-	token, tokenHash, err := newChallengeToken()
-	if err != nil {
-		return PreparedChallenge{}, err
-	}
 	superseded := append([]string(nil), prepare.SupersededIDs...)
 	sort.Strings(superseded)
+	preparedAt := store.now().UTC()
 	challenge := Challenge{
 		Schema:                  ChallengeSchemaVersion,
 		ID:                      id,
@@ -146,13 +160,12 @@ func (store ChallengeStore) prepareUnlocked(workspace string, prepare ChallengeP
 		PriorVerificationDigest: prepare.PriorVerificationDigest,
 		RevokeReason:            prepare.RevokeReason,
 		ActionDigest:            ComputeChallengeActionDigest(prepare),
-		TokenSHA256:             tokenHash,
-		ExpiresAt:               store.now().UTC().Add(challengeLifetime).Format(time.RFC3339),
+		ExpiresAt:               preparedAt.Add(challengeLifetime).Format(time.RFC3339),
 	}
 	if err := store.writeChallenge(workspace, challenge); err != nil {
 		return PreparedChallenge{}, err
 	}
-	return PreparedChallenge{Challenge: challenge, Token: token}, nil
+	return PreparedChallenge{Challenge: challenge}, nil
 }
 
 // Read returns a persisted challenge by ID without consuming it.
@@ -213,8 +226,52 @@ func (store ChallengeStore) Verify(workspace string, challengeID string, token s
 	return challenge, nil
 }
 
+// Grant records the local owner's approval and releases a fresh plaintext
+// token without consuming it. The token hash and its grant-time expiry are
+// persisted; the plaintext is returned only to the owner ceremony. A second
+// grant is rejected because the original plaintext cannot be reconstructed.
+func (store ChallengeStore) Grant(workspace string, challengeID string) (GrantedChallenge, error) {
+	lock, err := acquireWorkspaceLock(store.Paths, workspace, true)
+	if err != nil {
+		return GrantedChallenge{}, err
+	}
+	defer func() { _ = lock.Close() }()
+	challenge, err := store.readChallengeUnlocked(workspace, challengeID)
+	if err != nil {
+		return GrantedChallenge{}, err
+	}
+	if challenge.Granted {
+		return GrantedChallenge{}, fmt.Errorf("challenge %s has already been owner-granted", challenge.ID)
+	}
+	now := store.now().UTC()
+	challengeExpiresAt, err := time.Parse(time.RFC3339, challenge.ExpiresAt)
+	if err != nil {
+		return GrantedChallenge{}, fmt.Errorf("challenge %s has invalid challenge expiry: %w", challenge.ID, err)
+	}
+	if now.After(challengeExpiresAt) {
+		return GrantedChallenge{}, fmt.Errorf("challenge %s expired", challenge.ID)
+	}
+	token, tokenHash, err := newChallengeToken()
+	if err != nil {
+		return GrantedChallenge{}, err
+	}
+	tokenExpiresAt := now.Add(challengeTokenLifetime)
+	if tokenExpiresAt.After(challengeExpiresAt) {
+		tokenExpiresAt = challengeExpiresAt
+	}
+	challenge.TokenSHA256 = tokenHash
+	challenge.TokenExpiresAt = tokenExpiresAt.Format(time.RFC3339)
+	challenge.Granted = true
+	challenge.GrantedAt = now.Format(time.RFC3339)
+	if err := store.writeChallenge(workspace, challenge); err != nil {
+		return GrantedChallenge{}, err
+	}
+	return GrantedChallenge{Challenge: challenge, Token: token}, nil
+}
+
 // Consume atomically validates a plaintext token, enforces expiry, and marks
-// the challenge consumed under the workspace lock so the token is one-time.
+// the owner-granted challenge consumed under the workspace lock so the token
+// is one-time.
 func (store ChallengeStore) Consume(workspace string, challengeID string, token string) (Challenge, error) {
 	lock, err := acquireWorkspaceLock(store.Paths, workspace, true)
 	if err != nil {
@@ -232,6 +289,9 @@ func (store ChallengeStore) consumeUnlocked(workspace string, challengeID string
 	if err := store.validateToken(challenge, token); err != nil {
 		return Challenge{}, err
 	}
+	if !challenge.Granted {
+		return Challenge{}, fmt.Errorf("challenge %s token has not been owner-granted", challenge.ID)
+	}
 	challenge.Consumed = true
 	if err := store.writeChallenge(workspace, challenge); err != nil {
 		return Challenge{}, err
@@ -240,18 +300,30 @@ func (store ChallengeStore) consumeUnlocked(workspace string, challengeID string
 }
 
 func (store ChallengeStore) validateToken(challenge Challenge, token string) error {
+	if !challenge.Granted {
+		return fmt.Errorf("challenge %s has not been owner-granted", challenge.ID)
+	}
 	if challenge.Consumed {
 		return fmt.Errorf("challenge %s token already consumed", challenge.ID)
 	}
-	expiresAt, err := time.Parse(time.RFC3339, challenge.ExpiresAt)
+	now := store.now()
+	challengeExpiresAt, err := time.Parse(time.RFC3339, challenge.ExpiresAt)
 	if err != nil {
-		return fmt.Errorf("challenge %s has invalid expiry: %w", challenge.ID, err)
+		return fmt.Errorf("challenge %s has invalid challenge expiry: %w", challenge.ID, err)
 	}
-	if store.now().After(expiresAt) {
+	if now.After(challengeExpiresAt) {
+		return fmt.Errorf("challenge %s expired", challenge.ID)
+	}
+	tokenExpiresAt, err := time.Parse(time.RFC3339, challenge.TokenExpiresAt)
+	if err != nil {
+		return fmt.Errorf("challenge %s has invalid token expiry: %w", challenge.ID, err)
+	}
+	if now.After(tokenExpiresAt) {
 		return fmt.Errorf("challenge %s token expired", challenge.ID)
 	}
 	sum := sha256.Sum256([]byte(token))
-	if "sha256:"+hex.EncodeToString(sum[:]) != challenge.TokenSHA256 {
+	wantHash := "sha256:" + hex.EncodeToString(sum[:])
+	if subtle.ConstantTimeCompare([]byte(wantHash), []byte(challenge.TokenSHA256)) != 1 {
 		return fmt.Errorf("challenge %s token mismatch", challenge.ID)
 	}
 	return nil
@@ -343,11 +415,40 @@ func (store ChallengeStore) validateChallengeRecord(workspace string, challenge 
 			return fmt.Errorf("challenge %s superseded id %q must match clm_<32 lowercase hex chars>", challenge.ID, id)
 		}
 	}
-	if !isChallengeTokenHash(challenge.TokenSHA256) {
-		return fmt.Errorf("challenge %s token hash must use sha256:<hex>", challenge.ID)
-	}
-	if _, err := time.Parse(time.RFC3339, challenge.ExpiresAt); err != nil {
+	challengeExpiresAt, err := time.Parse(time.RFC3339, challenge.ExpiresAt)
+	if err != nil {
 		return fmt.Errorf("challenge %s expires_at must be RFC3339: %w", challenge.ID, err)
+	}
+	if challenge.Consumed && !challenge.Granted {
+		return fmt.Errorf("challenge %s is consumed without an owner grant", challenge.ID)
+	}
+	if challenge.Granted {
+		if !isChallengeTokenHash(challenge.TokenSHA256) {
+			return fmt.Errorf("challenge %s token hash must use sha256:<hex>", challenge.ID)
+		}
+		if strings.TrimSpace(challenge.TokenExpiresAt) == "" {
+			return fmt.Errorf("challenge %s token_expires_at is required when granted", challenge.ID)
+		}
+		tokenExpiresAt, err := time.Parse(time.RFC3339, challenge.TokenExpiresAt)
+		if err != nil {
+			return fmt.Errorf("challenge %s token_expires_at must be RFC3339: %w", challenge.ID, err)
+		}
+		if tokenExpiresAt.After(challengeExpiresAt) {
+			return fmt.Errorf("challenge %s token expiry must not outlive challenge expiry", challenge.ID)
+		}
+		if strings.TrimSpace(challenge.GrantedAt) == "" {
+			return fmt.Errorf("challenge %s granted_at is required when granted", challenge.ID)
+		}
+		if _, err := time.Parse(time.RFC3339, challenge.GrantedAt); err != nil {
+			return fmt.Errorf("challenge %s granted_at must be RFC3339: %w", challenge.ID, err)
+		}
+	} else {
+		if challenge.TokenSHA256 != "" || challenge.TokenExpiresAt != "" {
+			return fmt.Errorf("challenge %s token material requires owner grant", challenge.ID)
+		}
+		if strings.TrimSpace(challenge.GrantedAt) != "" {
+			return fmt.Errorf("challenge %s granted_at requires granted state", challenge.ID)
+		}
 	}
 	expected := ComputeChallengeActionDigest(ChallengePrepare{
 		Workspace:               challenge.Workspace,

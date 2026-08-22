@@ -286,6 +286,29 @@ func (store EmbeddingStore) Count(workspace string) (int, error) {
 	return count, nil
 }
 
+// Summary reports the optional embedding sidecar coverage without making it a
+// prerequisite for lexical retrieval or workspace status.
+func (store EmbeddingStore) Summary(workspace string, eligible int) EmbeddingSummary {
+	summary := EmbeddingSummary{
+		Strategy: "lexical",
+		Degraded: "embeddings not configured",
+	}
+	count, err := store.Count(workspace)
+	if err != nil {
+		summary.Degraded = "embedding sidecar unavailable"
+		return summary
+	}
+	if count == 0 {
+		return summary
+	}
+	summary.Strategy = "loopback"
+	summary.Model = "zbrain/loopback-v1"
+	summary.Indexed = count
+	summary.Eligible = eligible
+	summary.Degraded = ""
+	return summary
+}
+
 // RebuildOptions controls optional behavior during index rebuild.
 type RebuildOptions struct {
 	// Embedding enables loopback embedding during rebuild.

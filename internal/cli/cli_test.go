@@ -55,7 +55,7 @@ func TestCLIHelpParity(t *testing.T) {
 			name: "root",
 			args: []string{"--help"},
 			want: []string{
-				"ask [--workspace <name>] [--include <name>]... <query>",
+				"ask [--workspace <name>] [--include <name>]... [--embed] <query>",
 				"evidence add --file <path> --origin <uri-or-path>",
 				"claim supersede <id>",
 				"zbrain <command> --help",
@@ -75,7 +75,7 @@ func TestCLIHelpParity(t *testing.T) {
 		{name: "claim revoke", args: []string{"claim", "revoke", "--help"}, want: []string{"--reason <text>", "--workspace <name>"}},
 		{name: "migrate", args: []string{"migrate", "okf", "--help"}, want: []string{"Usage: zbrain migrate okf [--workspace <name>]"}},
 		{name: "reindex", args: []string{"reindex", "--help"}, want: []string{"Usage: zbrain reindex [--workspace <name>]"}},
-		{name: "ask", args: []string{"ask", "--help"}, want: []string{"--workspace <name>", "--include <name>"}},
+		{name: "ask", args: []string{"ask", "--help"}, want: []string{"--workspace <name>", "--include <name>", "--embed"}},
 		{name: "status", args: []string{"status", "--help"}, want: []string{"status"}},
 		{name: "approval", args: []string{"approval", "--help"}, want: []string{"approval show <challenge-id>", "approval grant <challenge-id>"}},
 		{name: "approval show", args: []string{"approval", "show", "--help"}, want: []string{"Usage: zbrain approval show <challenge-id>"}},
@@ -673,6 +673,85 @@ func TestRunReindexAndAskTrustedContext(t *testing.T) {
 	}
 }
 
+func TestRunAskEmbeddingOptIn(t *testing.T) {
+	app, _ := testApp(t)
+	setupResearchApp(t, &app)
+	const (
+		lexicalOnlyID = "clm_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+		vectorOnlyID  = "clm_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+	)
+	store := zruntime.ClaimStore{Paths: app.Paths, Now: app.Now}
+	claims := []zruntime.Claim{
+		{
+			Type:      zruntime.OKFClaimType,
+			ID:        lexicalOnlyID,
+			Tier:      "projects",
+			Status:    zruntime.ClaimStatusDraft,
+			Title:     "Quantum Entanglement Observer",
+			Basis:     zruntime.ClaimBasisOwner,
+			CreatedAt: app.Now().UTC().Format(time.RFC3339),
+			CreatedBy: "owner",
+			Tags:      []string{"memory"},
+			Body:      "quantum entanglement observer discovery\n",
+		},
+		{
+			Type:      zruntime.OKFClaimType,
+			ID:        vectorOnlyID,
+			Tier:      "projects",
+			Status:    zruntime.ClaimStatusDraft,
+			Title:     "Entangled Observer",
+			Basis:     zruntime.ClaimBasisOwner,
+			CreatedAt: app.Now().UTC().Format(time.RFC3339),
+			CreatedBy: "owner",
+			Tags:      []string{"memory"},
+			Body:      "entanglement observer phenomena\n",
+		},
+	}
+	for _, claim := range claims {
+		if _, err := store.WriteDraft("research", claim); err != nil {
+			t.Fatalf("WriteDraft(%s) error = %v", claim.ID, err)
+		}
+		if _, err := store.Approve("research", claim.ID); err != nil {
+			t.Fatalf("Approve(%s) error = %v", claim.ID, err)
+		}
+	}
+	if err := app.Run([]string{"reindex", "--embed"}); err != nil {
+		t.Fatalf("Run(reindex --embed) error = %v", err)
+	}
+
+	app.Stdout = &bytes.Buffer{}
+	if err := app.Run([]string{"ask", "quantum", "entanglement", "observer"}); err != nil {
+		t.Fatalf("Run(ask lexical default) error = %v", err)
+	}
+	var lexical struct {
+		Claims []struct {
+			ID string `json:"id"`
+		} `json:"claims"`
+	}
+	decodeJSON(t, stdout(app), &lexical)
+	if len(lexical.Claims) != 1 || lexical.Claims[0].ID != lexicalOnlyID {
+		t.Fatalf("lexical default claims = %#v, want only %q", lexical.Claims, lexicalOnlyID)
+	}
+
+	app.Stdout = &bytes.Buffer{}
+	if err := app.Run([]string{"ask", "--embed", "quantum", "entanglement", "observer"}); err != nil {
+		t.Fatalf("Run(ask --embed) error = %v", err)
+	}
+	var hybrid struct {
+		Claims []struct {
+			ID string `json:"id"`
+		} `json:"claims"`
+	}
+	decodeJSON(t, stdout(app), &hybrid)
+	seen := map[string]bool{}
+	for _, claim := range hybrid.Claims {
+		seen[claim.ID] = true
+	}
+	if len(hybrid.Claims) < 2 || !seen[lexicalOnlyID] || !seen[vectorOnlyID] {
+		t.Fatalf("hybrid claims = %#v, want both %q and %q", hybrid.Claims, lexicalOnlyID, vectorOnlyID)
+	}
+}
+
 func TestRunReindexReportsTamperedApprovedClaim(t *testing.T) {
 	app, _ := testApp(t)
 	if err := app.Run([]string{"setup"}); err != nil {
@@ -1159,13 +1238,9 @@ func TestApprovalCeremony(t *testing.T) {
 		ID string `json:"id"`
 	}
 	decodeJSON(t, stdout(app), &draft)
-	app.Stdout = &bytes.Buffer{}
-	if err := app.Run([]string{"claim", "approve", draft.ID}); err != nil {
-		t.Fatalf("Run(claim approve) error = %v", err)
-	}
 
-	store := zruntime.ChallengeStore{Paths: app.Paths, Now: app.Now}
-	prepared, err := store.Prepare("research", zruntime.ChallengePrepare{
+	claimStore := zruntime.ClaimStore{Paths: app.Paths, Now: app.Now}
+	prepared, err := claimStore.PrepareChallenge("research", zruntime.ChallengePrepare{
 		Workspace: "research",
 		Operation: zruntime.ChallengeOperationApprove,
 		ClaimID:   draft.ID,
@@ -1175,6 +1250,7 @@ func TestApprovalCeremony(t *testing.T) {
 	}
 	challengeID := prepared.Challenge.ID
 	suffix := actionDigestSuffix(prepared.Challenge.ActionDigest)
+	challengeStore := zruntime.ChallengeStore{Paths: app.Paths, Now: app.Now}
 
 	// Show prints the challenge summary as JSON.
 	app.Stdout = &bytes.Buffer{}
@@ -1189,15 +1265,34 @@ func TestApprovalCeremony(t *testing.T) {
 		ClaimID            string `json:"claim_id"`
 		Workspace          string `json:"workspace"`
 		ExpiresAt          string `json:"expires_at"`
+		TokenExpiresAt     string `json:"token_expires_at"`
 	}
 	decodeJSON(t, stdout(app), &shown)
-	if shown.SchemaVersion != 1 || shown.ChallengeID != challengeID || shown.ActionDigestSuffix != suffix || shown.Operation != "approve" || shown.ClaimID != draft.ID || shown.Workspace != "research" || shown.ExpiresAt != prepared.Challenge.ExpiresAt {
+	if shown.SchemaVersion != 1 || shown.ChallengeID != challengeID || shown.ActionDigestSuffix != suffix || shown.Operation != "approve" || shown.ClaimID != draft.ID || shown.Workspace != "research" || shown.ExpiresAt != prepared.Challenge.ExpiresAt || shown.TokenExpiresAt != "" {
 		t.Fatalf("show output = %#v", shown)
 	}
 
-	// Grant with the correct suffix and token returns the one-time token.
+	if _, err := claimStore.ApplyChallenge("research", challengeID, "not-issued", zruntime.ClaimMutationOptions{}); err == nil || !strings.Contains(err.Error(), "has not been owner-granted") {
+		t.Fatalf("ApplyChallenge(before grant) error = %v, want owner-grant rejection", err)
+	}
+	unchanged, err := claimStore.Read("research", draft.ID)
+	if err != nil {
+		t.Fatalf("Read(after ungranted apply) error = %v", err)
+	}
+	if unchanged.Status != zruntime.ClaimStatusDraft || len(unchanged.Transitions) != 0 {
+		t.Fatalf("claim changed after ungranted apply: %#v", unchanged)
+	}
+	ungranted, err := challengeStore.Read("research", challengeID)
+	if err != nil {
+		t.Fatalf("Read(challenge after ungranted apply) error = %v", err)
+	}
+	if ungranted.Granted || ungranted.Consumed {
+		t.Fatalf("challenge changed after ungranted apply: %#v", ungranted)
+	}
+
+	// Grant with the correct suffix issues a fresh token without consuming it.
 	app.Stdout = &bytes.Buffer{}
-	app.Stdin = strings.NewReader(suffix + "\n" + prepared.Token + "\n")
+	app.Stdin = strings.NewReader(suffix + "\n")
 	if err := app.Run([]string{"approval", "grant", challengeID}); err != nil {
 		t.Fatalf("Run(approval grant) error = %v", err)
 	}
@@ -1207,19 +1302,38 @@ func TestApprovalCeremony(t *testing.T) {
 		Token         string `json:"token"`
 	}
 	decodeJSON(t, stdout(app), &granted)
-	if granted.SchemaVersion != 1 || granted.ChallengeID != challengeID || granted.Token != prepared.Token {
+	if granted.SchemaVersion != 1 || granted.ChallengeID != challengeID || granted.Token == "" {
 		t.Fatalf("grant output = %#v", granted)
 	}
-
-	// A consumed challenge cannot be granted again.
-	app.Stdout = &bytes.Buffer{}
-	app.Stdin = strings.NewReader(suffix + "\n" + prepared.Token + "\n")
-	if err := app.Run([]string{"approval", "grant", challengeID}); err == nil {
-		t.Fatalf("Run(approval grant consumed) error = nil, want already consumed")
+	if strings.Contains(app.Stderr.(*bytes.Buffer).String(), granted.Token) {
+		t.Fatalf("grant logged plaintext token: %q", granted.Token)
+	}
+	token := granted.Token
+	unconsumed, err := challengeStore.Read("research", challengeID)
+	if err != nil {
+		t.Fatalf("Read(after grant) error = %v", err)
+	}
+	if !unconsumed.Granted || unconsumed.GrantedAt == "" {
+		t.Fatalf("grant did not persist owner approval: %#v", unconsumed)
+	}
+	if unconsumed.Consumed {
+		t.Fatal("grant consumed the challenge before apply")
 	}
 
-	// An incorrect suffix fails before the token is consumed.
-	second, err := store.Prepare("research", zruntime.ChallengePrepare{
+	// The verified token can later be consumed by the lifecycle apply exactly once.
+	approved, err := claimStore.ApplyChallenge("research", challengeID, token, zruntime.ClaimMutationOptions{})
+	if err != nil {
+		t.Fatalf("ApplyChallenge(after grant) error = %v", err)
+	}
+	if approved.ID != draft.ID || approved.Status != zruntime.ClaimStatusApproved {
+		t.Fatalf("ApplyChallenge(after grant) claim = %#v", approved)
+	}
+	if _, err := claimStore.ApplyChallenge("research", challengeID, token, zruntime.ClaimMutationOptions{}); err == nil || !strings.Contains(err.Error(), "already consumed") {
+		t.Fatalf("ApplyChallenge(replay) error = %v, want already consumed", err)
+	}
+
+	// An incorrect suffix fails before a token is issued.
+	second, err := challengeStore.Prepare("research", zruntime.ChallengePrepare{
 		Workspace: "research",
 		Operation: zruntime.ChallengeOperationApprove,
 		ClaimID:   draft.ID,
@@ -1228,12 +1342,41 @@ func TestApprovalCeremony(t *testing.T) {
 		t.Fatalf("Prepare(second) error = %v", err)
 	}
 	app.Stdout = &bytes.Buffer{}
-	app.Stdin = strings.NewReader("0000000000000000\n" + second.Token + "\n")
+	app.Stdin = strings.NewReader("0000000000000000\n")
 	if err := app.Run([]string{"approval", "grant", second.Challenge.ID}); err == nil || !strings.Contains(err.Error(), "suffix") {
 		t.Fatalf("Run(approval grant wrong suffix) error = %v, want suffix mismatch", err)
 	}
-	if _, err := store.Read("research", second.Challenge.ID); err != nil {
+	if secondGranted, err := challengeStore.Read("research", second.Challenge.ID); err != nil {
 		t.Fatalf("Read(second challenge) error = %v", err)
+	} else if secondGranted.Granted || secondGranted.TokenSHA256 != "" {
+		t.Fatalf("wrong suffix changed challenge: %#v", secondGranted)
+	}
+
+	third, err := challengeStore.Prepare("research", zruntime.ChallengePrepare{
+		Workspace: "research",
+		Operation: zruntime.ChallengeOperationApprove,
+		ClaimID:   draft.ID,
+	})
+	if err != nil {
+		t.Fatalf("Prepare(third) error = %v", err)
+	}
+	app.Stdout = &bytes.Buffer{}
+	app.Stdin = strings.NewReader(actionDigestSuffix(third.Challenge.ActionDigest) + "\n")
+	if err := app.Run([]string{"approval", "grant", third.Challenge.ID}); err != nil {
+		t.Fatalf("Run(approval grant third) error = %v", err)
+	}
+	var thirdGranted struct {
+		Token string `json:"token"`
+	}
+	decodeJSON(t, stdout(app), &thirdGranted)
+	if thirdGranted.Token == "" {
+		t.Fatal("third grant returned an empty token")
+	}
+	if _, err := challengeStore.Verify("research", third.Challenge.ID, thirdGranted.Token); err != nil {
+		t.Fatalf("Verify(third after grant) error = %v", err)
+	}
+	if _, err := claimStore.ApplyChallenge("research", third.Challenge.ID, "wrong-token", zruntime.ClaimMutationOptions{}); err == nil || !strings.Contains(err.Error(), "token mismatch") {
+		t.Fatalf("ApplyChallenge(wrong token) error = %v, want token mismatch", err)
 	}
 }
 

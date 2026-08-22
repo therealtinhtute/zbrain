@@ -91,7 +91,7 @@ func TestViewServesEmbeddedAssets(t *testing.T) {
 func TestViewRejectsMutations(t *testing.T) {
 	srv := newTestServer(t)
 
-	for _, method := range []string{http.MethodPost, http.MethodPut, http.MethodDelete, http.MethodPatch} {
+	for _, method := range []string{http.MethodPost, http.MethodPut, http.MethodDelete, http.MethodPatch, http.MethodOptions, http.MethodTrace, http.MethodConnect, "BREW"} {
 		req, err := http.NewRequest(method, srv.URL+"/", nil)
 		if err != nil {
 			t.Fatalf("NewRequest(%s) error = %v", method, err)
@@ -266,7 +266,7 @@ func TestViewEscaping(t *testing.T) {
 	}
 
 	// Mutations are still rejected.
-	for _, method := range []string{http.MethodPost, http.MethodPut, http.MethodDelete, http.MethodPatch} {
+	for _, method := range []string{http.MethodPost, http.MethodPut, http.MethodDelete, http.MethodPatch, http.MethodOptions, http.MethodTrace, http.MethodConnect, "BREW"} {
 		req, err := http.NewRequest(method, srv.URL+"/", nil)
 		if err != nil {
 			t.Fatalf("NewRequest(%s) error = %v", method, err)

@@ -22,6 +22,9 @@ trusted context JSON. It does not call an LLM or model provider.
 - Fail-closed trusted retrieval with visible `ready`, `gap`, and `blocked`
   outcomes.
 - `status` and `doctor` diagnostics for index and embedding configuration.
+- Optional local hybrid retrieval through `ask --embed`; lexical retrieval remains the default and fallback.
+- A stdio MCP gateway via `zbrain mcp serve`, with an owner-pinned approval ceremony.
+- A loopback-only read-only viewer via `zbrain view`.
 - Embedded runtime assets extracted by `zbrain setup`.
 
 ## Architecture
@@ -56,13 +59,20 @@ query outcomes.*
    trust dependencies before returning JSON. Conflicts produce `blocked`; no
    matching approved claim produces `gap`.
 
-### Shipped runtime versus proposed integrations
+### Shipped gateway and viewer
 
-The shipped binary is standalone and Go-native. The current command surface
-does not include `zbrain mcp serve` or `zbrain view`; those are authorized
-future gateway/viewer milestones described in
-[`trusted-memory-spec.md`](trusted-memory-spec.md) and
-[`docs/trusted-agent-gateway-spec.md`](docs/trusted-agent-gateway-spec.md).
+The shipped binary is standalone and Go-native. It now includes the local
+integration surfaces described in [`docs/trusted-agent-gateway-spec.md`](docs/trusted-agent-gateway-spec.md):
+
+- `zbrain mcp serve` runs the trusted-agent gateway over stdio. Protocol frames
+  stay on stdout and diagnostics stay on stderr.
+- `zbrain approval show <challenge-id>` and `zbrain approval grant <challenge-id>`
+  provide the local owner ceremony for lifecycle actions. The agent receives a
+  one-time grant token; the gateway, not an HTTP endpoint, applies the mutation.
+- `zbrain view` serves a read-only embedded viewer on `127.0.0.1` only.
+
+All three surfaces reuse workspace boundaries and fail-closed trust validation;
+canonical Markdown and immutable evidence remain the trust inputs.
 
 ## Repository structure
 
@@ -170,10 +180,14 @@ zbrain claim approve <id> [--workspace <name>]
 zbrain claim supersede <id> --tier <tier> --title <title> --basis <owner|evidence|derived> [--evidence <id>]... [--support <id>]... [--conflicts-with <id>]... [--workspace <name>]
 zbrain claim revoke <id> --reason <text> [--workspace <name>]
 zbrain migrate okf [--workspace <name>]
-zbrain reindex [--workspace <name>]
-zbrain ask [--workspace <name>] [--include <name>]... <query>
+zbrain reindex [--workspace <name>] [--embed]
+zbrain ask [--workspace <name>] [--include <name>]... [--embed] <query>
 zbrain status [--workspace <name>]
 zbrain doctor [--workspace <name>] [--probe-embedder]
+zbrain mcp serve
+zbrain view
+zbrain approval show <challenge-id>
+zbrain approval grant <challenge-id>
 zbrain version
 ```
 
@@ -214,6 +228,42 @@ workspace; it is never implicit.
 Use `migrate okf` for legacy `schema: zbrain.claim/v1` files. It reports
 whether reapproval is required; migration does not silently make an old
 approval trusted.
+
+### Optional hybrid retrieval
+
+Lexical retrieval is the default for both the CLI and the MCP gateway. Pass
+`--embed` to `zbrain ask` to opt into local hybrid retrieval, and use
+`zbrain reindex --embed` to build the local loopback embedding sidecar. The MCP
+`memory_reindex` and `memory_ask` tools expose the same opt-in as
+`embedding: true`; their default is `false`. Embedding work is local-only and
+never calls a network service. If the sidecar is missing or empty, an embedding
+request falls back to lexical results instead of failing or changing trust
+semantics.
+
+### Owner-pinned lifecycle
+
+An agent requests a lifecycle transition through the MCP `claim_lifecycle`
+tool:
+
+1. `prepare` binds the workspace, operation, claim ID, canonical draft digest,
+   superseded IDs, prior verification digest, and revoke reason, then returns a
+   challenge ID, action summary, and SHA-256 action digest.
+2. The owner runs `zbrain approval show <challenge-id>` to inspect the bound
+   action.
+3. In an interactive TTY, the owner runs `zbrain approval grant
+   <challenge-id>`, confirms the final 16 hexadecimal digest characters, and
+   receives the one-time token.
+4. The agent calls `claim_lifecycle` with `apply` and the challenge ID/token;
+   the gateway revalidates the workspace, token, expiry, and current canonical
+   state under the workspace lock before applying the transition.
+
+The challenge is valid for 15 minutes from preparation. `prepare` emits no
+plaintext token; the owner grant issues one and starts its own lifetime of up to
+5 minutes, capped by the challenge expiry. The grant step records owner approval
+without consuming the token; `apply` atomically consumes it once. Replay of a
+consumed token, an expired challenge or token, a mismatched digest, workspace,
+or claim, and a stale canonical draft all fail closed; the agent must prepare a
+fresh challenge rather than retrying a stale action.
 
 ## Trust model
 
@@ -258,7 +308,8 @@ The smoke target uses an isolated temporary `ZBRAIN_HOME`. Useful additional
 checks are:
 
 ```bash
-go test -race ./internal/runtime ./internal/cli
+go test -race ./internal/runtime ./internal/cli ./internal/view ./internal/mcp
+CGO_ENABLED=0 go build ./cmd/zbrain
 ZBRAIN_BENCH_100K=1 go test ./internal/runtime -run '^TestAskP95At100K$' -count=1 -v
 ```
 
@@ -274,6 +325,12 @@ go run ./cmd/zbrain reindex --help
 go run ./cmd/zbrain ask --help
 go run ./cmd/zbrain status --help
 go run ./cmd/zbrain doctor --help
+go run ./cmd/zbrain mcp --help
+go run ./cmd/zbrain mcp serve --help
+go run ./cmd/zbrain view --help
+go run ./cmd/zbrain approval --help
+go run ./cmd/zbrain approval show --help
+go run ./cmd/zbrain approval grant --help
 ```
 
 ## Build and deployment
@@ -310,9 +367,10 @@ populated personal workspaces or credentials.
 
 The current slice is intentionally local and minimal. It has no hosted sync,
 network crawling, background service, GUI editor, remote or HTTP MCP
-transport, vector database, semantic-search requirement, session transcript
-store, or model-provider integration. Proposed MCP and viewer work must remain
-behind the separately authorized milestones and preserve the fail-closed
+transport, hosted vector database, semantic-search requirement, session
+transcript store, or model-provider integration. MCP is stdio-only, the viewer
+is loopback-only, and optional embeddings are local sidecars rather than a
+trust or availability requirement. All surfaces preserve the fail-closed
 runtime contract.
 
 ## Contributing

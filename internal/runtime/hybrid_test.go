@@ -1,6 +1,7 @@
 package runtime
 
 import (
+	"database/sql"
 	"os"
 	"path/filepath"
 	"strings"
@@ -65,6 +66,34 @@ func TestHybridRetrieval(t *testing.T) {
 		}
 	})
 
+	t.Run("empty embedding sidecar uses pure lexical", func(t *testing.T) {
+		paths, _ := setup(t, false)
+		embeddingPath := (EmbeddingStore{Paths: paths}).DatabasePath("research")
+		db, err := sql.Open("sqlite", embeddingPath)
+		if err != nil {
+			t.Fatalf("sql.Open(empty sidecar) error = %v", err)
+		}
+		if _, err := db.Exec(`create table embeddings (
+			claim_id text not null primary key,
+			vector blob not null,
+			dimension integer not null
+		)`); err != nil {
+			_ = db.Close()
+			t.Fatalf("create empty sidecar schema error = %v", err)
+		}
+		if err := db.Close(); err != nil {
+			t.Fatalf("db.Close(empty sidecar) error = %v", err)
+		}
+
+		response, err := TrustedQuery(paths, TrustedQueryOptions{Query: "quantum entanglement observer", Limit: 10, Embedding: true})
+		if err != nil {
+			t.Fatalf("TrustedQuery(empty sidecar) error = %v", err)
+		}
+		if ids := claimIDs(response.Claims); len(ids) != 1 || ids[0] != lexicalOnlyID {
+			t.Fatalf("empty sidecar claims = %v, want pure lexical result %q", ids, lexicalOnlyID)
+		}
+	})
+
 	t.Run("embeddings merge lexical and vector matches without duplicates", func(t *testing.T) {
 		paths, _ := setup(t, true)
 
@@ -124,6 +153,109 @@ func TestHybridRetrieval(t *testing.T) {
 			t.Fatalf("TrustedQuery() error = %v, want explicit stale error", err)
 		}
 	})
+}
+
+func TestInterleaveClaimsDeduplicatesByID(t *testing.T) {
+	lexical := []IndexedClaim{
+		{ID: "clm_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", Score: 1},
+		{ID: "clm_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", Score: 2},
+	}
+	vector := []IndexedClaim{
+		{ID: "clm_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", Score: 1},
+		{ID: "clm_cccccccccccccccccccccccccccccccc", Score: 2},
+	}
+
+	merged := interleaveClaims(lexical, vector, 10)
+	ids := make([]string, 0, len(merged))
+	seen := map[string]bool{}
+	for _, claim := range merged {
+		if seen[claim.ID] {
+			t.Fatalf("duplicate claim ID %q in merged results", claim.ID)
+		}
+		seen[claim.ID] = true
+		ids = append(ids, claim.ID)
+	}
+	want := []string{
+		"clm_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+		"clm_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+		"clm_cccccccccccccccccccccccccccccccc",
+	}
+	if strings.Join(ids, ",") != strings.Join(want, ",") {
+		t.Fatalf("merged IDs = %v, want %v", ids, want)
+	}
+}
+
+func TestHybridRetrievalRespectsWorkspaceIsolation(t *testing.T) {
+	paths := queryTestPaths(t)
+	if err := CreateWorkspace(paths, "personal", fixedQueryNow()); err != nil {
+		t.Fatalf("CreateWorkspace(personal) error = %v", err)
+	}
+	store := ClaimStore{Paths: paths, Now: fixedQueryNow}
+	researchClaim := queryClaim("clm_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "Research Memory", ClaimBasisOwner)
+	researchClaim.Body = "research-only context marker\n"
+	personalClaim := queryClaim("clm_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", "Personal Memory", ClaimBasisOwner)
+	personalClaim.Body = "workspace-private hybrid marker\n"
+	for _, entry := range []struct {
+		workspace string
+		claim     Claim
+	}{
+		{workspace: "research", claim: researchClaim},
+		{workspace: "personal", claim: personalClaim},
+	} {
+		if _, err := store.WriteDraft(entry.workspace, entry.claim); err != nil {
+			t.Fatalf("WriteDraft(%s) error = %v", entry.workspace, err)
+		}
+		if _, err := store.Approve(entry.workspace, entry.claim.ID); err != nil {
+			t.Fatalf("Approve(%s) error = %v", entry.workspace, err)
+		}
+	}
+	idx := IndexStore{Paths: paths}
+	for _, workspace := range []string{"research", "personal"} {
+		if _, err := idx.RebuildWithOptions(workspace, RebuildOptions{Embedding: true}); err != nil {
+			t.Fatalf("RebuildWithOptions(%s) error = %v", workspace, err)
+		}
+	}
+
+	withoutInclude, err := TrustedQuery(paths, TrustedQueryOptions{
+		Workspace: "research",
+		Query:     "workspace-private hybrid marker",
+		Limit:     10,
+		Embedding: true,
+	})
+	if err != nil {
+		t.Fatalf("TrustedQuery(without include) error = %v", err)
+	}
+	if withoutInclude.Scopes.Primary != "research" || len(withoutInclude.Scopes.Includes) != 0 {
+		t.Fatalf("withoutInclude scopes = %#v, want research only", withoutInclude.Scopes)
+	}
+	for _, claim := range withoutInclude.Claims {
+		if claim.Workspace != "research" || claim.ID == personalClaim.ID {
+			t.Fatalf("withoutInclude claim = %#v, leaked personal workspace", claim)
+		}
+	}
+
+	withInclude, err := TrustedQuery(paths, TrustedQueryOptions{
+		Workspace: "research",
+		Includes:  []string{"personal"},
+		Query:     "workspace-private hybrid marker",
+		Limit:     10,
+		Embedding: true,
+	})
+	if err != nil {
+		t.Fatalf("TrustedQuery(with include) error = %v", err)
+	}
+	foundPersonal := false
+	for _, claim := range withInclude.Claims {
+		if claim.Workspace == "personal" && claim.ID == personalClaim.ID {
+			foundPersonal = true
+		}
+		if claim.Workspace != "research" && claim.Workspace != "personal" {
+			t.Fatalf("withInclude claim = %#v, outside resolved scopes", claim)
+		}
+	}
+	if !foundPersonal {
+		t.Fatalf("withInclude claims = %#v, want personal claim only when explicitly included", withInclude.Claims)
+	}
 }
 
 func claimIDs(claims []QueryClaim) []string {

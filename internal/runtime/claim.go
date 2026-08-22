@@ -70,13 +70,27 @@ const (
 	ClaimTransitionRevoke    ClaimTransitionKind = "revoke"
 )
 
+// ClaimTransitionAuthorization records the owner-pinned authorization
+// metadata for a transition performed by a later caller such as MCP. It is
+// optional so existing owner-authored YAML and JSON remain byte-compatible.
+type ClaimTransitionAuthorization struct {
+	ChallengeID string `yaml:"challenge_id,omitempty" json:"challenge_id,omitempty"`
+	Method      string `yaml:"method,omitempty" json:"method,omitempty"`
+	MCPClient   string `yaml:"mcp_client,omitempty" json:"mcp_client,omitempty"`
+}
+
+// TransitionAuthorization is kept as a concise alias for callers that model
+// the metadata independently from ClaimTransition.
+type TransitionAuthorization = ClaimTransitionAuthorization
+
 type ClaimTransition struct {
-	Kind                    ClaimTransitionKind `yaml:"kind" json:"kind"`
-	At                      string              `yaml:"at" json:"at"`
-	By                      string              `yaml:"by" json:"by"`
-	Reason                  string              `yaml:"reason,omitempty" json:"reason,omitempty"`
-	RelatedClaimIDs         []string            `yaml:"related_claim_ids,omitempty" json:"related_claim_ids,omitempty"`
-	PriorVerificationDigest string              `yaml:"prior_verification_digest,omitempty" json:"prior_verification_digest,omitempty"`
+	Kind                    ClaimTransitionKind           `yaml:"kind" json:"kind"`
+	At                      string                        `yaml:"at" json:"at"`
+	By                      string                        `yaml:"by" json:"by"`
+	Reason                  string                        `yaml:"reason,omitempty" json:"reason,omitempty"`
+	RelatedClaimIDs         []string                      `yaml:"related_claim_ids,omitempty" json:"related_claim_ids,omitempty"`
+	PriorVerificationDigest string                        `yaml:"prior_verification_digest,omitempty" json:"prior_verification_digest,omitempty"`
+	Authorization           *ClaimTransitionAuthorization `yaml:"authorization,omitempty" json:"authorization,omitempty"`
 }
 
 type ClaimSource struct {
@@ -350,6 +364,9 @@ func ValidateClaimTransition(transition ClaimTransition) error {
 	if transition.PriorVerificationDigest != "" && !strings.HasPrefix(transition.PriorVerificationDigest, "sha256:") {
 		return fmt.Errorf("claim transition prior_verification_digest must use sha256:<hex>")
 	}
+	if err := ValidateClaimTransitionAuthorization(transition.Authorization); err != nil {
+		return err
+	}
 	seen := make(map[string]struct{}, len(transition.RelatedClaimIDs))
 	for _, id := range transition.RelatedClaimIDs {
 		if !claimIDPattern.MatchString(id) {
@@ -359,6 +376,24 @@ func ValidateClaimTransition(transition ClaimTransition) error {
 			return fmt.Errorf("claim transition related claim id %q is duplicated", id)
 		}
 		seen[id] = struct{}{}
+	}
+	return nil
+}
+
+// ValidateClaimTransitionAuthorization validates optional authorization
+// metadata without changing the four-state claim lifecycle contract.
+func ValidateClaimTransitionAuthorization(authorization *ClaimTransitionAuthorization) error {
+	if authorization == nil {
+		return nil
+	}
+	if !challengeIDPattern.MatchString(authorization.ChallengeID) {
+		return fmt.Errorf("claim transition authorization challenge id must match chg_<32 lowercase hex chars>")
+	}
+	if strings.TrimSpace(authorization.Method) == "" {
+		return fmt.Errorf("claim transition authorization method is required")
+	}
+	if strings.TrimSpace(authorization.MCPClient) == "" {
+		return fmt.Errorf("claim transition authorization MCP client is required")
 	}
 	return nil
 }
@@ -383,6 +418,18 @@ func ValidateClaimApproval(claim Claim) error {
 	default:
 		return fmt.Errorf("claim basis %q is not supported", claim.Basis)
 	}
+}
+
+// ClaimCanonicalDigest hashes the canonical serialized claim bytes used by a
+// challenge. Callers should compute it from the current claim immediately
+// before preparing a challenge and compare it again before applying one.
+func ClaimCanonicalDigest(claim Claim) (string, error) {
+	rendered, err := RenderClaimMarkdown(claim)
+	if err != nil {
+		return "", err
+	}
+	sum := sha256.Sum256(rendered)
+	return "sha256:" + hex.EncodeToString(sum[:]), nil
 }
 
 func ClaimVerificationDigest(claim Claim) (string, error) {
