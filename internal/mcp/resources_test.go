@@ -138,24 +138,24 @@ func TestResourceSurface(t *testing.T) {
 		URI: "zbrain://workspace/research/claim/clm_ffffffffffffffffffffffffffffffff",
 	})
 	var rpcErr *jsonrpc.Error
-	if !errors.As(err, &rpcErr) || rpcErr.Code != mcp.CodeResourceNotFound {
-		t.Errorf("missing claim error = %v, want CodeResourceNotFound", err)
+	if !errors.As(err, &rpcErr) || rpcErr.Code != jsonrpc.CodeInvalidParams {
+		t.Errorf("missing claim error = %v, want CodeInvalidParams (-32602)", err)
 	}
 
 	// Reading a nonexistent workspace rejects the read.
 	_, err = cs.ReadResource(ctx, &mcp.ReadResourceParams{
 		URI: "zbrain://workspace/nonexistent/claim/" + claimID,
 	})
-	if !errors.As(err, &rpcErr) || rpcErr.Code != mcp.CodeResourceNotFound {
-		t.Errorf("nonexistent workspace error = %v, want CodeResourceNotFound", err)
+	if !errors.As(err, &rpcErr) || rpcErr.Code != jsonrpc.CodeInvalidParams {
+		t.Errorf("nonexistent workspace error = %v, want CodeInvalidParams (-32602)", err)
 	}
 
 	// A malformed resource type is rejected.
 	_, err = cs.ReadResource(ctx, &mcp.ReadResourceParams{
 		URI: "zbrain://workspace/research/delete/" + claimID,
 	})
-	if !errors.As(err, &rpcErr) || rpcErr.Code != mcp.CodeResourceNotFound {
-		t.Errorf("non-resource path error = %v, want CodeResourceNotFound", err)
+	if !errors.As(err, &rpcErr) || rpcErr.Code != jsonrpc.CodeInvalidParams {
+		t.Errorf("non-resource path error = %v, want CodeInvalidParams (-32602)", err)
 	}
 
 	// Reading is side-effect free: the canonical claim is still approved and the
