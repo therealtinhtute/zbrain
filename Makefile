@@ -44,8 +44,13 @@ smoke: build ## Run smoke checks against dist/zbrain
 	ZBRAIN_HOME="$$tmp_home" ./dist/zbrain claim approve "$$claim_id"; \
 	ZBRAIN_HOME="$$tmp_home" ./dist/zbrain reindex; \
 	ZBRAIN_HOME="$$tmp_home" ./dist/zbrain ask trusted smoke; \
-	trash "$$source_file"; \
-	trash "$$tmp_home"
+	if command -v trash >/dev/null 2>&1; then \
+		trash "$$source_file"; \
+		trash "$$tmp_home"; \
+	else \
+		rm -f "$$source_file"; \
+		rm -rf "$$tmp_home"; \
+	fi
 
 install-local: build ## Install zbrain into ~/.local/bin
 	mkdir -p "$$HOME/.local/bin"
