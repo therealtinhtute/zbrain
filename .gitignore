@@ -36,3 +36,4 @@ harness.db-wal
 harness.db-shm
 .kit/cache/
 .kit/conflicts/
+.opencode
