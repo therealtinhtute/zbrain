@@ -1,0 +1,42 @@
+[
+  {
+    "corpus_size": 100,
+    "workspace": "bench",
+    "index_time_ms": 79.234429,
+    "index_time": "79.234429ms",
+    "throughput_docs_per_sec": 1262.0776253716676,
+    "db_size_bytes": 606208,
+    "db_size_human": "592.0 KB",
+    "peak_heap_bytes": 473728,
+    "peak_heap_human": "462.6 KB",
+    "query_p50_ms": 6.63706,
+    "query_p95_ms": 7.256131,
+    "query_p99_ms": 7.358837,
+    "query_p50": "6.63706ms",
+    "query_p95": "7.256131ms",
+    "query_p99": "7.358837ms",
+    "total_queries": 45,
+    "approved": 100,
+    "db_path": "/tmp/zbrain-bench-2466182686/indexes/bench.sqlite"
+  },
+  {
+    "corpus_size": 1000,
+    "workspace": "bench",
+    "index_time_ms": 1330.573087,
+    "index_time": "1.330573087s",
+    "throughput_docs_per_sec": 751.5558594790667,
+    "db_size_bytes": 5332992,
+    "db_size_human": "5.1 MB",
+    "peak_heap_bytes": 1056560,
+    "peak_heap_human": "1.0 MB",
+    "query_p50_ms": 50.694535,
+    "query_p95_ms": 52.77399,
+    "query_p99_ms": 53.354147,
+    "query_p50": "50.694535ms",
+    "query_p95": "52.77399ms",
+    "query_p99": "53.354147ms",
+    "total_queries": 45,
+    "approved": 1000,
+    "db_path": "/tmp/zbrain-bench-2664439323/indexes/bench.sqlite"
+  }
+]

@@ -1,64 +1,63 @@
-# Repository Guidelines
+# AGENTS.md
 
-## Project Structure & Module Organization
+Go 1.24.0, Go-native CLI at `cmd/zbrain`. Do not reintroduce Bun/Node/TypeScript.
 
-zbrain is a Go-native CLI for local-first trusted memory. Core layout:
+## Layout
 
-- `cmd/zbrain/` — CLI binary entrypoint.
-- `internal/cli/` — command dispatch and user-facing command behavior.
-- `internal/runtime/` — runtime paths, config, embedded asset extraction, workspace layout, OKF claim concepts, evidence, index, and trusted query logic.
-- `assets/` — runtime content embedded into the binary and copied by `zbrain setup`.
-- `docs/` — durable plans and supporting project documentation.
+- `cmd/zbrain/` — binary entrypoint (thin, delegates to runtime)
+- `internal/cli/` — arg parsing, dispatch, JSON/text output; `cli.go:Version = "0.2.0"`
+- `internal/runtime/` — durable logic: paths, config, assets, workspaces, claims, evidence, trust validation, index (FTS5), query; 30+ `*_test.go` alongside
+- `internal/mcp/`, `internal/view/` — stdio MCP gateway and loopback viewer
+- `assets/` — embedded source of truth (`assets.go` via `go:embed`), copied by `zbrain setup`; never edit extracted runtime directly
+- `docs/` — specs and authored docs; `docs/README.md` is the doc map
 
-Keep command handlers thin: parse args, call runtime logic, and print JSON or user-facing text. Keep durable runtime behavior in `internal/runtime/`.
-
-## Build, Test, and Development Commands
+## Commands — use these exact forms
 
 ```bash
-go test ./...                       # run all tests
-make test                           # same test gate
-make build                          # build dist/zbrain
-make smoke                          # build and run isolated lifecycle smoke
+go test ./...                          # full gate (CI: ubuntu+macos)
+go test ./internal/runtime -run ^TestFoo$ -count=1 -v  # single test
+go test ./internal/runtime -count=1 -v                 # single package
+go test -race ./internal/runtime ./internal/cli ./internal/view ./internal/mcp
+go vet ./...
+make build                             # → dist/zbrain (embeds assets/)
+make smoke                             # full lifecycle in isolated ZBRAIN_HOME (uses trash)
+CGO_ENABLED=0 go build ./cmd/zbrain    # CI requires CGO-free build
+git diff --check
+ZBRAIN_BENCH_100K=1 go test ./internal/runtime -run '^TestAskP95At100K$' -count=1 -v
 ```
 
-Smoke tests must use `ZBRAIN_HOME` so they never touch real runtime data.
+CI order in `.github/workflows/test.yml` (push `master`/`v2/**`, PR→`master`): `go test ./...` → `go vet ./...` → `go test -race ...` → `make build` → `make smoke` → `git diff --check` → `CGO_ENABLED=0 go build`.
 
-## Coding Style & Naming Conventions
+Verify CLI surface: `go run ./cmd/zbrain --help` and sub-helps (`workspace`, `evidence`, `claim`, `migrate`, `reindex`, `ask`, `status`, `doctor`, `mcp serve`, `view`, `approval`).
 
-- Go 1.24.
-- Use standard Go formatting.
-- Prefer small package-level functions and structs that match surrounding code.
-- Keep filesystem writes behind explicit runtime stores or CLI commands.
-- Preserve `assets/` as the runtime content source of truth.
+## Workspace & Runtime Gotchas
 
-## Testing Guidelines
+- `ZBRAIN_HOME` overrides `~/.zbrain` for every command. Must be same value for the whole session; tests and smoke must use a temp dir (`mktemp -d`) and never touch real `~/.zbrain`. `make smoke` does this via `ZBRAIN_HOME=$tmp_home ./dist/zbrain setup`.
+- `zbrain setup` extracts `README.md`, `agents/`, `engine/`, `skills/`, `templates/` directly under the runtime root. `workspace create <name>` then sets `default_workspace` in `config.yml`.
+- Indexes are disposable SQLite FTS5 at `indexes/<workspace>.sqlite` with a `.dirty` marker during rebuild. Never commit or hand-edit them; rebuild with `zbrain reindex` (or `reindex --embed` for local hybrid). `ask` fails closed on missing/dirty/stale/rejected indexes — check `status`/`doctor` (doctor exits `2` on domain findings).
+- `claim draft` reads body from **stdin**; metadata via flags. Lifecycle is `draft -> approved -> superseded|revoked` — approved claims are superseded, never edited in place. `claim approve` records `verified.at/by/digest`; `reindex` validates before publishing.
+- `ask` default is lexical; `--embed` opts into local loopback embedding sidecar (also `memory_ask`/`memory_reindex` `embedding: true`). Missing sidecar falls back to lexical, no network calls.
+- `mcp serve` is stdio-only (stdout=protocol, stderr=diagnostics). `view` binds `127.0.0.1` only, `GET`/`HEAD` only, strict CSP/`nosniff`, no CORS. Owner-pinned lifecycle: `claim_lifecycle prepare` → `approval show <id>` → `approval grant <id>` (TTY, confirm last 16 hex of digest) → `claim_lifecycle apply`. Challenge 15m, token 5m capped by challenge, single-use.
+- File modes enforced in `internal/runtime/paths.go`: dirs `0700`, mutable metadata/canonical Markdown `0600`, evidence snapshots+`source.yaml` `0400`, derived indexes/dirty `0600`.
 
-- Add focused `*_test.go` coverage next to the package being changed.
-- Use temp directories and explicit `ZBRAIN_HOME` isolation.
-- Run `go test ./...` before claiming completion.
-- For command/runtime behavior, also run a relevant isolated smoke command.
+## Trust Rules — do not violate
 
-## Asset Authoring Guidelines
+- Workspace isolation is hard: never read across workspaces without explicit `--include <name>` (read-only secondary).
+- Evidence snapshots (`evidence add --file <path> --origin <uri>`) are immutable local copies; raw evidence is untrusted, never indexed.
+- Only `type: zbrain.claim` + `zbrain.profile: zbrain.trusted-memory/v1` with `status: approved` and valid digest/closure may enter trusted results. Drafts are `promotion_candidates` only. Conflicts → `status: "blocked"`, no match → `status: "gap"` (not permission to use drafts/evidence).
+- `reindex` rejects invalid claims/evidence/broken `support` closures without rewriting canonical files.
 
-- Skill files in `assets/skills/*/SKILL.md` must have frontmatter: `name`, `description`, `version`.
-- Engine files in `assets/engine/` are plain Markdown.
-- Template files in `assets/templates/` use `{{placeholder}}` tokens matching the Go scaffold logic.
-- Trusted claim templates should be OKF-style Markdown with `type: zbrain.claim` and `zbrain.profile: zbrain.trusted-memory/v1`.
-- Evidence metadata templates must match the Go runtime `source.yaml` shape.
-- After editing `assets/`, run tests and smoke; assets are embedded directly by Go.
+## Assets & Style
 
-## Security & Configuration Tips
+- After editing `assets/`, rebuild and run tests+smoke — binary embeds them.
+- Skill files `assets/skills/*/SKILL.md` require frontmatter `name`, `description`, `version`. Templates use `{{placeholder}}` tokens; claim templates must be OKF Markdown; evidence `source.yaml` must match `evidence.go`.
+- Keep handlers thin, put durable behavior in `internal/runtime/`. Use `trash`, never `rm` (see `Makefile:32,40`). Use standard `gofmt`; no extra linter config.
+- Gitignored: `dist/`, `harness.db*`, `.kit/`, `.opencode/`, `workspaces/`, `.cache/` — never commit runtime output or secrets.
 
-- Do not commit secrets, personal workspace data, or populated runtime output.
-- Workspace isolation is a hard rule; never read across workspace boundaries unless the caller passed explicit `--include`.
-- Evidence snapshots are immutable local copies; never mutate a captured source after creation.
-- Raw evidence is untrusted source data. Only approved OKF claim concepts are trusted context.
-- Drafts are promotion candidates, not answer material.
-- Derived SQLite indexes are disposable and must be rebuildable from canonical Markdown.
+## Commits & Docs
 
-## Commit & Pull Request Guidelines
-
-Use Conventional Commit style, matching recent history such as `feat(cli): ...`, `fix(runtime): ...`, and `docs(spec): ...`. Keep scopes specific to the area changed. PRs should include a short summary, affected paths, and commands run to verify.
+- Conventional Commits: `feat(cli): ...`, `fix(runtime): ...`, `docs(spec): ...` with specific scope.
+- Authoritative sources: `README.md`, `CONTRIBUTING.md`, `trusted-memory-spec.md`, `docs/trusted-agent-gateway-spec.md`. If docs conflict with `go run ./cmd/zbrain --help` or `internal/runtime/`, trust the executable.
 
 <!-- ZHARNESS:BEGIN -->
 ## Harness

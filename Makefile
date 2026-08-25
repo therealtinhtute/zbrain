@@ -9,6 +9,13 @@ help: ## Show available targets
 build: ## Compile the Go CLI
 	go build -o dist/zbrain ./cmd/zbrain
 
+bench: build ## Run FTS5/perf baseline (100, 1k)
+	go run ./scripts/bench-fts5.go --sizes=100,1000
+
+eval: build ## Run retrieval eval (P@K/R@K/MRR/NDCG) on 1k syn corpus
+	go run ./internal/eval --corpus=1000 --limit=10 --json docs/proofs/eval-baseline.json
+	@cat docs/proofs/eval-baseline.json | python3 -m json.tool | head -40
+
 test: ## Run the Go test suite
 	go test ./...
 
