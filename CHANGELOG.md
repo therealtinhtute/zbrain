@@ -1,5 +1,41 @@
 # CHANGELOG
 
+## 0.2.3 (2026-08-25) — perf+eval harness (Wave 0-3 fanout)
+
+Wave 0 baseline + Wave 1 perf/search + Wave 2 trust/drift/CLI + Wave 3 security/docs. No trust contract change.
+
+### Added
+- `scripts/bench-fts5.go` + `docs/benchmark.md` + `docs/proofs/bench-baseline*.json` — FTS5/perf baseline harness (100/1k/10k narrow vocab, temp ZBRAIN_HOME, index time/throughput/DB/heap/p50/p95/p99) — replaces `TestAskP95At100K` single point
+- `docs/eval/queries.json` (50 golden: 15 single + 35 composite) + `internal/eval/eval.go` `make eval` — P@10/R@10/MRR/NDCG/MAP/gap/blocked/faith harness (brute-force ground truth, isolated ZBRAIN_HOME)
+- `internal/eval/drift.go` + `docs/eval/drift.md` — McNemar delta for retrieval drift
+- `internal/runtime/index_benchmark_test.go` `TestAskP50P95P99` wrapper (p50/p95/p99)
+- `docs/cli-contract.md` — TE-quiet/TE-no-color skip rationale (JSON-only, zero ANSI)
+- `docs/proofs/surface.txt` + `TestSurface` — 13 helps snapshot (RUBRIC 2A.2)
+
+### Changed
+- `internal/runtime/index.go` `fts5Query` — phrase `"exact"` + wildcard `foo*` + NEAR reject (was quote-each-token)
+- `internal/runtime/query.go` `interleaveClaims` — RRF k=60 (was `Score=float64(i)`)
+- `internal/runtime/index.go` `createIndexSchema` — `PRAGMA journal_mode=WAL` + `synchronous=NORMAL` + wal_checkpoint (WAL 1.4-3.5×: 1k 752→2700 doc/s)
+- `internal/view/server.go` — `sync.Mutex` on listener/Port/URL (race fix)
+- `internal/mcp/tools.go` — 1MB bounds + 5s timeout + audit log `tool/workspace/duration` (MSSS L2) + mutex log
+- `trusted-memory-spec.md` — mark gateway `mcp serve`/`view`/`approval` as Shipped 2026-08-13 (was future milestone)
+- `docs/README.md` — add benchmark/eval row
+
+### Fixed
+- `Makefile` `build` now produces both `dist/zbrain` (22M unstripped) and `dist/zbrain.stripped` (15M, 32% smaller, `ldflags -s -w -trimpath`)
+- `workspace_boundary_test.go` fuzz for `../`, `%2e%2e`, `\0`, `//`, etc. + encoded traversal
+- `transition_test.go`/`view_test.go`/`index_state_test.go` coverage push `runtime 76.2%→80.0%` `view 69.5%→92.8%`
+- `cli.go` typed exit codes 0/1/2 + `cli_test.go` `TestExitCodes` 27 cases
+
+### Perf (measured 2026-08-25 `go1.24.0 linux/amd64`)
+- 1k: 1.33s 752 doc/s p50 50ms → 0.37s **2700 doc/s** p50 52ms (+259%)
+- 10k: 3.17s 3155 doc/s 50MB p50 484ms (needs Phase 2 RRF tuning — target <100ms)
+- Eval 1k: `P@10 1.0 R@10 0.054 MRR 1.0 NDCG 1.0 gap 0%` — no regress
+
+### Security/CI
+- `.github/workflows/test.yml` — add `golangci-lint@v1.64` + `govulncheck` + `kyber sarif` + `go-crap --fail-on 15` + SARIF upload (all warn-only)
+- `kyber.toml` — `fail_on_threshold false`
+
 ## 0.1.1 (2026-08-10)
 
 Go-native rewrite of the CLI. The pre-reset Bun/TypeScript implementation

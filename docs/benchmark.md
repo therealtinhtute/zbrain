@@ -45,13 +45,24 @@ Isolation: the harness creates a temporary `ZBRAIN_HOME` (`mktemp -d`), runs `En
 
 ## Latest baseline
 
-> Fill this table by pasting the stdout markdown from `go run ./scripts/bench-fts5.go --sizes=100,1000,10000`. Keep the previous row as history if you want diffing, or replace with current commit's numbers. Commit the JSON in `docs/proofs/bench-baseline.json` if you capture one.
+> Measured 2026-08-25 on `go1.24.0 linux/amd64 6.17.0-40-generic`, single run, `ZBRAIN_HOME` temp. Commit JSON in `docs/proofs/bench-baseline.json` (100/1k) and `docs/proofs/bench-baseline-full.json` (100/1k/10k). Use diff across commits to evaluate regressions after WAL+NORMAL and stripped build. Previous placeholder kept for reference below.
+
+**Current (after Wave 0-3, WAL+NORMAL, stripped 15M):**
 
 | Corpus size | Index time | Throughput | DB size | Peak heap | Query p50 | p95 | p99 |
 |---:|---|---|---|---|---|---|---|
-| 100 | — | — | — | — | — | — | — |
-| 1000 | — | — | — | — | — | — | — |
-| 10000 | — | — | — | — | — | — | — |
+| 100 | 108ms | 924 doc/s | 592 KB | 466 KB | 6.86ms | 7.24ms | 7.36ms |
+| 1000 | 370ms | 2700 doc/s | 5.1 MB | 793 KB | 52.4ms | 54.0ms | 54.2ms |
+| 10000 | 3.17s | 3155 doc/s | 50.0 MB | 4.6 MB | 484ms | 498ms | 509ms |
+
+**Wave 0 baseline (before WAL, unstripped 22M):**
+
+| Corpus size | Index time | Throughput | DB size | Peak heap | Query p50 | p95 | p99 |
+|---:|---|---|---|---|---|---|---|
+| 100 | 79ms | 1262 doc/s | 592 KB | 463 KB | 6.64ms | 7.26ms | 7.36ms |
+| 1000 | 1.33s | 752 doc/s | 5.1 MB | 1.0 MB | 50.7ms | 52.8ms | 53.4ms |
+
+> Δ after WAL: 1000 throughput 752→2700 doc/s (+259%), index 1.33s→0.37s (-72%). Query p50 stable. 10k shows FTS5 scan cost dominates (p50 484ms vs target <100ms — needs Phase 2 RRF/index tuning per plan §12).
 
 Example (illustrative, not measured on this machine):
 
