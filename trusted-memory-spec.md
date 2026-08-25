@@ -36,12 +36,16 @@ zbrain evidence add --file <path> --origin <uri-or-path> [--media-type <type>] [
 zbrain claim draft --tier <tier> --title <title> --basis <owner|evidence|derived> [--evidence <id>]... [--support <id>]... [--conflicts-with <id>]... [--workspace <name>]
 zbrain claim approve <id> [--workspace <name>]
 zbrain claim supersede <id> --tier <tier> --title <title> --basis <owner|evidence|derived> [--evidence <id>]... [--support <id>]... [--conflicts-with <id>]... [--workspace <name>]
-zbrain claim revoke <id> --reason <reason> [--workspace <name>]
+zbrain claim revoke <id> --reason <text> [--workspace <name>]
 zbrain migrate okf [--workspace <name>]
-zbrain reindex [--workspace <name>]
-zbrain ask [--workspace <name>] [--include <name>]... <query>
+zbrain reindex [--workspace <name>] [--embed]
+zbrain ask [--workspace <name>] [--include <name>]... [--embed] <query>
 zbrain status [--workspace <name>]
 zbrain doctor [--workspace <name>] [--probe-embedder]
+zbrain mcp serve
+zbrain view
+zbrain approval show <challenge-id>
+zbrain approval grant <challenge-id>
 zbrain version
 ```
 
@@ -49,20 +53,17 @@ The command surface is authoritative from `zbrain --help`. Documentation and
 embedded skills must not name commands or integrations that are absent from
 that output.
 
-### Authorized future milestones (not shipped)
+### Shipped 2026-08-13 — Authorized gateway milestone (formerly future)
 
-The following command names and integrations are design-authorized only. They
-are not present in the current CLI help and must not be documented or treated
-as available runtime behavior until their implementation milestones pass:
+The following were authorized as future milestones and shipped on 2026-08-13
+(see [`docs/trusted-agent-gateway-spec.md`](docs/trusted-agent-gateway-spec.md)).
+They are now present in `zbrain --help` and are available runtime behavior:
 
 - `zbrain mcp serve`: a typed local stdio MCP gateway over shared runtime
   services;
 - `zbrain view`: a loopback read-only viewer;
 - owner-pinned gateway mutation challenges and optional evidence-span-aware
   gateway operations.
-
-Their separate design contract is documented in
-[`docs/trusted-agent-gateway-spec.md`](docs/trusted-agent-gateway-spec.md).
 
 ## 3. Scope
 
@@ -82,12 +83,14 @@ Their separate design contract is documented in
   `zbrain doctor`.
 - Cryptographic evidence spans when declared by a claim.
 
-### Authorized future scope
+### Shipped gateway scope — Shipped 2026-08-13 (see docs/trusted-agent-gateway-spec.md)
 
-The typed local MCP stdio gateway and loopback read-only viewer are authorized
-future milestones, not shipped scope. They must reuse the shipped runtime
-trust boundary and cannot weaken workspace isolation, approval requirements,
-evidence validation, or fail-closed query behavior.
+The typed local MCP stdio gateway and loopback read-only viewer were
+authorized as future milestones and shipped on 2026-08-13 (see
+[`docs/trusted-agent-gateway-spec.md`](docs/trusted-agent-gateway-spec.md)).
+They reuse the shipped runtime trust boundary and cannot weaken workspace
+isolation, approval requirements, evidence validation, or fail-closed query
+behavior.
 
 ### Out of scope
 
@@ -307,7 +310,8 @@ a gap.
 7. Keep the implementation Go-native and minimal.
 8. Every behavior change gets focused tests and an isolated runtime smoke.
 
-The following are future gateway constraints, not shipped CLI behavior:
+The following gateway constraints Shipped 2026-08-13 (see
+[`docs/trusted-agent-gateway-spec.md`](docs/trusted-agent-gateway-spec.md)):
 
 9. MCP is stdio-only and exposes typed operations over shared runtime services;
    it never grants owner approval, stores secrets, fetches remote sources, or

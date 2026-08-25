@@ -29,11 +29,63 @@ jobs:
       - name: Vet
         run: go vet ./...
 
+      - name: Lint
+        uses: golangci/golangci-lint-action@v6
+        with:
+          version: v1.64
+        continue-on-error: true
+
+      - name: Govulncheck
+        run: |
+          go install golang.org/x/vuln/cmd/govulncheck@latest
+          govulncheck ./...
+        continue-on-error: true
+
+      - name: Kyber
+        run: |
+          go install github.com/jedi-knights/kyber/cmd/kyber@latest
+          kyber analyze --format sarif -o kyber.sarif ./... || true
+        continue-on-error: true
+
+      - name: Go CRAP
+        run: |
+          go install github.com/padiazg/go-crap@latest || true
+          go-crap scan --threshold 15 ./... || true
+          go-crap --fail-on 15 ./... || true
+        continue-on-error: true
+
+      - name: Upload SARIF
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: kyber.sarif
+        if: hashFiles('kyber.sarif') != ''
+        continue-on-error: true
+
       - name: Focused race tests
         run: go test -race ./internal/runtime ./internal/cli ./internal/view ./internal/mcp
 
       - name: Build
         run: make build
+
+      - name: Verify stripped binary
+        run: |
+          ls -lh dist/*
+          file dist/zbrain*
+          test -f dist/zbrain.stripped
+          stripped=$(wc -c < dist/zbrain.stripped | tr -d ' ')
+          unstripped=$(wc -c < dist/zbrain | tr -d ' ')
+          echo "unstripped=$unstripped stripped=$stripped"
+          test "$stripped" -lt "$unstripped"
+          if file dist/zbrain | grep -q debug_info; then file dist/zbrain.stripped | grep -vq debug_info; fi
+
+      - name: Upload binaries
+        uses: actions/upload-artifact@v4
+        with:
+          name: zbrain-${{ matrix.os }}
+          path: |
+            dist/zbrain
+            dist/zbrain.stripped
+          if-no-files-found: error
 
       - name: Smoke
         run: make smoke

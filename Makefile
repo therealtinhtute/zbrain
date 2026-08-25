@@ -1,13 +1,22 @@
 .DEFAULT_GOAL := help
 
-.PHONY: help build test smoke install-local clean
+.PHONY: help build build-stripped test smoke install-local clean bench eval
 
 help: ## Show available targets
 	@printf "Available targets:\n"
 	@awk 'BEGIN {FS = ":.*## "}; /^[a-zA-Z0-9_-]+:.*## / {printf "  %-14s %s\n", $$1, $$2}' $(MAKEFILE_LIST)
 
-build: ## Compile the Go CLI
+build: ## Compile the Go CLI (debug + stripped)
+	@mkdir -p dist
 	go build -o dist/zbrain ./cmd/zbrain
+	go build -ldflags="-s -w" -trimpath -o dist/zbrain.stripped ./cmd/zbrain
+	@ls -lh dist/zbrain* 2>/dev/null || true
+
+build-stripped: ## Compile stripped binary (~14-16M, no debug_info)
+	@mkdir -p dist
+	go build -ldflags="-s -w" -trimpath -o dist/zbrain.stripped ./cmd/zbrain
+	@ls -lh dist/zbrain.stripped
+	@file dist/zbrain.stripped
 
 bench: build ## Run FTS5/perf baseline (100, 1k)
 	go run ./scripts/bench-fts5.go --sizes=100,1000

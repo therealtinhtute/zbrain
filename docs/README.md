@@ -13,6 +13,7 @@ the harness never refreshes, overwrites, or deletes it.
 | Run a workflow stage | docs/WORKFLOW.md, then the one playbook it names |
 | Know why something is built the way it is | docs/decisions/README.md |
 | See what is being built right now | the active plan under docs/plans/active/ |
+| Benchmark & eval baseline | docs/benchmark.md, docs/eval/queries.json, docs/proofs/ |
 
 Add a row for each authored document as you write it.
 

@@ -10,6 +10,7 @@ import (
 	"sort"
 	"strings"
 	"time"
+	"unicode"
 
 	_ "modernc.org/sqlite"
 )
@@ -835,7 +836,11 @@ func (store IndexStore) Rebuild(workspace string) (IndexSummary, error) {
 		return IndexSummary{}, err
 	}
 	tmpPath := temporary.Name()
-	defer func() { _ = os.Remove(tmpPath) }()
+	defer func() {
+		_ = os.Remove(tmpPath)
+		_ = os.Remove(tmpPath + "-wal")
+		_ = os.Remove(tmpPath + "-shm")
+	}()
 	if err := temporary.Close(); err != nil {
 		return IndexSummary{}, err
 	}
@@ -949,9 +954,14 @@ func (store IndexStore) Rebuild(workspace string) (IndexSummary, error) {
 	if err := integrityCheck(db); err != nil {
 		return IndexSummary{}, err
 	}
+	if _, err := db.Exec("PRAGMA wal_checkpoint(TRUNCATE)"); err != nil {
+		return IndexSummary{}, err
+	}
 	if err := db.Close(); err != nil {
 		return IndexSummary{}, err
 	}
+	_ = os.Remove(tmpPath + "-wal")
+	_ = os.Remove(tmpPath + "-shm")
 	runWorkspaceGenerationTestHook(workspaceGenerationHookRebuildBeforePublication)
 
 	publicationLock, err := acquireWorkspaceLock(store.Paths, workspace, true)
@@ -1142,12 +1152,108 @@ limit ?`, args...)
 }
 
 func fts5Query(query string) string {
-	tokens := queryTokens(query)
-	quoted := make([]string, 0, len(tokens))
-	for _, token := range tokens {
-		quoted = append(quoted, `"`+strings.ReplaceAll(token, `"`, `""`)+`"`)
+	if strings.TrimSpace(query) == "" {
+		return ""
 	}
-	return strings.Join(quoted, " ")
+	var parts []string
+	n := len(query)
+	i := 0
+	for i < n {
+		for i < n && unicode.IsSpace(rune(query[i])) {
+			i++
+		}
+		if i >= n {
+			break
+		}
+		if query[i] == '"' {
+			end := strings.IndexByte(query[i+1:], '"')
+			if end == -1 {
+				return ""
+			}
+			phrase := query[i+1 : i+1+end]
+			phraseTrim := strings.TrimSpace(phrase)
+			if phraseTrim != "" {
+				fields := strings.Fields(strings.ToLower(phraseTrim))
+				normalized := strings.Join(fields, " ")
+				if normalized != "" {
+					escaped := strings.ReplaceAll(normalized, `"`, `""`)
+					parts = append(parts, `"`+escaped+`"`)
+				}
+			}
+			i = i + end + 2
+			continue
+		}
+		j := i
+		for j < n && !unicode.IsSpace(rune(query[j])) && query[j] != '"' {
+			j++
+		}
+		raw := query[i:j]
+		if raw == "" {
+			i = j
+			continue
+		}
+		isWildcard := strings.HasSuffix(raw, "*")
+		base := raw
+		if isWildcard {
+			base = strings.TrimSuffix(raw, "*")
+			if strings.TrimSpace(base) == "" {
+				i = j
+				continue
+			}
+		}
+		lowBase := strings.ToLower(base)
+		splitTokens := strings.FieldsFunc(lowBase, func(r rune) bool {
+			return !unicode.IsLetter(r) && !unicode.IsDigit(r)
+		})
+		for _, tok := range splitTokens {
+			if tok == "near" {
+				return ""
+			}
+		}
+		if isWildcard {
+			fields := strings.FieldsFunc(strings.ToLower(base), func(r rune) bool {
+				return !unicode.IsLetter(r) && !unicode.IsDigit(r)
+			})
+			if len(fields) == 0 {
+				i = j
+				continue
+			}
+			for idx, field := range fields {
+				if field == "near" {
+					return ""
+				}
+				if idx == len(fields)-1 {
+					parts = append(parts, field+"*")
+				} else {
+					parts = append(parts, `"`+strings.ReplaceAll(field, `"`, `""`)+`"`)
+				}
+			}
+		} else {
+			fields := strings.FieldsFunc(strings.ToLower(raw), func(r rune) bool {
+				return !unicode.IsLetter(r) && !unicode.IsDigit(r)
+			})
+			for _, field := range fields {
+				if field == "near" {
+					return ""
+				}
+				if field == "" {
+					continue
+				}
+				parts = append(parts, `"`+strings.ReplaceAll(field, `"`, `""`)+`"`)
+			}
+		}
+		i = j
+	}
+	seen := make(map[string]bool, len(parts))
+	deduped := make([]string, 0, len(parts))
+	for _, p := range parts {
+		if seen[p] {
+			continue
+		}
+		seen[p] = true
+		deduped = append(deduped, p)
+	}
+	return strings.Join(deduped, " ")
 }
 
 func createIndexSchema(db *sql.DB) error {
@@ -1210,7 +1316,16 @@ create table rebuild_state (
 		return err
 	}
 	_, err = db.Exec("pragma user_version = 3")
-	return err
+	if err != nil {
+		return err
+	}
+	if _, err := db.Exec("PRAGMA journal_mode=WAL"); err != nil {
+		return err
+	}
+	if _, err := db.Exec("PRAGMA synchronous=NORMAL"); err != nil {
+		return err
+	}
+	return nil
 }
 
 func insertIndexedClaim(tx *sql.Tx, claim Claim) error {

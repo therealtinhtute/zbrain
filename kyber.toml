@@ -1,0 +1,7 @@
+# kyber.toml — zbrain code-quality gate (v0 warn-only)
+# See https://github.com/jedi-knights/kyber
+paths = ["./..."]
+exclude = ["vendor/**", "testdata/**", "**/*_test.go"]
+format = "text"
+fail_on_threshold = false
+verbose = false

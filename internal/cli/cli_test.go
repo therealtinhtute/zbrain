@@ -5,7 +5,9 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -1404,9 +1406,188 @@ func TestApprovalGrantRequiresTTY(t *testing.T) {
 	}
 }
 
+func TestExitCodes(t *testing.T) {
+	exitCode := func(err error) int {
+		if err == nil {
+			return 0
+		}
+		if c, ok := err.(interface{ ExitCode() int }); ok {
+			return c.ExitCode()
+		}
+		return 1
+	}
+
+	cases := []struct {
+		name    string
+		args    []string
+		want    int
+		prepare func(*App)
+	}{
+		{name: "valid help", args: []string{"--help"}, want: 0},
+		{name: "valid version", args: []string{"version"}, want: 0},
+		{name: "valid setup", args: []string{"setup"}, want: 0},
+		{name: "valid doctor healthy", args: []string{"doctor"}, want: 0, prepare: func(app *App) {
+			setupResearchApp(t, app)
+			if err := app.Run([]string{"reindex"}); err != nil {
+				t.Fatalf("prepare reindex error = %v", err)
+			}
+		}},
+		{name: "valid ask gap is success", args: []string{"ask", "missing"}, want: 0, prepare: func(app *App) {
+			setupResearchApp(t, app)
+			if err := app.Run([]string{"reindex"}); err != nil {
+				t.Fatalf("prepare reindex error = %v", err)
+			}
+		}},
+		{name: "unknown command", args: []string{"bogus"}, want: 1},
+		{name: "unknown command with dash still flag", args: []string{"--bogus"}, want: 2},
+		{name: "unknown flag subcommand", args: []string{"setup", "--bogus"}, want: 2},
+		{name: "unknown flag ask", args: []string{"ask", "--bogus", "value"}, want: 2},
+		{name: "flag requires value", args: []string{"ask", "--workspace"}, want: 2},
+		{name: "help with extra arg is usage", args: []string{"--help", "extra"}, want: 2},
+		{name: "version with extra arg is usage", args: []string{"version", "extra"}, want: 2},
+		{name: "missing arg workspace create", args: []string{"workspace", "create"}, want: 2},
+		{name: "missing arg claim approve", args: []string{"claim", "approve"}, want: 2},
+		{name: "missing arg claim draft extra positional", args: []string{"claim", "draft", "extra"}, want: 2, prepare: func(app *App) { setupResearchApp(t, app) }},
+		{name: "missing arg ask no query", args: []string{"ask"}, want: 2},
+		{name: "missing arg evidence add", args: []string{"evidence", "add", "--file", "a"}, want: 2, prepare: func(app *App) { setupResearchApp(t, app) }},
+		{name: "usage reindex extra arg", args: []string{"reindex", "extra"}, want: 2, prepare: func(app *App) { setupResearchApp(t, app) }},
+		{name: "unknown claim subcommand", args: []string{"claim", "bogus"}, want: 1},
+		{name: "unknown workspace subcommand", args: []string{"workspace", "bogus"}, want: 1},
+		{name: "unknown approval subcommand", args: []string{"approval", "bogus"}, want: 1},
+		{name: "mcp missing subcommand is usage", args: []string{"mcp"}, want: 2},
+		{name: "mcp unknown subcommand is usage", args: []string{"mcp", "bogus"}, want: 2},
+		{name: "runtime error approve nonexistent", args: []string{"claim", "approve", "clm_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}, want: 1, prepare: func(app *App) { setupResearchApp(t, app) }},
+		{name: "runtime error resolve workspace missing", args: []string{"status"}, want: 1},
+		{name: "doctor with findings dirty", args: []string{"doctor"}, want: 2, prepare: func(app *App) {
+			setupResearchApp(t, app)
+			if err := app.Run([]string{"reindex"}); err != nil {
+				t.Fatalf("prepare reindex error = %v", err)
+			}
+			if err := (zruntime.IndexStore{Paths: app.Paths}).MarkDirty("research"); err != nil {
+				t.Fatalf("MarkDirty error = %v", err)
+			}
+		}},
+		{name: "doctor with findings probe-embedder no embedding", args: []string{"doctor", "--probe-embedder"}, want: 2, prepare: func(app *App) {
+			setupResearchApp(t, app)
+			if err := app.Run([]string{"reindex"}); err != nil {
+				t.Fatalf("prepare reindex error = %v", err)
+			}
+		}},
+	}
+
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			app, _ := testApp(t)
+			if tc.prepare != nil {
+				tc.prepare(&app)
+				// reset output buffers before actual run so prepare output does not interfere
+				app.Stdout = &bytes.Buffer{}
+				app.Stderr = &bytes.Buffer{}
+				// ensure stdin is empty for commands that read body
+				if app.Stdin == nil {
+					app.Stdin = strings.NewReader("")
+				}
+			}
+			err := app.Run(tc.args)
+			got := exitCode(err)
+			if got != tc.want {
+				t.Fatalf("Run(%v) exit code = %d, want %d (err=%v)", tc.args, got, tc.want, err)
+			}
+		})
+	}
+}
+
 func decodeJSON(t *testing.T, input string, target any) {
 	t.Helper()
 	if err := json.Unmarshal([]byte(input), target); err != nil {
 		t.Fatalf("invalid JSON %q: %v", input, err)
 	}
+}
+
+func TestSurface(t *testing.T) {
+	repoRoot := findRepoRoot(t)
+	snapshotPath := filepath.Join(repoRoot, "docs", "proofs", "surface.txt")
+
+	cases := []struct {
+		name string
+		args []string
+	}{
+		{name: "zbrain --help", args: []string{"--help"}},
+		{name: "zbrain setup --help", args: []string{"setup", "--help"}},
+		{name: "zbrain workspace --help", args: []string{"workspace", "--help"}},
+		{name: "zbrain evidence --help", args: []string{"evidence", "--help"}},
+		{name: "zbrain claim --help", args: []string{"claim", "--help"}},
+		{name: "zbrain migrate --help", args: []string{"migrate", "--help"}},
+		{name: "zbrain reindex --help", args: []string{"reindex", "--help"}},
+		{name: "zbrain ask --help", args: []string{"ask", "--help"}},
+		{name: "zbrain status --help", args: []string{"status", "--help"}},
+		{name: "zbrain doctor --help", args: []string{"doctor", "--help"}},
+		{name: "zbrain mcp --help", args: []string{"mcp", "--help"}},
+		{name: "zbrain view --help", args: []string{"view", "--help"}},
+		{name: "zbrain approval --help", args: []string{"approval", "--help"}},
+	}
+
+	var captured bytes.Buffer
+	for _, tc := range cases {
+		output := runZbrainHelp(t, repoRoot, tc.args)
+		if !strings.Contains(output, "Usage:") {
+			t.Fatalf("surface %q missing Usage: in output %q", tc.name, output)
+		}
+		if !strings.Contains(output, "zbrain") {
+			t.Fatalf("surface %q missing zbrain example in output %q", tc.name, output)
+		}
+		fmt.Fprintf(&captured, "=== %s ===\n%s", tc.name, output)
+		if !strings.HasSuffix(output, "\n") {
+			captured.WriteString("\n")
+		}
+		captured.WriteString("\n")
+	}
+
+	want, err := os.ReadFile(snapshotPath)
+	if err != nil {
+		t.Fatalf("read snapshot %s: %v (regenerate with: go run ./cmd/zbrain --help and 12 sub-helps > docs/proofs/surface.txt)", snapshotPath, err)
+	}
+	got := captured.Bytes()
+	if !bytes.Equal(got, want) {
+		t.Fatalf("surface snapshot mismatch at %s: got %d bytes want %d bytes\nrun the following to regenerate:\n  go run ./cmd/zbrain --help > /tmp/surface.txt and append sub-helps, or run TestSurface with UPDATE_EXPECT=1\n--- got (first 500 bytes) ---\n%s\n--- want (first 500 bytes) ---\n%s", snapshotPath, len(got), len(want), truncateForDiff(got), truncateForDiff(want))
+	}
+}
+
+func findRepoRoot(t *testing.T) string {
+	t.Helper()
+	dir, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("Getwd() error = %v", err)
+	}
+	for {
+		if _, err := os.Stat(filepath.Join(dir, "go.mod")); err == nil {
+			return dir
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			t.Fatalf("could not find repo root (no go.mod) starting from %s", dir)
+		}
+		dir = parent
+	}
+}
+
+func runZbrainHelp(t *testing.T, repoRoot string, args []string) string {
+	t.Helper()
+	cmdArgs := append([]string{"run", "./cmd/zbrain"}, args...)
+	cmd := exec.Command("go", cmdArgs...)
+	cmd.Dir = repoRoot
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("go run ./cmd/zbrain %v failed: %v\noutput: %s", args, err, string(out))
+	}
+	return string(out)
+}
+
+func truncateForDiff(b []byte) string {
+	const limit = 500
+	if len(b) <= limit {
+		return string(b)
+	}
+	return string(b[:limit]) + "...[truncated]"
 }

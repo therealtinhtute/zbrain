@@ -850,3 +850,118 @@ func TestMemoryEmbeddingOptInAndLexicalFallback(t *testing.T) {
 		t.Fatalf("default embedding status = %#v, want gap", lexicalAgain["status"])
 	}
 }
+
+func TestBounds(t *testing.T) {
+	opts := testOptions(t)
+	server, err := newServer(opts)
+	if err != nil {
+		t.Fatalf("newServer() error = %v", err)
+	}
+	cs := connectClient(t, server)
+
+	// Capture stderr buffer from testOptions.
+	buf, ok := opts.Stderr.(*bytes.Buffer)
+	if !ok {
+		t.Fatalf("opts.Stderr type = %T, want *bytes.Buffer", opts.Stderr)
+	}
+
+	// 1. Oversized input returns -32602 (invalid params) via JSON marshaled size check.
+	huge := strings.Repeat("a", (1<<20)+1024)
+	_, err = callTool(t, cs, "memory_ask", map[string]any{"query": huge})
+	var rpcErr *jsonrpc.Error
+	if !errors.As(err, &rpcErr) {
+		t.Fatalf("oversized memory_ask error type = %T, want *jsonrpc.Error (%v)", err, err)
+	}
+	if rpcErr.Code != jsonrpc.CodeInvalidParams {
+		t.Fatalf("oversized memory_ask code = %d, want %d", rpcErr.Code, jsonrpc.CodeInvalidParams)
+	}
+	if !strings.Contains(rpcErr.Message, "1MB") {
+		t.Fatalf("oversized memory_ask message = %q, want 1MB limit", rpcErr.Message)
+	}
+
+	// Oversized claim_draft body also returns -32602.
+	hugeBody := strings.Repeat("b", (1<<20)+10)
+	_, err = callTool(t, cs, "claim_draft", map[string]any{"tier": "projects", "title": "huge", "basis": "owner", "body": hugeBody})
+	if !errors.As(err, &rpcErr) {
+		t.Fatalf("oversized claim_draft error type = %T, want *jsonrpc.Error (%v)", err, err)
+	}
+	if rpcErr.Code != jsonrpc.CodeInvalidParams {
+		t.Fatalf("oversized claim_draft code = %d, want %d", rpcErr.Code, jsonrpc.CodeInvalidParams)
+	}
+
+	// Oversized evidence_capture origin also returns -32602.
+	_, err = callTool(t, cs, "evidence_capture", map[string]any{"file": strings.Repeat("c", (1<<20)+10), "origin": "file://x"})
+	if !errors.As(err, &rpcErr) {
+		t.Fatalf("oversized evidence_capture error type = %T, want *jsonrpc.Error (%v)", err, err)
+	}
+	if rpcErr.Code != jsonrpc.CodeInvalidParams {
+		t.Fatalf("oversized evidence_capture code = %d, want %d", rpcErr.Code, jsonrpc.CodeInvalidParams)
+	}
+
+	// 2. Valid input passes and timeout not triggered for normal.
+	buf.Reset()
+	start := time.Now()
+	res, err := callTool(t, cs, "memory_ask", map[string]any{"query": "Evidence Claim"})
+	elapsed := time.Since(start)
+	if err != nil {
+		t.Fatalf("valid memory_ask error = %v", err)
+	}
+	if res.IsError {
+		t.Fatalf("valid memory_ask isError; %s", resultText(res))
+	}
+	if !strings.Contains(resultText(res), "Evidence Claim") {
+		t.Fatalf("valid memory_ask missing approved claim; %s", resultText(res))
+	}
+	if elapsed > 5*time.Second {
+		t.Fatalf("valid memory_ask exceeded 5s timeout: %s", elapsed)
+	}
+
+	// 3. Audit log to stderr contains tool/workspace/duration without body.
+	logged := buf.String()
+	if !strings.Contains(logged, "tool=memory_ask") {
+		t.Fatalf("audit log missing tool=memory_ask; got %q", logged)
+	}
+	if !strings.Contains(logged, "duration=") {
+		t.Fatalf("audit log missing duration; got %q", logged)
+	}
+	// Must not log body/content query string.
+	if strings.Contains(logged, "Evidence Claim") {
+		t.Fatalf("audit log leaked body/content; got %q", logged)
+	}
+	if strings.Contains(logged, huge) || strings.Contains(logged, hugeBody) {
+		t.Fatalf("audit log leaked oversized body; got len %d", len(logged))
+	}
+
+	// workspace_current valid also passes and logs without body.
+	buf.Reset()
+	res, err = callTool(t, cs, "workspace_current", nil)
+	if err != nil {
+		t.Fatalf("workspace_current error = %v", err)
+	}
+	if res.IsError {
+		t.Fatalf("workspace_current isError; %s", resultText(res))
+	}
+	if !strings.Contains(buf.String(), "tool=workspace_current") {
+		t.Fatalf("workspace_current audit log missing; got %q", buf.String())
+	}
+
+	// memory_status valid passes.
+	buf.Reset()
+	res, err = callTool(t, cs, "memory_status", nil)
+	if err != nil || res.IsError {
+		t.Fatalf("memory_status valid error=%v isError=%v text=%s", err, res != nil && res.IsError, resultText(res))
+	}
+	if !strings.Contains(buf.String(), "tool=memory_status") {
+		t.Fatalf("memory_status audit log missing; got %q", buf.String())
+	}
+
+	// claim_lifecycle oversized still bounded.
+	hugeClaimID := strings.Repeat("d", (1<<20)+10)
+	_, err = callTool(t, cs, "claim_lifecycle", map[string]any{"operation": "prepare", "action": "approve", "claim_id": hugeClaimID})
+	if !errors.As(err, &rpcErr) {
+		t.Fatalf("oversized claim_lifecycle error type = %T, want *jsonrpc.Error (%v)", err, err)
+	}
+	if rpcErr.Code != jsonrpc.CodeInvalidParams {
+		t.Fatalf("oversized claim_lifecycle code = %d, want %d", rpcErr.Code, jsonrpc.CodeInvalidParams)
+	}
+}

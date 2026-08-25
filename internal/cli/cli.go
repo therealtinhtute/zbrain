@@ -101,7 +101,7 @@ func (app App) Run(args []string) error {
 	switch args[0] {
 	case "--help", "-h", "help":
 		if len(args) != 1 {
-			return errors.New("usage: zbrain --help")
+			return exitCodeError(2, "usage: zbrain --help")
 		}
 		app.printHelp()
 		return nil
@@ -114,7 +114,7 @@ func (app App) Run(args []string) error {
 			if strings.HasPrefix(args[1], "-") {
 				return unknownFlag(args[1])
 			}
-			return errors.New("version accepts no arguments")
+			return exitCodeError(2, "version accepts no arguments")
 		}
 		_, err := fmt.Fprintln(app.Stdout, Version)
 		return err
@@ -146,7 +146,7 @@ func (app App) Run(args []string) error {
 		if strings.HasPrefix(args[0], "-") {
 			return unknownFlag(args[0])
 		}
-		return fmt.Errorf("unknown command: %s", args[0])
+		return exitCodeError(1, fmt.Sprintf("unknown command: %s", args[0]))
 	}
 }
 
@@ -160,7 +160,7 @@ func (app App) runStatus(args []string) error {
 		return err
 	}
 	if len(rest) > 0 {
-		return errors.New("usage: zbrain status [--workspace <name>]")
+		return exitCodeError(2, "usage: zbrain status [--workspace <name>]")
 	}
 	workspace, err = app.resolveWorkspace(workspace)
 	if err != nil {
@@ -206,7 +206,7 @@ func (app App) runDoctor(args []string) error {
 		return err
 	}
 	if len(rest) > 0 {
-		return errors.New("usage: zbrain doctor [--workspace <name>] [--probe-embedder]")
+		return exitCodeError(2, "usage: zbrain doctor [--workspace <name>] [--probe-embedder]")
 	}
 	workspace, err = app.resolveWorkspace(workspace)
 	if err != nil {
@@ -246,7 +246,7 @@ func (app App) runDoctor(args []string) error {
 
 func (app App) runMCP(args []string) error {
 	if len(args) == 0 {
-		return errors.New("mcp requires a subcommand: serve")
+		return exitCodeError(2, "mcp requires a subcommand: serve")
 	}
 	if helpRequested(args) {
 		app.printMCPHelp()
@@ -256,7 +256,7 @@ func (app App) runMCP(args []string) error {
 		return unknownFlag(args[0])
 	}
 	if args[0] != "serve" {
-		return errors.New("mcp requires subcommand: serve")
+		return exitCodeError(2, "mcp requires subcommand: serve")
 	}
 	if helpRequested(args[1:]) {
 		app.printMCPServeHelp()
@@ -267,7 +267,7 @@ func (app App) runMCP(args []string) error {
 		return err
 	}
 	if len(rest) > 0 {
-		return errors.New("usage: zbrain mcp serve")
+		return exitCodeError(2, "usage: zbrain mcp serve")
 	}
 	return zmcp.Serve(context.Background(), zmcp.Options{
 		Paths:   app.Paths,
@@ -287,7 +287,7 @@ func (app App) runView(args []string) error {
 		return err
 	}
 	if len(rest) > 0 {
-		return errors.New("usage: zbrain view")
+		return exitCodeError(2, "usage: zbrain view")
 	}
 	srv := view.Server{
 		Stdout: app.Stdout,
@@ -299,7 +299,7 @@ func (app App) runView(args []string) error {
 
 func (app App) runApproval(args []string) error {
 	if len(args) == 0 {
-		return errors.New("approval requires a subcommand: show or grant")
+		return exitCodeError(2, "approval requires a subcommand: show or grant")
 	}
 	if helpRequested(args) {
 		app.printApprovalHelp()
@@ -314,7 +314,7 @@ func (app App) runApproval(args []string) error {
 	case "grant":
 		return app.runApprovalGrant(args[1:])
 	default:
-		return fmt.Errorf("unknown approval subcommand: %s", args[0])
+		return exitCodeError(1, fmt.Sprintf("unknown approval subcommand: %s", args[0]))
 	}
 }
 
@@ -328,7 +328,7 @@ func (app App) runApprovalShow(args []string) error {
 		return err
 	}
 	if len(rest) != 1 {
-		return errors.New("usage: zbrain approval show <challenge-id>")
+		return exitCodeError(2, "usage: zbrain approval show <challenge-id>")
 	}
 	challenge, workspace, err := app.findChallenge(rest[0])
 	if err != nil {
@@ -356,7 +356,7 @@ func (app App) runApprovalGrant(args []string) error {
 		return err
 	}
 	if len(rest) != 1 {
-		return errors.New("usage: zbrain approval grant <challenge-id>")
+		return exitCodeError(2, "usage: zbrain approval grant <challenge-id>")
 	}
 	challenge, workspace, err := app.findChallenge(rest[0])
 	if err != nil {
@@ -453,7 +453,7 @@ func (app App) runSetup(args []string) error {
 		return err
 	}
 	if len(rest) > 0 {
-		return fmt.Errorf("setup accepts no arguments")
+		return exitCodeError(2, "setup accepts no arguments")
 	}
 	if err := os.MkdirAll(app.Paths.RuntimeDir, 0o755); err != nil {
 		return err
@@ -489,7 +489,7 @@ func (app App) runAsk(args []string) error {
 		return err
 	}
 	if len(rest) == 0 {
-		return errors.New("usage: zbrain ask [--workspace <name>] [--include <name>]... [--embed] <query>")
+		return exitCodeError(2, "usage: zbrain ask [--workspace <name>] [--include <name>]... [--embed] <query>")
 	}
 	response, err := zruntime.TrustedQuery(app.Paths, zruntime.TrustedQueryOptions{Workspace: workspace, Includes: includes, Query: strings.Join(rest, " "), Limit: 10, Embedding: embed})
 	if err != nil {
@@ -517,7 +517,7 @@ func (app App) runReindex(args []string) error {
 		return err
 	}
 	if len(rest) > 0 {
-		return errors.New("usage: zbrain reindex [--workspace <name>] [--embed]")
+		return exitCodeError(2, "usage: zbrain reindex [--workspace <name>] [--embed]")
 	}
 	workspace, err = app.resolveWorkspace(workspace)
 	if err != nil {
@@ -535,7 +535,7 @@ func (app App) runReindex(args []string) error {
 
 func (app App) runEvidence(args []string) error {
 	if len(args) == 0 {
-		return errors.New("evidence requires subcommand: add")
+		return exitCodeError(2, "evidence requires subcommand: add")
 	}
 	if helpRequested(args) {
 		app.printEvidenceHelp()
@@ -545,7 +545,7 @@ func (app App) runEvidence(args []string) error {
 		return unknownFlag(args[0])
 	}
 	if args[0] != "add" {
-		return errors.New("evidence requires subcommand: add")
+		return exitCodeError(2, "evidence requires subcommand: add")
 	}
 	if helpRequested(args[1:]) {
 		app.printEvidenceAddHelp()
@@ -556,12 +556,12 @@ func (app App) runEvidence(args []string) error {
 		return err
 	}
 	if len(rest) > 0 {
-		return errors.New("usage: zbrain evidence add --file <path> --origin <uri-or-path> [--media-type <type>] [--workspace <name>]")
+		return exitCodeError(2, "usage: zbrain evidence add --file <path> --origin <uri-or-path> [--media-type <type>] [--workspace <name>]")
 	}
 	file := flags.single("file")
 	origin := flags.single("origin")
 	if file == "" || origin == "" {
-		return errors.New("evidence add requires --file and --origin")
+		return exitCodeError(2, "evidence add requires --file and --origin")
 	}
 	workspace, err := app.resolveWorkspace(flags.single("workspace"))
 	if err != nil {
@@ -580,7 +580,7 @@ func (app App) runEvidence(args []string) error {
 
 func (app App) runClaim(args []string) error {
 	if len(args) == 0 {
-		return errors.New("claim requires a subcommand: draft, approve, supersede, or revoke")
+		return exitCodeError(2, "claim requires a subcommand: draft, approve, supersede, or revoke")
 	}
 	if helpRequested(args) {
 		app.printClaimHelp()
@@ -599,7 +599,7 @@ func (app App) runClaim(args []string) error {
 	case "revoke":
 		return app.runClaimRevoke(args[1:])
 	default:
-		return fmt.Errorf("unknown claim subcommand: %s", args[0])
+		return exitCodeError(1, fmt.Sprintf("unknown claim subcommand: %s", args[0]))
 	}
 }
 
@@ -613,7 +613,7 @@ func (app App) runClaimDraft(args []string) error {
 		return err
 	}
 	if len(rest) > 0 {
-		return errors.New("usage: zbrain claim draft --tier <tier> --title <title> --basis <owner|evidence|derived> [--evidence <id>]... [--support <id>]... [--conflicts-with <id>]... [--workspace <name>]")
+		return exitCodeError(2, "usage: zbrain claim draft --tier <tier> --title <title> --basis <owner|evidence|derived> [--evidence <id>]... [--support <id>]... [--conflicts-with <id>]... [--workspace <name>]")
 	}
 	workspace, err := app.resolveWorkspace(flags.single("workspace"))
 	if err != nil {
@@ -665,7 +665,7 @@ func (app App) runClaimApprove(args []string) error {
 		return err
 	}
 	if len(rest) != 1 {
-		return errors.New("usage: zbrain claim approve <id> [--workspace <name>]")
+		return exitCodeError(2, "usage: zbrain claim approve <id> [--workspace <name>]")
 	}
 	workspace, err = app.resolveWorkspace(workspace)
 	if err != nil {
@@ -691,7 +691,7 @@ func (app App) runClaimSupersede(args []string) error {
 		return err
 	}
 	if len(rest) != 1 {
-		return errors.New("usage: zbrain claim supersede <id> --tier <tier> --title <title> --basis <owner|evidence|derived> [--evidence <id>]... [--support <id>]... [--conflicts-with <id>]... [--workspace <name>]")
+		return exitCodeError(2, "usage: zbrain claim supersede <id> --tier <tier> --title <title> --basis <owner|evidence|derived> [--evidence <id>]... [--support <id>]... [--conflicts-with <id>]... [--workspace <name>]")
 	}
 	workspace, err := app.resolveWorkspace(flags.single("workspace"))
 	if err != nil {
@@ -730,7 +730,7 @@ func (app App) runClaimRevoke(args []string) error {
 		return err
 	}
 	if len(rest) != 1 || flags.single("reason") == "" {
-		return errors.New("usage: zbrain claim revoke <id> --reason <text> [--workspace <name>]")
+		return exitCodeError(2, "usage: zbrain claim revoke <id> --reason <text> [--workspace <name>]")
 	}
 	workspace, err := app.resolveWorkspace(flags.single("workspace"))
 	if err != nil {
@@ -748,7 +748,7 @@ func (app App) runClaimRevoke(args []string) error {
 
 func (app App) runMigrate(args []string) error {
 	if len(args) == 0 {
-		return errors.New("migrate requires subcommand: okf")
+		return exitCodeError(2, "migrate requires subcommand: okf")
 	}
 	if helpRequested(args) {
 		app.printMigrateHelp()
@@ -758,7 +758,7 @@ func (app App) runMigrate(args []string) error {
 		return unknownFlag(args[0])
 	}
 	if args[0] != "okf" {
-		return errors.New("migrate requires subcommand: okf")
+		return exitCodeError(2, "migrate requires subcommand: okf")
 	}
 	if helpRequested(args[1:]) {
 		app.printMigrateOKFHelp()
@@ -769,7 +769,7 @@ func (app App) runMigrate(args []string) error {
 		return err
 	}
 	if len(rest) > 0 {
-		return errors.New("usage: zbrain migrate okf [--workspace <name>]")
+		return exitCodeError(2, "usage: zbrain migrate okf [--workspace <name>]")
 	}
 	workspace, err = app.resolveWorkspace(workspace)
 	if err != nil {
@@ -807,7 +807,7 @@ func (app App) writeClaimMutation(workspace string, claim zruntime.Claim) error 
 
 func (app App) runWorkspace(args []string) error {
 	if len(args) == 0 {
-		return errors.New("workspace requires a subcommand: create or current")
+		return exitCodeError(2, "workspace requires a subcommand: create or current")
 	}
 	if helpRequested(args) {
 		app.printWorkspaceHelp()
@@ -827,7 +827,7 @@ func (app App) runWorkspace(args []string) error {
 			return err
 		}
 		if len(rest) != 1 {
-			return errors.New("usage: zbrain workspace create <name>")
+			return exitCodeError(2, "usage: zbrain workspace create <name>")
 		}
 		if err := zruntime.CreateWorkspace(app.Paths, rest[0], app.Now()); err != nil {
 			return err
@@ -844,7 +844,7 @@ func (app App) runWorkspace(args []string) error {
 			return err
 		}
 		if len(rest) > 0 {
-			return errors.New("workspace current accepts no arguments")
+			return exitCodeError(2, "workspace current accepts no arguments")
 		}
 		current, err := zruntime.ResolveCurrentWorkspace(app.Paths)
 		if err != nil {
@@ -857,7 +857,7 @@ func (app App) runWorkspace(args []string) error {
 		_, err = fmt.Fprintf(app.Stdout, "%s\n", encoded)
 		return err
 	default:
-		return fmt.Errorf("unknown workspace subcommand: %s", args[0])
+		return exitCodeError(1, fmt.Sprintf("unknown workspace subcommand: %s", args[0]))
 	}
 }
 
@@ -905,7 +905,7 @@ func parseFlags(args []string, allowed map[string]struct{}) (parsedFlags, []stri
 				return flags, rest, unknownFlag(arg)
 			}
 			if i+1 >= len(args) || strings.HasPrefix(args[i+1], "--") {
-				return flags, rest, fmt.Errorf("flag %s requires a value", arg)
+				return flags, rest, exitCodeError(2, fmt.Sprintf("flag %s requires a value", arg))
 			}
 			flags.values[name] = append(flags.values[name], args[i+1])
 			i++
@@ -930,7 +930,7 @@ func parseWorkspaceIncludeFlags(args []string) (string, []string, []string, erro
 }
 
 func unknownFlag(arg string) error {
-	return fmt.Errorf("unknown flag: %s", arg)
+	return exitCodeError(2, fmt.Sprintf("unknown flag: %s", arg))
 }
 
 func helpRequested(args []string) bool {

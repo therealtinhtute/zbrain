@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/jsonrpc"
@@ -13,6 +14,59 @@ import (
 
 	zruntime "github.com/therealtinhtute/zbrain/internal/runtime"
 )
+
+const mcpMaxInputBytes = 1 << 20 // 1 MiB
+
+var mcpLogMu sync.Mutex
+
+func validateBounds(in any) error {
+	data, err := json.Marshal(in)
+	if err != nil {
+		return &jsonrpc.Error{Code: jsonrpc.CodeInvalidParams, Message: "invalid params"}
+	}
+	if len(data) > mcpMaxInputBytes {
+		return &jsonrpc.Error{Code: jsonrpc.CodeInvalidParams, Message: "input exceeds 1MB limit"}
+	}
+	return nil
+}
+
+func runMCPTool[T any](ctx context.Context, opts Options, tool string, in T, workspace string, fn func(context.Context) (*mcp.CallToolResult, any, error)) (*mcp.CallToolResult, any, error) {
+	start := time.Now()
+	ws := workspace
+	if ws == "" {
+		ws = "current"
+	}
+	defer func() {
+		if opts.Stderr != nil {
+			mcpLogMu.Lock()
+			fmt.Fprintf(opts.Stderr, "mcp tool=%s workspace=%s duration=%s\n", tool, ws, time.Since(start))
+			mcpLogMu.Unlock()
+		}
+	}()
+	if err := validateBounds(in); err != nil {
+		return nil, nil, err
+	}
+	// Use context timeout but call handler synchronously to avoid
+	// goroutine leaks and shared-buffer races under -race with concurrent
+	// tool calls (e.g., TestClaimLifecycleConcurrentApply).
+	tctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	// If parent context already cancelled, fail fast without invoking handler.
+	select {
+	case <-tctx.Done():
+		if tctx.Err() == context.DeadlineExceeded {
+			return nil, nil, &jsonrpc.Error{Code: jsonrpc.CodeInternalError, Message: "tool timeout"}
+		}
+		return nil, nil, tctx.Err()
+	default:
+	}
+	res, out, err := fn(tctx)
+	// If handler exceeded deadline, surface timeout.
+	if tctx.Err() == context.DeadlineExceeded {
+		return nil, nil, &jsonrpc.Error{Code: jsonrpc.CodeInternalError, Message: "tool timeout"}
+	}
+	return res, out, err
+}
 
 type lifecycleIn struct {
 	Operation               string    `json:"operation" jsonschema:"prepare or apply"`
@@ -67,17 +121,19 @@ func registerTools(server *mcp.Server, opts Options) error {
 		Name:        "workspace_current",
 		Description: "Resolve the current workspace boundary.",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, in currentIn) (*mcp.CallToolResult, any, error) {
-		current, err := zruntime.ResolveCurrentWorkspace(opts.Paths)
-		if err != nil {
-			return nil, nil, err
-		}
-		out := struct {
-			SchemaVersion       int      `json:"schema_version"`
-			ProjectRoot         string   `json:"project_root"`
-			Workspace           string   `json:"workspace"`
-			SecondaryWorkspaces []string `json:"secondary_workspaces"`
-		}{1, current.ProjectRoot, current.Workspace, current.SecondaryWorkspaces}
-		return jsonResult(out)
+		return runMCPTool(ctx, opts, "workspace_current", in, "", func(tctx context.Context) (*mcp.CallToolResult, any, error) {
+			current, err := zruntime.ResolveCurrentWorkspace(opts.Paths)
+			if err != nil {
+				return nil, nil, err
+			}
+			out := struct {
+				SchemaVersion       int      `json:"schema_version"`
+				ProjectRoot         string   `json:"project_root"`
+				Workspace           string   `json:"workspace"`
+				SecondaryWorkspaces []string `json:"secondary_workspaces"`
+			}{1, current.ProjectRoot, current.Workspace, current.SecondaryWorkspaces}
+			return jsonResult(out)
+		})
 	})
 
 	type askIn struct {
@@ -91,24 +147,26 @@ func registerTools(server *mcp.Server, opts Options) error {
 		Name:        "memory_ask",
 		Description: "Query trusted memory and return trusted context JSON without calling an LLM.",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, in askIn) (*mcp.CallToolResult, any, error) {
-		if strings.TrimSpace(in.Query) == "" {
-			return nil, nil, fmt.Errorf("query is required")
-		}
-		workspace, err := resolveWorkspace(opts, in.Workspace)
-		if err != nil {
-			return nil, nil, err
-		}
-		response, err := zruntime.TrustedQuery(opts.Paths, zruntime.TrustedQueryOptions{
-			Workspace: workspace,
-			Includes:  in.Include,
-			Query:     in.Query,
-			Limit:     10,
-			Embedding: in.Embedding,
+		return runMCPTool(ctx, opts, "memory_ask", in, in.Workspace, func(tctx context.Context) (*mcp.CallToolResult, any, error) {
+			if strings.TrimSpace(in.Query) == "" {
+				return nil, nil, fmt.Errorf("query is required")
+			}
+			workspace, err := resolveWorkspace(opts, in.Workspace)
+			if err != nil {
+				return nil, nil, err
+			}
+			response, err := zruntime.TrustedQuery(opts.Paths, zruntime.TrustedQueryOptions{
+				Workspace: workspace,
+				Includes:  in.Include,
+				Query:     in.Query,
+				Limit:     10,
+				Embedding: in.Embedding,
+			})
+			if err != nil {
+				return nil, nil, err
+			}
+			return jsonResult(response)
 		})
-		if err != nil {
-			return nil, nil, err
-		}
-		return jsonResult(response)
 	})
 
 	type statusIn struct {
@@ -119,29 +177,31 @@ func registerTools(server *mcp.Server, opts Options) error {
 		Name:        "memory_status",
 		Description: "Report machine-readable trust, claim, and index health for a workspace.",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, in statusIn) (*mcp.CallToolResult, any, error) {
-		workspace, err := resolveWorkspace(opts, in.Workspace)
-		if err != nil {
-			return nil, nil, err
-		}
-		summary := zruntime.IndexSummary{Workspace: workspace}
-		if scan, scanErr := (zruntime.ClaimStore{Paths: opts.Paths, Now: opts.Now}).ScanWorkspaceForTrust(workspace); scanErr == nil {
-			summary.Approved = len(scan.Claims)
-			summary.Invalid = len(scan.Invalid)
-			summary.InvalidCount = len(scan.Invalid)
-			summary.InvalidClaims = scan.Invalid
-		}
-		summary.Embedding = (zruntime.EmbeddingStore{Paths: opts.Paths}).Summary(workspace, summary.Approved)
-		if err := (zruntime.IndexStore{Paths: opts.Paths}).CheckFresh(workspace); err != nil {
-			summary.RebuildState = zruntime.RebuildStatusRejected
-			if summary.Invalid == 0 {
-				summary.InvalidClaims = []zruntime.InvalidClaim{{Path: "", Error: err.Error()}}
+		return runMCPTool(ctx, opts, "memory_status", in, in.Workspace, func(tctx context.Context) (*mcp.CallToolResult, any, error) {
+			workspace, err := resolveWorkspace(opts, in.Workspace)
+			if err != nil {
+				return nil, nil, err
 			}
-		}
-		out := struct {
-			SchemaVersion int `json:"schema_version"`
-			zruntime.IndexSummary
-		}{2, summary}
-		return jsonResult(out)
+			summary := zruntime.IndexSummary{Workspace: workspace}
+			if scan, scanErr := (zruntime.ClaimStore{Paths: opts.Paths, Now: opts.Now}).ScanWorkspaceForTrust(workspace); scanErr == nil {
+				summary.Approved = len(scan.Claims)
+				summary.Invalid = len(scan.Invalid)
+				summary.InvalidCount = len(scan.Invalid)
+				summary.InvalidClaims = scan.Invalid
+			}
+			summary.Embedding = (zruntime.EmbeddingStore{Paths: opts.Paths}).Summary(workspace, summary.Approved)
+			if err := (zruntime.IndexStore{Paths: opts.Paths}).CheckFresh(workspace); err != nil {
+				summary.RebuildState = zruntime.RebuildStatusRejected
+				if summary.Invalid == 0 {
+					summary.InvalidClaims = []zruntime.InvalidClaim{{Path: "", Error: err.Error()}}
+				}
+			}
+			out := struct {
+				SchemaVersion int `json:"schema_version"`
+				zruntime.IndexSummary
+			}{2, summary}
+			return jsonResult(out)
+		})
 	})
 
 	type reindexIn struct {
@@ -153,19 +213,21 @@ func registerTools(server *mcp.Server, opts Options) error {
 		Name:        "memory_reindex",
 		Description: "Rebuild the disposable derived index for a workspace.",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, in reindexIn) (*mcp.CallToolResult, any, error) {
-		workspace, err := resolveWorkspace(opts, in.Workspace)
-		if err != nil {
-			return nil, nil, err
-		}
-		summary, err := (zruntime.IndexStore{Paths: opts.Paths}).RebuildWithOptions(workspace, zruntime.RebuildOptions{Embedding: in.Embedding})
-		if err != nil {
-			return nil, nil, err
-		}
-		out := struct {
-			SchemaVersion int `json:"schema_version"`
-			zruntime.IndexSummary
-		}{1, summary}
-		return jsonResult(out)
+		return runMCPTool(ctx, opts, "memory_reindex", in, in.Workspace, func(tctx context.Context) (*mcp.CallToolResult, any, error) {
+			workspace, err := resolveWorkspace(opts, in.Workspace)
+			if err != nil {
+				return nil, nil, err
+			}
+			summary, err := (zruntime.IndexStore{Paths: opts.Paths}).RebuildWithOptions(workspace, zruntime.RebuildOptions{Embedding: in.Embedding})
+			if err != nil {
+				return nil, nil, err
+			}
+			out := struct {
+				SchemaVersion int `json:"schema_version"`
+				zruntime.IndexSummary
+			}{1, summary}
+			return jsonResult(out)
+		})
 	})
 
 	type evidenceCaptureIn struct {
@@ -179,26 +241,28 @@ func registerTools(server *mcp.Server, opts Options) error {
 		Name:        "evidence_capture",
 		Description: "Snapshot a local source file into an immutable evidence record.",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, in evidenceCaptureIn) (*mcp.CallToolResult, any, error) {
-		if strings.TrimSpace(in.File) == "" {
-			return nil, nil, fmt.Errorf("file is required")
-		}
-		if strings.TrimSpace(in.Origin) == "" {
-			return nil, nil, fmt.Errorf("origin is required")
-		}
-		workspace, err := resolveWorkspace(opts, in.Workspace)
-		if err != nil {
-			return nil, nil, err
-		}
-		evidence, err := (zruntime.EvidenceStore{Paths: opts.Paths, Now: opts.Now}).AddFile(workspace, in.File, in.Origin, in.MediaType)
-		if err != nil {
-			return nil, nil, err
-		}
-		out := struct {
-			SchemaVersion int    `json:"schema_version"`
-			Workspace     string `json:"workspace"`
-			zruntime.Evidence
-		}{1, workspace, evidence}
-		return jsonResult(out)
+		return runMCPTool(ctx, opts, "evidence_capture", in, in.Workspace, func(tctx context.Context) (*mcp.CallToolResult, any, error) {
+			if strings.TrimSpace(in.File) == "" {
+				return nil, nil, fmt.Errorf("file is required")
+			}
+			if strings.TrimSpace(in.Origin) == "" {
+				return nil, nil, fmt.Errorf("origin is required")
+			}
+			workspace, err := resolveWorkspace(opts, in.Workspace)
+			if err != nil {
+				return nil, nil, err
+			}
+			evidence, err := (zruntime.EvidenceStore{Paths: opts.Paths, Now: opts.Now}).AddFile(workspace, in.File, in.Origin, in.MediaType)
+			if err != nil {
+				return nil, nil, err
+			}
+			out := struct {
+				SchemaVersion int    `json:"schema_version"`
+				Workspace     string `json:"workspace"`
+				zruntime.Evidence
+			}{1, workspace, evidence}
+			return jsonResult(out)
+		})
 	})
 
 	type claimDraftIn struct {
@@ -216,57 +280,61 @@ func registerTools(server *mcp.Server, opts Options) error {
 		Name:        "claim_draft",
 		Description: "Create a draft claim as a promotion candidate (drafts are never trusted answer material).",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, in claimDraftIn) (*mcp.CallToolResult, any, error) {
-		workspace, err := resolveWorkspace(opts, in.Workspace)
-		if err != nil {
-			return nil, nil, err
-		}
-		id, err := zruntime.NewClaimID()
-		if err != nil {
-			return nil, nil, err
-		}
-		claim := zruntime.Claim{
-			Type:               zruntime.OKFClaimType,
-			ID:                 id,
-			Tier:               in.Tier,
-			Status:             zruntime.ClaimStatusDraft,
-			Title:              in.Title,
-			Basis:              zruntime.ClaimBasis(in.Basis),
-			CreatedAt:          opts.Now().UTC().Format(time.RFC3339),
-			CreatedBy:          "owner:mcp",
-			EvidenceIDs:        in.Evidence,
-			SupportingClaimIDs: in.Support,
-			ConflictsWith:      in.ConflictsWith,
-			Body:               in.Body,
-		}
-		if err := (zruntime.IndexStore{Paths: opts.Paths}).MarkDirty(workspace); err != nil {
-			return nil, nil, err
-		}
-		created, err := (zruntime.ClaimStore{Paths: opts.Paths, Now: opts.Now}).WriteDraft(workspace, claim)
-		if err != nil {
-			return nil, nil, err
-		}
-		out := struct {
-			SchemaVersion int                  `json:"schema_version"`
-			Workspace     string               `json:"workspace"`
-			ID            string               `json:"id"`
-			Status        zruntime.ClaimStatus `json:"status"`
-			Path          string               `json:"path"`
-		}{1, workspace, created.ID, created.Status, created.Path}
-		return jsonResult(out)
+		return runMCPTool(ctx, opts, "claim_draft", in, in.Workspace, func(tctx context.Context) (*mcp.CallToolResult, any, error) {
+			workspace, err := resolveWorkspace(opts, in.Workspace)
+			if err != nil {
+				return nil, nil, err
+			}
+			id, err := zruntime.NewClaimID()
+			if err != nil {
+				return nil, nil, err
+			}
+			claim := zruntime.Claim{
+				Type:               zruntime.OKFClaimType,
+				ID:                 id,
+				Tier:               in.Tier,
+				Status:             zruntime.ClaimStatusDraft,
+				Title:              in.Title,
+				Basis:              zruntime.ClaimBasis(in.Basis),
+				CreatedAt:          opts.Now().UTC().Format(time.RFC3339),
+				CreatedBy:          "owner:mcp",
+				EvidenceIDs:        in.Evidence,
+				SupportingClaimIDs: in.Support,
+				ConflictsWith:      in.ConflictsWith,
+				Body:               in.Body,
+			}
+			if err := (zruntime.IndexStore{Paths: opts.Paths}).MarkDirty(workspace); err != nil {
+				return nil, nil, err
+			}
+			created, err := (zruntime.ClaimStore{Paths: opts.Paths, Now: opts.Now}).WriteDraft(workspace, claim)
+			if err != nil {
+				return nil, nil, err
+			}
+			out := struct {
+				SchemaVersion int                  `json:"schema_version"`
+				Workspace     string               `json:"workspace"`
+				ID            string               `json:"id"`
+				Status        zruntime.ClaimStatus `json:"status"`
+				Path          string               `json:"path"`
+			}{1, workspace, created.ID, created.Status, created.Path}
+			return jsonResult(out)
+		})
 	})
 
 	mcp.AddTool(server, &mcp.Tool{
 		Name:        "claim_lifecycle",
 		Description: "Prepare an owner-pinned lifecycle challenge or apply one valid one-time token; no approval UI or HTTP mutation endpoint is exposed.",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, in lifecycleIn) (*mcp.CallToolResult, any, error) {
-		switch in.Operation {
-		case "prepare":
-			return prepareLifecycle(opts, in)
-		case "apply":
-			return applyLifecycle(opts, req, in)
-		default:
-			return nil, nil, invalidLifecycleParams("operation must be prepare or apply")
-		}
+		return runMCPTool(ctx, opts, "claim_lifecycle", in, in.Workspace, func(tctx context.Context) (*mcp.CallToolResult, any, error) {
+			switch in.Operation {
+			case "prepare":
+				return prepareLifecycle(opts, in)
+			case "apply":
+				return applyLifecycle(opts, req, in)
+			default:
+				return nil, nil, invalidLifecycleParams("operation must be prepare or apply")
+			}
+		})
 	})
 
 	return nil

@@ -175,13 +175,77 @@ func TestInterleaveClaimsDeduplicatesByID(t *testing.T) {
 		seen[claim.ID] = true
 		ids = append(ids, claim.ID)
 	}
+	// RRF k=60: b appears in both lists (rank2 lex + rank1 vec) => highest rrf,
+	// a rank1 lex-only => 1/61, c rank2 vec-only => 1/62. Order must be b,a,c.
 	want := []string{
-		"clm_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
 		"clm_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+		"clm_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
 		"clm_cccccccccccccccccccccccccccccccc",
 	}
 	if strings.Join(ids, ",") != strings.Join(want, ",") {
 		t.Fatalf("merged IDs = %v, want %v", ids, want)
+	}
+	// Scores must be ascending to preserve sortQueryClaims order.
+	for i := 1; i < len(merged); i++ {
+		if merged[i].Score <= merged[i-1].Score {
+			t.Fatalf("scores not ascending: %v", merged)
+		}
+	}
+	if merged[0].Score != 0 || merged[1].Score != 1 || merged[2].Score != 2 {
+		t.Fatalf("scores = %v, want [0 1 2]", []float64{merged[0].Score, merged[1].Score, merged[2].Score})
+	}
+}
+
+func TestInterleaveRRF(t *testing.T) {
+	// lex=[a,b] vec=[b,c] => b appears in both => highest RRF, then a (rank1 lex),
+	// then c (rank2 vec).
+	lexical := []IndexedClaim{
+		{ID: "clm_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", Score: 9},
+		{ID: "clm_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", Score: 9},
+	}
+	vector := []IndexedClaim{
+		{ID: "clm_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", Score: 9},
+		{ID: "clm_cccccccccccccccccccccccccccccccc", Score: 9},
+	}
+	merged := interleaveClaims(lexical, vector, 10)
+	if len(merged) != 3 {
+		t.Fatalf("merged len = %d, want 3", len(merged))
+	}
+	ids := []string{merged[0].ID, merged[1].ID, merged[2].ID}
+	want := []string{
+		"clm_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+		"clm_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+		"clm_cccccccccccccccccccccccccccccccc",
+	}
+	if strings.Join(ids, ",") != strings.Join(want, ",") {
+		t.Fatalf("RRF order = %v, want %v (b highest rrf, then a rank1 lex, then c rank2 vec)", ids, want)
+	}
+	// Verify b has highest RRF by checking it is first and scores preserve RRF order.
+	if merged[0].ID != "clm_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb" {
+		t.Fatalf("first claim = %q, want b (highest RRF due to presence in both lists)", merged[0].ID)
+	}
+	// Scores must be 0,1,2 ascending so sortQueryClaims preserves RRF order.
+	for i, c := range merged {
+		if c.Score != float64(i) {
+			t.Fatalf("merged[%d].Score = %v, want %d", i, c.Score, i)
+		}
+	}
+	// Verify sortQueryClaims would keep RRF order (ascending Score).
+	claims := []QueryClaim{
+		{ID: merged[0].ID, Score: merged[0].Score},
+		{ID: merged[1].ID, Score: merged[1].Score},
+		{ID: merged[2].ID, Score: merged[2].Score},
+	}
+	// Shuffle and sort to ensure stability.
+	shuffled := []QueryClaim{claims[2], claims[0], claims[1]}
+	sortQueryClaims(shuffled)
+	if shuffled[0].ID != want[0] || shuffled[1].ID != want[1] || shuffled[2].ID != want[2] {
+		t.Fatalf("sortQueryClaims order = %v, want %v", []string{shuffled[0].ID, shuffled[1].ID, shuffled[2].ID}, want)
+	}
+	// Limit truncation: top 2 should be b and a.
+	truncated := interleaveClaims(lexical, vector, 2)
+	if len(truncated) != 2 || truncated[0].ID != want[0] || truncated[1].ID != want[1] {
+		t.Fatalf("truncated RRF = %v, want %v", []string{truncated[0].ID, truncated[1].ID}, want[:2])
 	}
 }
 

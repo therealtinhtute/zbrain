@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"os"
 	"strings"
+	"sync"
 	"time"
 
 	bundled "github.com/therealtinhtute/zbrain/assets/view"
@@ -28,6 +29,7 @@ type Server struct {
 	Port   int
 	URL    string
 
+	mu       sync.Mutex
 	listener net.Listener
 }
 
@@ -38,19 +40,24 @@ func (s *Server) Listen() error {
 	if err != nil {
 		return err
 	}
+	s.mu.Lock()
 	s.listener = listener
 	s.Port = listener.Addr().(*net.TCPAddr).Port
 	s.URL = fmt.Sprintf("http://127.0.0.1:%d", s.Port)
+	s.mu.Unlock()
 	return nil
 }
 
 // Serve serves the embedded viewer on the bound listener and blocks until the
 // server stops.
 func (s *Server) Serve() error {
-	if s.listener == nil {
+	s.mu.Lock()
+	listener := s.listener
+	s.mu.Unlock()
+	if listener == nil {
 		return errors.New("view: Serve called before Listen")
 	}
-	return http.Serve(s.listener, s.handler())
+	return http.Serve(listener, s.handler())
 }
 
 // Run binds loopback, prints the bound URL to Stdout, and blocks until the
@@ -59,18 +66,24 @@ func (s *Server) Run() error {
 	if err := s.Listen(); err != nil {
 		return err
 	}
+	s.mu.Lock()
+	url := s.URL
+	s.mu.Unlock()
 	stdout := s.Stdout
 	if stdout == nil {
 		stdout = os.Stdout
 	}
-	fmt.Fprintf(stdout, "viewer: %s\n", s.URL)
+	fmt.Fprintf(stdout, "viewer: %s\n", url)
 	return s.Serve()
 }
 
 // Close stops the server.
 func (s *Server) Close() error {
-	if s.listener != nil {
-		return s.listener.Close()
+	s.mu.Lock()
+	listener := s.listener
+	s.mu.Unlock()
+	if listener != nil {
+		return listener.Close()
 	}
 	return nil
 }

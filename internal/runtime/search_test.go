@@ -91,3 +91,60 @@ func TestSearchWorkspaceSearchesOnlyWiki(t *testing.T) {
 		t.Fatalf("len(results) = %d, want 0", len(results))
 	}
 }
+
+func TestFTS5Query(t *testing.T) {
+	cases := []struct {
+		name  string
+		query string
+		want  string
+	}{
+		{name: "and default", query: "hello world", want: `"hello" "world"`},
+		{name: "phrase keep", query: `"foo bar"`, want: `"foo bar"`},
+		{name: "wildcard keep", query: "foo*", want: "foo*"},
+		{name: "wildcard case lower", query: "Foo*", want: "foo*"},
+		{name: "phrase not split", query: `"exact phrase"`, want: `"exact phrase"`},
+		{name: "mixed phrase wildcard", query: `hello "exact phrase" foo*`, want: `"hello" "exact phrase" foo*`},
+		{name: "near reject upper", query: "foo NEAR bar", want: ""},
+		{name: "near reject lower", query: "foo near bar", want: ""},
+		{name: "near inside phrase allowed", query: `"foo NEAR bar"`, want: `"foo near bar"`},
+		{name: "dedup", query: "hello hello", want: `"hello"`},
+		{name: "single token", query: "hello", want: `"hello"`},
+		{name: "empty", query: "   ", want: ""},
+		{name: "prefix with hyphen wildcard", query: "foo-bar*", want: `"foo" bar*`},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := fts5Query(tc.query)
+			if got != tc.want {
+				t.Fatalf("fts5Query(%q) = %q, want %q", tc.query, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestFTS5QueryRejectsNEARInSearch(t *testing.T) {
+	tmp := t.TempDir()
+	paths, err := ResolvePaths(Options{CWD: tmp, HomeDir: tmp, RuntimeDir: filepath.Join(tmp, ".zbrain")})
+	if err != nil {
+		t.Fatalf("ResolvePaths() error = %v", err)
+	}
+	if err := CreateWorkspace(paths, "research", time.Now()); err != nil {
+		t.Fatalf("CreateWorkspace() error = %v", err)
+	}
+	idx := IndexStore{Paths: paths}
+	if _, err := idx.Rebuild("research"); err != nil {
+		t.Fatalf("Rebuild error = %v", err)
+	}
+	// NEAR should be rejected as query is required.
+	if _, err := idx.Search("research", SearchOptions{Query: "foo NEAR bar", Statuses: []ClaimStatus{ClaimStatusApproved}, Limit: 10}); err == nil {
+		t.Fatalf("Search NEAR error = nil, want rejection")
+	}
+	// Phrase should succeed (no error, even if no results)
+	if _, err := idx.Search("research", SearchOptions{Query: `"hello world"`, Statuses: []ClaimStatus{ClaimStatusApproved}, Limit: 10}); err != nil {
+		t.Fatalf("Search phrase error = %v", err)
+	}
+	// Wildcard should succeed.
+	if _, err := idx.Search("research", SearchOptions{Query: "hell*", Statuses: []ClaimStatus{ClaimStatusApproved}, Limit: 10}); err != nil {
+		t.Fatalf("Search wildcard error = %v", err)
+	}
+}

@@ -236,38 +236,87 @@ func mergeVectorResults(paths Paths, idx IndexStore, workspace string, approved 
 	return interleaveClaims(approved, ordered, limit), nil
 }
 
-// interleaveClaims merges two rank-ordered claim lists by alternating rank,
-// deduplicating by claim ID, and truncating to limit. Scores are reassigned to
-// combined rank positions so a later ascending score sort preserves the
-// interleaved order.
+// interleaveClaims merges two rank-ordered claim lists using Reciprocal Rank
+// Fusion (RRF) with k=60, deduplicating by claim ID and truncating to limit.
+// Each unique claim receives rrf = 1/(60+rank_lex) + 1/(60+rank_vec) where
+// ranks are 1-indexed positions in the respective lists (missing ranks
+// contribute 0). Higher rrf ranks first; ties are broken by smaller lexical
+// rank then vector rank then ID for determinism. Scores are reassigned to
+// combined rank positions (0,1,2,…) so a later ascending score sort preserves
+// the RRF order.
 func interleaveClaims(lexical, vector []IndexedClaim, limit int) []IndexedClaim {
-	merged := make([]IndexedClaim, 0, limit)
-	seen := map[string]bool{}
-	longest := len(lexical)
-	if len(vector) > longest {
-		longest = len(vector)
-	}
-	for i := 0; i < longest && len(merged) < limit; i++ {
-		if i < len(lexical) {
-			claim := lexical[i]
-			if !seen[claim.ID] {
-				seen[claim.ID] = true
-				merged = append(merged, claim)
-			}
-		}
-		if len(merged) >= limit {
-			break
-		}
-		if i < len(vector) {
-			claim := vector[i]
-			if !seen[claim.ID] {
-				seen[claim.ID] = true
-				merged = append(merged, claim)
-			}
+	const rrfK = 60
+	lexRank := make(map[string]int, len(lexical))
+	for i, c := range lexical {
+		if _, ok := lexRank[c.ID]; !ok {
+			lexRank[c.ID] = i + 1
 		}
 	}
-	for i := range merged {
-		merged[i].Score = float64(i)
+	vecRank := make(map[string]int, len(vector))
+	for i, c := range vector {
+		if _, ok := vecRank[c.ID]; !ok {
+			vecRank[c.ID] = i + 1
+		}
+	}
+	claimsByID := make(map[string]IndexedClaim, len(lexRank)+len(vecRank))
+	for _, c := range lexical {
+		if _, ok := claimsByID[c.ID]; !ok {
+			claimsByID[c.ID] = c
+		}
+	}
+	for _, c := range vector {
+		if _, ok := claimsByID[c.ID]; !ok {
+			claimsByID[c.ID] = c
+		}
+	}
+	type scored struct {
+		claim IndexedClaim
+		rrf   float64
+	}
+	entries := make([]scored, 0, len(claimsByID))
+	for id, claim := range claimsByID {
+		var rrf float64
+		if r, ok := lexRank[id]; ok {
+			rrf += 1.0 / float64(rrfK+r)
+		}
+		if r, ok := vecRank[id]; ok {
+			rrf += 1.0 / float64(rrfK+r)
+		}
+		entries = append(entries, scored{claim: claim, rrf: rrf})
+	}
+	sort.Slice(entries, func(i, j int) bool {
+		if entries[i].rrf != entries[j].rrf {
+			return entries[i].rrf > entries[j].rrf
+		}
+		// Deterministic tie-break: smaller lexical rank first, then vector rank, then ID.
+		li, loki := lexRank[entries[i].claim.ID]
+		lj, lokj := lexRank[entries[j].claim.ID]
+		if loki && lokj {
+			if li != lj {
+				return li < lj
+			}
+		} else if loki != lokj {
+			return loki
+		}
+		vi, voki := vecRank[entries[i].claim.ID]
+		vj, vokj := vecRank[entries[j].claim.ID]
+		if voki && vokj {
+			if vi != vj {
+				return vi < vj
+			}
+		} else if voki != vokj {
+			return voki
+		}
+		return entries[i].claim.ID < entries[j].claim.ID
+	})
+	if len(entries) > limit {
+		entries = entries[:limit]
+	}
+	merged := make([]IndexedClaim, 0, len(entries))
+	for i, e := range entries {
+		c := e.claim
+		c.Score = float64(i)
+		merged = append(merged, c)
 	}
 	return merged
 }

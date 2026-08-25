@@ -1,0 +1,108 @@
+=== zbrain --help ===
+zbrain - Go-native OKF trusted memory CLI
+
+Usage:
+  zbrain <command> [arguments]
+  zbrain <command> --help
+
+Commands:
+  setup
+  workspace create <name>
+  workspace current
+  evidence add --file <path> --origin <uri-or-path> [--media-type <type>] [--workspace <name>]
+  claim draft --tier <tier> --title <title> --basis <owner|evidence|derived> [--evidence <id>]... [--support <id>]... [--conflicts-with <id>]... [--workspace <name>]
+  claim approve <id> [--workspace <name>]
+  claim supersede <id> --tier <tier> --title <title> --basis <owner|evidence|derived> [--evidence <id>]... [--support <id>]... [--conflicts-with <id>]... [--workspace <name>]
+  claim revoke <id> --reason <text> [--workspace <name>]
+  migrate okf [--workspace <name>]
+  reindex [--workspace <name>] [--embed]
+  ask [--workspace <name>] [--include <name>]... [--embed] <query>
+  status [--workspace <name>]
+  doctor [--workspace <name>] [--probe-embedder]
+  mcp serve
+  view
+  approval show <challenge-id>
+  approval grant <challenge-id>
+  version
+
+Use `zbrain <command> --help` for command-specific help.
+
+=== zbrain setup --help ===
+Usage: zbrain setup
+
+Prepare the runtime directory and extract embedded assets.
+
+=== zbrain workspace --help ===
+Usage:
+  zbrain workspace create <name>
+  zbrain workspace current
+
+Manage the active workspace.
+
+=== zbrain evidence --help ===
+Usage: zbrain evidence add --file <path> --origin <uri-or-path> [--media-type <type>] [--workspace <name>]
+
+Options:
+  --file <path>             Local source file to snapshot
+  --origin <uri-or-path>    Origin recorded in evidence metadata
+  --media-type <type>      Optional media type
+  --workspace <name>       Target workspace; defaults to the current workspace
+
+=== zbrain claim --help ===
+Usage:
+  zbrain claim draft --tier <tier> --title <title> --basis <owner|evidence|derived> [--evidence <id>]... [--support <id>]... [--conflicts-with <id>]... [--workspace <name>]
+  zbrain claim approve <id> [--workspace <name>]
+  zbrain claim supersede <id> --tier <tier> --title <title> --basis <owner|evidence|derived> [--evidence <id>]... [--support <id>]... [--conflicts-with <id>]... [--workspace <name>]
+  zbrain claim revoke <id> --reason <text> [--workspace <name>]
+
+Manage the four-state OKF claim lifecycle.
+
+=== zbrain migrate --help ===
+Usage: zbrain migrate okf [--workspace <name>]
+
+Convert legacy zbrain claim files to OKF concepts.
+
+=== zbrain reindex --help ===
+Usage: zbrain reindex [--workspace <name>] [--embed]
+
+Rebuild the disposable workspace index.
+
+Options:
+  --embed        Also compute and store loopback embedding vectors
+
+=== zbrain ask --help ===
+Usage: zbrain ask [--workspace <name>] [--include <name>]... [--embed] <query>
+
+Return trusted context JSON without calling an LLM.
+
+Options:
+  --workspace <name>       Primary workspace; defaults to the current workspace
+  --include <name>         Explicit read-only secondary workspace; repeatable
+  --embed                  Also use local embedding vectors; defaults to lexical-only
+
+=== zbrain status --help ===
+Usage: zbrain status [--workspace <name>]
+
+=== zbrain doctor --help ===
+Usage: zbrain doctor [--workspace <name>] [--probe-embedder]
+
+=== zbrain mcp --help ===
+Usage: zbrain mcp serve
+
+Serve the trusted-agent MCP gateway over stdio.
+
+=== zbrain view --help ===
+Usage: zbrain view
+
+Serve the embedded read-only viewer over loopback (127.0.0.1).
+
+The viewer binds loopback only, sends strict CSP and nosniff headers,
+has no CORS, and returns 405 for every method other than GET and HEAD.
+
+=== zbrain approval --help ===
+Usage:
+  zbrain approval show <challenge-id>
+  zbrain approval grant <challenge-id>
+
+Run the local owner-pinned approval ceremony for a lifecycle challenge.
+
