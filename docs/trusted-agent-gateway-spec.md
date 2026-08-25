@@ -36,7 +36,19 @@ TTY input, and the viewer is local loopback; none is a remote service.
 ## MCP surface
 
 Transport is `zbrain mcp serve` over stdio. stdout is protocol-only; diagnostics
-go to stderr. The first release exposes exactly these tools:
+go to stderr.
+
+Protocol revisions (SDK `github.com/modelcontextprotocol/go-sdk` v1.7.x):
+legacy clients negotiate `2025-06-18` … `2025-11-25` through the `initialize`
+handshake; stateless-era clients use `server/discover` plus per-request
+`_meta.io.modelcontextprotocol/{protocolVersion,clientCapabilities}` at
+`2026-07-28`. The gateway does not advertise the Tasks extension, MRTR
+input-required results, or `subscriptions/listen`; the owner lifecycle
+ceremony stays CLI-only by design. Tool input that fails generated-schema
+validation fails closed as a tool-level `isError` result; oversized inputs
+and unknown tools map to `-32602`; server faults map to `-32603`.
+
+The first release exposes exactly these tools:
 
 1. `workspace_current`
 2. `memory_ask`
@@ -56,9 +68,10 @@ the default is `false`. The opt-in uses the local loopback embedding sidecar
 and merges vector and lexical retrieval. A missing or empty sidecar falls back
 to lexical retrieval, with no network call and no change to trust validation.
 
-The MCP layer maps domain failures to `isError`, invalid parameters to
-`-32602`, and genuine server failures to `-32603`. It does not expose grant,
-approval UI, or mutation HTTP endpoints.
+The MCP layer maps domain failures to `isError`, schema-invalid or oversized
+tool input to a fail-closed `isError` result (oversized inputs and unknown
+tools to `-32602`), and genuine server failures to `-32603`. It does not
+expose grant, approval UI, or mutation HTTP endpoints.
 
 ## Owner-pinned lifecycle
 

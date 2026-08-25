@@ -65,7 +65,10 @@ The shipped binary is standalone and Go-native. It now includes the local
 integration surfaces described in [`docs/trusted-agent-gateway-spec.md`](docs/trusted-agent-gateway-spec.md):
 
 - `zbrain mcp serve` runs the trusted-agent gateway over stdio. Protocol frames
-  stay on stdout and diagnostics stay on stderr.
+  stay on stdout and diagnostics stay on stderr. It speaks the MCP protocol
+  revisions `2024-11-05` through `2025-11-25` via the legacy handshake and the
+  stateless `2026-07-28` revision (`server/discover`, per-request `_meta`);
+  tasks/MRTR/subscriptions extensions are not advertised.
 - `zbrain approval show <challenge-id>` and `zbrain approval grant <challenge-id>`
   provide the local owner ceremony for lifecycle actions. The agent receives a
   one-time grant token; the gateway, not an HTTP endpoint, applies the mutation.
