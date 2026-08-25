@@ -257,7 +257,7 @@ func TestLoopbackEmbedderRebuildPreservesSchema(t *testing.T) {
 	if err != nil {
 		t.Fatalf("sql.Open() error = %v", err)
 	}
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 	var version int
 	if err := db.QueryRow("pragma user_version").Scan(&version); err != nil {
 		t.Fatalf("user_version scan error = %v", err)

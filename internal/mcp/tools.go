@@ -39,7 +39,7 @@ func runMCPTool[T any](ctx context.Context, opts Options, tool string, in T, wor
 	defer func() {
 		if opts.Stderr != nil {
 			mcpLogMu.Lock()
-			fmt.Fprintf(opts.Stderr, "mcp tool=%s workspace=%s duration=%s\n", tool, ws, time.Since(start))
+			_, _ = fmt.Fprintf(opts.Stderr, "mcp tool=%s workspace=%s duration=%s\n", tool, ws, time.Since(start))
 			mcpLogMu.Unlock()
 		}
 	}()

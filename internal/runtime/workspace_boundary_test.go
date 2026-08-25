@@ -637,17 +637,9 @@ func FuzzWorkspaceBoundary(f *testing.F) {
 		// For obvious literal traversal, safeRelativePath must fail.
 		if isObviousTraversal(relative) && !isEncodedTraversal(relative) {
 			if relErr == nil {
-				// For some inputs like "a/b/../c" safeRelativePath must error; if it didn't, check Resolve also errors.
-				if _, err := safeRelativePath(relative); err == nil {
-					// Re-evaluate with fresh call to avoid variable shadowing.
-				}
-				// Log but allow if encoded? Already filtered.
-				// We require at least ResolveWorkspacePath with valid workspace to error for obvious traversal.
-				if workspace == "research" || IsSafeWorkspaceName(workspace) {
-					// Only enforce when workspace is valid; otherwise Resolve fails earlier for workspace reason.
-					if IsSafeWorkspaceName(workspace) {
-						// Create a valid workspace name for this check if needed.
-					}
+				target, err := ResolveWorkspacePath(paths, "research", relative)
+				if err == nil && !pathWithin(wsRoot, target) {
+					t.Fatalf("obvious traversal %q resolved outside workspace: target=%q root=%q", relative, target, wsRoot)
 				}
 			}
 		}

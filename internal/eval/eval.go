@@ -74,19 +74,19 @@ type evalResult struct {
 }
 
 type perQuery struct {
-	ID        string   `json:"id"`
-	Text      string   `json:"text"`
-	Precision float64  `json:"precision_at_k"`
-	Recall    float64  `json:"recall_at_k"`
-	MRR       float64  `json:"mrr"`
-	NDCG      float64  `json:"ndcg_at_k"`
-	AP        float64  `json:"ap_at_k"`
-	Relevant  int      `json:"relevant_total"`
-	Retrieved int      `json:"retrieved"`
-	Hits      int      `json:"hits"`
-	Gap       bool     `json:"gap"`
-	Blocked   bool     `json:"blocked"`
-	RankFirst int      `json:"rank_first"` // 1-based, 0 if no hit
+	ID           string   `json:"id"`
+	Text         string   `json:"text"`
+	Precision    float64  `json:"precision_at_k"`
+	Recall       float64  `json:"recall_at_k"`
+	MRR          float64  `json:"mrr"`
+	NDCG         float64  `json:"ndcg_at_k"`
+	AP           float64  `json:"ap_at_k"`
+	Relevant     int      `json:"relevant_total"`
+	Retrieved    int      `json:"retrieved"`
+	Hits         int      `json:"hits"`
+	Gap          bool     `json:"gap"`
+	Blocked      bool     `json:"blocked"`
+	RankFirst    int      `json:"rank_first"` // 1-based, 0 if no hit
 	RetrievedIDs []string `json:"retrieved_ids,omitempty"`
 	RelevantIDs  []string `json:"relevant_ids,omitempty"`
 }
@@ -181,7 +181,7 @@ func runEval(corpusSize int, workspace string, limit int, queries []query, verbo
 	if err != nil {
 		return evalResult{}, fmt.Errorf("mktemp: %w", err)
 	}
-	defer os.RemoveAll(tmpDir)
+	defer func() { _ = os.RemoveAll(tmpDir) }()
 
 	paths, err := zruntime.ResolvePaths(zruntime.Options{CWD: tmpDir, HomeDir: tmpDir, RuntimeDir: tmpDir})
 	if err != nil {
@@ -204,16 +204,16 @@ func runEval(corpusSize int, workspace string, limit int, queries []query, verbo
 			return evalResult{}, fmt.Errorf("WriteDraft %d: %w", i, err)
 		}
 		if _, err := store.Approve(workspace, c.ID); err != nil {
-			return evalResult{}, fmt.Errorf("Approve %d: %w", i, err)
+			return evalResult{}, fmt.Errorf("approve %d: %w", i, err)
 		}
 	}
 	idx := zruntime.IndexStore{Paths: paths}
 	summary, err := idx.Rebuild(workspace)
 	if err != nil {
-		return evalResult{}, fmt.Errorf("Rebuild: %w", err)
+		return evalResult{}, fmt.Errorf("rebuild: %w", err)
 	}
 	if summary.Approved != corpusSize {
-		return evalResult{}, fmt.Errorf("Rebuild approved=%d want %d invalid=%v", summary.Approved, corpusSize, summary.InvalidClaims)
+		return evalResult{}, fmt.Errorf("rebuild approved=%d want %d invalid=%v", summary.Approved, corpusSize, summary.InvalidClaims)
 	}
 
 	// For faithfulness / blocked we need TrustedQuery as well (checks digest/closure).
@@ -475,7 +475,7 @@ func synthBody(i int, primaryPhrase string) string {
 	}
 	b.WriteString(primaryPhrase)
 	b.WriteString(" — bench document ")
-	b.WriteString(fmt.Sprintf("%d", i))
+	_, _ = fmt.Fprintf(&b, "%d", i)
 	b.WriteString(".\n\n")
 	filler := "System maintains operational consistency through incremental synchronization and periodic checkpoint validation. Data locality ensures low-latency access and offline availability. "
 	for b.Len() < 3500 {

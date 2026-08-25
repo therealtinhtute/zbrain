@@ -142,7 +142,7 @@ func (store EmbeddingStore) StoreVectors(workspace string, records []EmbeddingRe
 	if err != nil {
 		return err
 	}
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 	if _, err := db.Exec(`create table embeddings (
 		claim_id text not null primary key,
 		vector blob not null,
@@ -195,12 +195,12 @@ func (store EmbeddingStore) SearchVectors(workspace, query string, limit int) ([
 	if err != nil {
 		return nil, err
 	}
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 	rows, err := db.Query("select claim_id, vector, dimension from embeddings")
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	type storedVector struct {
 		claimID string
 		vector  []float32
@@ -278,7 +278,7 @@ func (store EmbeddingStore) Count(workspace string) (int, error) {
 	if err != nil {
 		return 0, err
 	}
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 	var count int
 	if err := db.QueryRow("select count(*) from embeddings").Scan(&count); err != nil {
 		return 0, err
@@ -324,7 +324,7 @@ func (store IndexStore) RebuildWithOptions(workspace string, opts RebuildOptions
 	if !opts.Embedding {
 		// A non-embedding rebuild must not leave stale vectors behind; the
 		// derived index changed and old embeddings no longer correspond to it.
-		if err := (EmbeddingStore{Paths: store.Paths}).Close(workspace); err != nil {
+		if err := (EmbeddingStore(store)).Close(workspace); err != nil {
 			return summary, fmt.Errorf("clear stale embeddings: %w", err)
 		}
 		return summary, nil
@@ -343,12 +343,12 @@ func (store IndexStore) embedIndexedClaims(workspace string, summary IndexSummar
 	if err != nil {
 		return summary, err
 	}
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 	rows, err := db.Query("select id, title, description, tags, body from claims where status = ?", string(ClaimStatusApproved))
 	if err != nil {
 		return summary, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	type claimText struct {
 		ID    string
 		Title string
@@ -368,7 +368,7 @@ func (store IndexStore) embedIndexedClaims(workspace string, summary IndexSummar
 		return summary, err
 	}
 	if len(claims) == 0 {
-		_ = (EmbeddingStore{Paths: store.Paths}).Close(workspace)
+		_ = (EmbeddingStore(store)).Close(workspace)
 		summary.Embedding.Indexed = 0
 		summary.Embedding.Eligible = 0
 		summary.Embedding.Strategy = "loopback"
@@ -393,7 +393,7 @@ func (store IndexStore) embedIndexedClaims(workspace string, summary IndexSummar
 			Vector:    vectors[i],
 		}
 	}
-	embStore := EmbeddingStore{Paths: store.Paths}
+	embStore := EmbeddingStore(store)
 	if err := embStore.StoreVectors(workspace, records); err != nil {
 		return summary, fmt.Errorf("store embeddings: %w", err)
 	}

@@ -34,24 +34,24 @@ var benchPhrases = []string{
 }
 
 type benchResult struct {
-	CorpusSize   int     `json:"corpus_size"`
-	Workspace    string  `json:"workspace"`
-	IndexTimeMs  float64 `json:"index_time_ms"`
-	IndexTime    string  `json:"index_time"`
-	Throughput   float64 `json:"throughput_docs_per_sec"`
-	DBSize       int64   `json:"db_size_bytes"`
-	DBSizeHuman  string  `json:"db_size_human"`
-	PeakHeap     uint64  `json:"peak_heap_bytes"`
-	PeakHeapHuman string `json:"peak_heap_human"`
-	QueryP50Ms   float64 `json:"query_p50_ms"`
-	QueryP95Ms   float64 `json:"query_p95_ms"`
-	QueryP99Ms   float64 `json:"query_p99_ms"`
-	QueryP50     string  `json:"query_p50"`
-	QueryP95     string  `json:"query_p95"`
-	QueryP99     string  `json:"query_p99"`
-	TotalQueries int     `json:"total_queries"`
-	Approved     int     `json:"approved"`
-	DBPath       string  `json:"db_path,omitempty"`
+	CorpusSize    int     `json:"corpus_size"`
+	Workspace     string  `json:"workspace"`
+	IndexTimeMs   float64 `json:"index_time_ms"`
+	IndexTime     string  `json:"index_time"`
+	Throughput    float64 `json:"throughput_docs_per_sec"`
+	DBSize        int64   `json:"db_size_bytes"`
+	DBSizeHuman   string  `json:"db_size_human"`
+	PeakHeap      uint64  `json:"peak_heap_bytes"`
+	PeakHeapHuman string  `json:"peak_heap_human"`
+	QueryP50Ms    float64 `json:"query_p50_ms"`
+	QueryP95Ms    float64 `json:"query_p95_ms"`
+	QueryP99Ms    float64 `json:"query_p99_ms"`
+	QueryP50      string  `json:"query_p50"`
+	QueryP95      string  `json:"query_p95"`
+	QueryP99      string  `json:"query_p99"`
+	TotalQueries  int     `json:"total_queries"`
+	Approved      int     `json:"approved"`
+	DBPath        string  `json:"db_path,omitempty"`
 }
 
 func main() {
@@ -131,7 +131,7 @@ func runBench(n int, workspace string) (benchResult, error) {
 	if err != nil {
 		return benchResult{}, fmt.Errorf("mktemp: %w", err)
 	}
-	defer os.RemoveAll(tmpDir)
+	defer func() { _ = os.RemoveAll(tmpDir) }()
 
 	// Resolve isolated ZBRAIN_HOME.
 	paths, err := zruntime.ResolvePaths(zruntime.Options{CWD: tmpDir, HomeDir: tmpDir, RuntimeDir: tmpDir})
@@ -152,7 +152,7 @@ func runBench(n int, workspace string) (benchResult, error) {
 			return benchResult{}, fmt.Errorf("WriteDraft %d: %w", i, err)
 		}
 		if _, err := store.Approve(workspace, claim.ID); err != nil {
-			return benchResult{}, fmt.Errorf("Approve %d (%s): %w", i, claim.ID, err)
+			return benchResult{}, fmt.Errorf("approve %d (%s): %w", i, claim.ID, err)
 		}
 	}
 
@@ -166,11 +166,11 @@ func runBench(n int, workspace string) (benchResult, error) {
 	summary, err := idx.Rebuild(workspace)
 	elapsed := time.Since(start)
 	if err != nil {
-		return benchResult{}, fmt.Errorf("Rebuild: %w", err)
+		return benchResult{}, fmt.Errorf("rebuild: %w", err)
 	}
 	if summary.Approved != n {
 		// Rebuild may have rejected some if validation failed — fail fast.
-		return benchResult{}, fmt.Errorf("Rebuild approved=%d want %d (invalid=%d rejected=%v)", summary.Approved, n, summary.Invalid, summary.InvalidClaims)
+		return benchResult{}, fmt.Errorf("rebuild approved=%d want %d (invalid=%d rejected=%v)", summary.Approved, n, summary.Invalid, summary.InvalidClaims)
 	}
 
 	goruntime.GC()
@@ -205,7 +205,7 @@ func runBench(n int, workspace string) (benchResult, error) {
 			results, err := idx.Search(workspace, zruntime.SearchOptions{Query: q, Statuses: []zruntime.ClaimStatus{zruntime.ClaimStatusApproved}, Limit: 10})
 			d := time.Since(t0)
 			if err != nil {
-				return benchResult{}, fmt.Errorf("Search %q iter %d: %w", q, iter, err)
+				return benchResult{}, fmt.Errorf("search %q iter %d: %w", q, iter, err)
 			}
 			// Ensure we keep durations even if no results (still measures latency).
 			_ = results
@@ -254,17 +254,17 @@ func synthClaim(i, total int) zruntime.Claim {
 	desc := fmt.Sprintf("bench corpus %d/%d %s", i+1, total, phrase)
 	body := synthBody(i, phrase)
 	return zruntime.Claim{
-		Type:      zruntime.OKFClaimType,
-		ID:        id,
-		Tier:      tier,
-		Status:    zruntime.ClaimStatusDraft,
-		Title:     title,
+		Type:        zruntime.OKFClaimType,
+		ID:          id,
+		Tier:        tier,
+		Status:      zruntime.ClaimStatusDraft,
+		Title:       title,
 		Description: desc,
-		Basis:     zruntime.ClaimBasisOwner,
-		CreatedAt: time.Now().UTC().Format(time.RFC3339),
-		CreatedBy: "owner",
-		Tags:      []string{"bench", "benchmark", strings.ReplaceAll(phrase, " ", "-")},
-		Body:      body,
+		Basis:       zruntime.ClaimBasisOwner,
+		CreatedAt:   time.Now().UTC().Format(time.RFC3339),
+		CreatedBy:   "owner",
+		Tags:        []string{"bench", "benchmark", strings.ReplaceAll(phrase, " ", "-")},
+		Body:        body,
 	}
 }
 

@@ -115,7 +115,7 @@ func TestIndexStateMissing(t *testing.T) {
 	if err != nil {
 		t.Fatalf("sql.Open(old schema) error = %v", err)
 	}
-	defer oldDB.Close()
+	defer func() { _ = oldDB.Close() }()
 	if _, err := oldDB.Exec("create table claims(id text)"); err != nil {
 		t.Fatalf("create old schema error = %v", err)
 	}

@@ -73,7 +73,7 @@ func (s *Server) Run() error {
 	if stdout == nil {
 		stdout = os.Stdout
 	}
-	fmt.Fprintf(stdout, "viewer: %s\n", url)
+	_, _ = fmt.Fprintf(stdout, "viewer: %s\n", url)
 	return s.Serve()
 }
 

@@ -1066,7 +1066,7 @@ func TestCheckFreshRejectsDirtyMissingRejectedAndMalformedState(t *testing.T) {
 			t.Fatalf("sql.Open() error = %v", err)
 		}
 		if _, err := db.Exec("delete from rebuild_state"); err != nil {
-			db.Close()
+			_ = db.Close()
 			t.Fatalf("delete rebuild state error = %v", err)
 		}
 		if err := db.Close(); err != nil {
@@ -1513,12 +1513,12 @@ func indexedClaimStatuses(t *testing.T, paths Paths, workspace string) map[strin
 	if err != nil {
 		t.Fatalf("sql.Open() error = %v", err)
 	}
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 	rows, err := db.Query("select id, status from claims order by id")
 	if err != nil {
 		t.Fatalf("Query(claims) error = %v", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	statuses := make(map[string]ClaimStatus)
 	for rows.Next() {
 		var id string
@@ -1540,7 +1540,7 @@ func readPublishedIndexState(t *testing.T, idx IndexStore, workspace string) (Tr
 	if err != nil {
 		t.Fatalf("sql.Open() error = %v", err)
 	}
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 	manifest, state, err := ReadIndexState(db)
 	if err != nil {
 		t.Fatalf("ReadIndexState() error = %v", err)

@@ -1,6 +1,6 @@
 # AGENTS.md
 
-Go 1.24.0, Go-native CLI at `cmd/zbrain`. Do not reintroduce Bun/Node/TypeScript.
+Go 1.25.13 (CI matrix 1.25.x), Go-native CLI at `cmd/zbrain`. Do not reintroduce Bun/Node/TypeScript.
 
 ## Layout
 

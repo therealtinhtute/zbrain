@@ -152,7 +152,7 @@ func (app App) Run(args []string) error {
 
 func (app App) runStatus(args []string) error {
 	if helpRequested(args) {
-		fmt.Fprintln(app.Stdout, "Usage: zbrain status [--workspace <name>]")
+		_, _ = fmt.Fprintln(app.Stdout, "Usage: zbrain status [--workspace <name>]")
 		return nil
 	}
 	workspace, rest, err := parseWorkspaceFlag(args)
@@ -189,7 +189,7 @@ func (app App) runStatus(args []string) error {
 
 func (app App) runDoctor(args []string) error {
 	if helpRequested(args) {
-		fmt.Fprintln(app.Stdout, "Usage: zbrain doctor [--workspace <name>] [--probe-embedder]")
+		_, _ = fmt.Fprintln(app.Stdout, "Usage: zbrain doctor [--workspace <name>] [--probe-embedder]")
 		return nil
 	}
 	probe := false
@@ -366,18 +366,18 @@ func (app App) runApprovalGrant(args []string) error {
 	if err != nil {
 		return err
 	}
-	fmt.Fprintf(app.Stderr, "action digest: %s\n", challenge.ActionDigest)
-	fmt.Fprintf(app.Stderr, "confirm the last 16 hex characters of the action digest: ")
+	_, _ = fmt.Fprintf(app.Stderr, "action digest: %s\n", challenge.ActionDigest)
+	_, _ = fmt.Fprintf(app.Stderr, "confirm the last 16 hex characters of the action digest: ")
 	confirm, err := reader.readLine()
 	if err != nil {
 		return err
 	}
-	fmt.Fprintln(app.Stderr)
+	_, _ = fmt.Fprintln(app.Stderr)
 	suffix := actionDigestSuffix(challenge.ActionDigest)
 	if strings.TrimSpace(confirm) != suffix {
 		return errors.New("approval grant denied: digest suffix mismatch")
 	}
-	fmt.Fprintln(app.Stderr)
+	_, _ = fmt.Fprintln(app.Stderr)
 	granted, err := (zruntime.ChallengeStore{Paths: app.Paths, Now: app.Now}).Grant(workspace, challenge.ID)
 	if err != nil {
 		return err
@@ -938,7 +938,7 @@ func helpRequested(args []string) bool {
 }
 
 func (app App) printHelp() {
-	fmt.Fprint(app.Stdout, `zbrain - Go-native OKF trusted memory CLI
+	_, _ = fmt.Fprint(app.Stdout, `zbrain - Go-native OKF trusted memory CLI
 
 Usage:
   zbrain <command> [arguments]
@@ -969,21 +969,21 @@ Use `+"`zbrain <command> --help`"+` for command-specific help.
 }
 
 func (app App) printSetupHelp() {
-	fmt.Fprint(app.Stdout, `Usage: zbrain setup
+	_, _ = fmt.Fprint(app.Stdout, `Usage: zbrain setup
 
 Prepare the runtime directory and extract embedded assets.
 `)
 }
 
 func (app App) printVersionHelp() {
-	fmt.Fprint(app.Stdout, `Usage: zbrain version
+	_, _ = fmt.Fprint(app.Stdout, `Usage: zbrain version
 
 Print the CLI version.
 `)
 }
 
 func (app App) printWorkspaceHelp() {
-	fmt.Fprint(app.Stdout, `Usage:
+	_, _ = fmt.Fprint(app.Stdout, `Usage:
   zbrain workspace create <name>
   zbrain workspace current
 
@@ -992,14 +992,14 @@ Manage the active workspace.
 }
 
 func (app App) printWorkspaceCreateHelp() {
-	fmt.Fprint(app.Stdout, `Usage: zbrain workspace create <name>
+	_, _ = fmt.Fprint(app.Stdout, `Usage: zbrain workspace create <name>
 
 Create a workspace using a lowercase name, digits, or hyphens.
 `)
 }
 
 func (app App) printWorkspaceCurrentHelp() {
-	fmt.Fprint(app.Stdout, `Usage: zbrain workspace current
+	_, _ = fmt.Fprint(app.Stdout, `Usage: zbrain workspace current
 
 Print the active workspace as JSON.
 `)
@@ -1010,7 +1010,7 @@ func (app App) printEvidenceHelp() {
 }
 
 func (app App) printEvidenceAddHelp() {
-	fmt.Fprint(app.Stdout, `Usage: zbrain evidence add --file <path> --origin <uri-or-path> [--media-type <type>] [--workspace <name>]
+	_, _ = fmt.Fprint(app.Stdout, `Usage: zbrain evidence add --file <path> --origin <uri-or-path> [--media-type <type>] [--workspace <name>]
 
 Options:
   --file <path>             Local source file to snapshot
@@ -1021,7 +1021,7 @@ Options:
 }
 
 func (app App) printClaimHelp() {
-	fmt.Fprint(app.Stdout, `Usage:
+	_, _ = fmt.Fprint(app.Stdout, `Usage:
   zbrain claim draft --tier <tier> --title <title> --basis <owner|evidence|derived> [--evidence <id>]... [--support <id>]... [--conflicts-with <id>]... [--workspace <name>]
   zbrain claim approve <id> [--workspace <name>]
   zbrain claim supersede <id> --tier <tier> --title <title> --basis <owner|evidence|derived> [--evidence <id>]... [--support <id>]... [--conflicts-with <id>]... [--workspace <name>]
@@ -1032,7 +1032,7 @@ Manage the four-state OKF claim lifecycle.
 }
 
 func (app App) printClaimDraftHelp() {
-	fmt.Fprint(app.Stdout, `Usage: zbrain claim draft --tier <tier> --title <title> --basis <owner|evidence|derived> [options]
+	_, _ = fmt.Fprint(app.Stdout, `Usage: zbrain claim draft --tier <tier> --title <title> --basis <owner|evidence|derived> [options]
 
 Options:
   --tier <tier>             Claim tier
@@ -1048,14 +1048,14 @@ The claim body is read from stdin.
 }
 
 func (app App) printClaimApproveHelp() {
-	fmt.Fprint(app.Stdout, `Usage: zbrain claim approve <id> [--workspace <name>]
+	_, _ = fmt.Fprint(app.Stdout, `Usage: zbrain claim approve <id> [--workspace <name>]
 
 Promote a valid draft claim.
 `)
 }
 
 func (app App) printClaimSupersedeHelp() {
-	fmt.Fprint(app.Stdout, `Usage: zbrain claim supersede <id> --tier <tier> --title <title> --basis <owner|evidence|derived> [options]
+	_, _ = fmt.Fprint(app.Stdout, `Usage: zbrain claim supersede <id> --tier <tier> --title <title> --basis <owner|evidence|derived> [options]
 
 Options:
   --tier <tier>             Replacement claim tier
@@ -1071,14 +1071,14 @@ The replacement claim body is read from stdin.
 }
 
 func (app App) printClaimRevokeHelp() {
-	fmt.Fprint(app.Stdout, `Usage: zbrain claim revoke <id> --reason <text> [--workspace <name>]
+	_, _ = fmt.Fprint(app.Stdout, `Usage: zbrain claim revoke <id> --reason <text> [--workspace <name>]
 
 Revoke a claim with an operator-provided reason.
 `)
 }
 
 func (app App) printMigrateHelp() {
-	fmt.Fprint(app.Stdout, `Usage: zbrain migrate okf [--workspace <name>]
+	_, _ = fmt.Fprint(app.Stdout, `Usage: zbrain migrate okf [--workspace <name>]
 
 Convert legacy zbrain claim files to OKF concepts.
 `)
@@ -1089,7 +1089,7 @@ func (app App) printMigrateOKFHelp() {
 }
 
 func (app App) printReindexHelp() {
-	fmt.Fprint(app.Stdout, `Usage: zbrain reindex [--workspace <name>] [--embed]
+	_, _ = fmt.Fprint(app.Stdout, `Usage: zbrain reindex [--workspace <name>] [--embed]
 
 Rebuild the disposable workspace index.
 
@@ -1099,7 +1099,7 @@ Options:
 }
 
 func (app App) printViewHelp() {
-	fmt.Fprint(app.Stdout, `Usage: zbrain view
+	_, _ = fmt.Fprint(app.Stdout, `Usage: zbrain view
 
 Serve the embedded read-only viewer over loopback (127.0.0.1).
 
@@ -1109,7 +1109,7 @@ has no CORS, and returns 405 for every method other than GET and HEAD.
 }
 
 func (app App) printApprovalHelp() {
-	fmt.Fprint(app.Stdout, `Usage:
+	_, _ = fmt.Fprint(app.Stdout, `Usage:
   zbrain approval show <challenge-id>
   zbrain approval grant <challenge-id>
 
@@ -1118,14 +1118,14 @@ Run the local owner-pinned approval ceremony for a lifecycle challenge.
 }
 
 func (app App) printApprovalShowHelp() {
-	fmt.Fprint(app.Stdout, `Usage: zbrain approval show <challenge-id>
+	_, _ = fmt.Fprint(app.Stdout, `Usage: zbrain approval show <challenge-id>
 
 Print the challenge action summary as JSON.
 `)
 }
 
 func (app App) printApprovalGrantHelp() {
-	fmt.Fprint(app.Stdout, `Usage: zbrain approval grant <challenge-id>
+	_, _ = fmt.Fprint(app.Stdout, `Usage: zbrain approval grant <challenge-id>
 
 Confirm the last 16 hex characters of the action digest in an interactive
 TTY, then verify and print the one-time token as JSON for later apply.
@@ -1133,7 +1133,7 @@ TTY, then verify and print the one-time token as JSON for later apply.
 }
 
 func (app App) printAskHelp() {
-	fmt.Fprint(app.Stdout, `Usage: zbrain ask [--workspace <name>] [--include <name>]... [--embed] <query>
+	_, _ = fmt.Fprint(app.Stdout, `Usage: zbrain ask [--workspace <name>] [--include <name>]... [--embed] <query>
 
 Return trusted context JSON without calling an LLM.
 
@@ -1145,14 +1145,14 @@ Options:
 }
 
 func (app App) printMCPHelp() {
-	fmt.Fprint(app.Stdout, `Usage: zbrain mcp serve
+	_, _ = fmt.Fprint(app.Stdout, `Usage: zbrain mcp serve
 
 Serve the trusted-agent MCP gateway over stdio.
 `)
 }
 
 func (app App) printMCPServeHelp() {
-	fmt.Fprint(app.Stdout, `Usage: zbrain mcp serve
+	_, _ = fmt.Fprint(app.Stdout, `Usage: zbrain mcp serve
 
 Run the MCP stdio gateway. stdout is protocol-only; diagnostics go to stderr.
 `)

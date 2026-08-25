@@ -164,7 +164,7 @@ func requireIndexStateColumns(reader indexStateSQL, table string, expected map[s
 	if err != nil {
 		return err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	found := make(map[string]bool, len(expected))
 	for rows.Next() {
 		var cid, notNull, primaryKey int
@@ -201,7 +201,7 @@ func readTrustInputManifest(reader indexStateSQL) (TrustInputManifest, error) {
 	if err != nil {
 		return TrustInputManifest{}, fmt.Errorf("read trust inputs: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	entries := make([]TrustInput, 0)
 	previousPath := ""
@@ -234,7 +234,7 @@ func readRebuildState(reader indexStateSQL) (RebuildState, error) {
 	if err != nil {
 		return RebuildState{}, fmt.Errorf("read rebuild state: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var state RebuildState
 	count := 0

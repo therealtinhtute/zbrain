@@ -1,0 +1,20 @@
+{
+  "runtime": 80.1,
+  "cli": 78.3,
+  "mcp": 76.5,
+  "view": 92.8,
+  "measured": "2026-08-25",
+  "command": "go test -cover ./internal/runtime ./internal/cli ./internal/mcp ./internal/view 2>&1 | grep coverage:",
+  "targets": {
+    "M1_runtime_min": 80.0,
+    "M2_cli_min": 75.0,
+    "runtime_pass": true,
+    "cli_pass": true
+  },
+  "raw_output": [
+    "ok  github.com/therealtinhtute/zbrain/internal/runtime  6.447s  coverage: 80.1% of statements",
+    "coverage: 78.3% of statements",
+    "ok  github.com/therealtinhtute/zbrain/internal/mcp  1.901s  coverage: 76.5% of statements",
+    "ok  github.com/therealtinhtute/zbrain/internal/view  0.091s  coverage: 92.8% of statements"
+  ]
+}

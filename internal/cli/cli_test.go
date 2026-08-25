@@ -1399,7 +1399,7 @@ func TestApprovalGrantRequiresTTY(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Open(os.DevNull) error = %v", err)
 	}
-	defer devNull.Close()
+	defer func() { _ = devNull.Close() }()
 	app.Stdin = devNull
 	if err := app.Run([]string{"approval", "grant", prepared.Challenge.ID}); err == nil || !strings.Contains(err.Error(), "TTY") {
 		t.Fatalf("Run(approval grant non-TTY) error = %v, want interactive terminal error", err)

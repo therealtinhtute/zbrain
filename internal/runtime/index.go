@@ -113,12 +113,7 @@ func validateIndexBoundaryPath(path string, directory bool) error {
 			if info.Mode()&os.ModeSymlink != 0 {
 				return fmt.Errorf("%q must not be a symlink", candidate)
 			}
-			resolved, err := filepath.EvalSymlinks(candidate)
-			if err != nil {
-				return err
-			}
-			resolved, err = filepath.Abs(resolved)
-			if err != nil {
+			if _, err := filepath.EvalSymlinks(candidate); err != nil {
 				return err
 			}
 			if candidate == clean && directory && !info.IsDir() {
@@ -142,7 +137,7 @@ func (store IndexStore) AssertFTS5() error {
 	if err != nil {
 		return err
 	}
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 	var enabled int
 	if err := db.QueryRow("select sqlite_compileoption_used('ENABLE_FTS5')").Scan(&enabled); err != nil {
 		return err
@@ -216,7 +211,7 @@ func (store IndexStore) checkFreshUnlockedOutput(workspace string, manifestOutpu
 	if err != nil {
 		return fmt.Errorf("workspace %q index cannot be opened: %w", workspace, err)
 	}
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 	manifest, state, err := ReadIndexState(db)
 	if err != nil {
 		return fmt.Errorf("workspace %q index state is malformed or missing: %w", workspace, err)
@@ -352,7 +347,7 @@ func readTrustInputMtimes(db *sql.DB) (map[string]trustInputMtime, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	mtimes := make(map[string]trustInputMtime)
 	previous := ""
@@ -384,7 +379,7 @@ func readTrustDirectories(db *sql.DB) ([]trustDirectoryMtime, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	directories := make([]trustDirectoryMtime, 0)
 	previous := ""
@@ -792,7 +787,7 @@ func validateApprovedClaimsForRebuild(paths Paths, workspace string, claims []Cl
 }
 
 func (store IndexStore) Rebuild(workspace string) (IndexSummary, error) {
-	databasePath, dirtyPath, err := store.validatedIndexPaths(workspace)
+	_, _, err := store.validatedIndexPaths(workspace)
 	if err != nil {
 		return IndexSummary{}, err
 	}
@@ -920,9 +915,10 @@ func (store IndexStore) Rebuild(workspace string) (IndexSummary, error) {
 		return IndexSummary{}, err
 	}
 	for _, claim := range scan.Claims {
-		if claim.Status == ClaimStatusApproved {
+		switch claim.Status {
+		case ClaimStatusApproved:
 			summary.Approved++
-		} else if claim.Status == ClaimStatusDraft {
+		case ClaimStatusDraft:
 			summary.Draft++
 		}
 		if err := insertIndexedClaim(tx, claim); err != nil {
@@ -975,7 +971,7 @@ func (store IndexStore) Rebuild(workspace string) (IndexSummary, error) {
 		}
 		_ = publicationLock.Close()
 	}()
-	databasePath, dirtyPath, err = store.validatedIndexPaths(workspace)
+	databasePath, dirtyPath, err := store.validatedIndexPaths(workspace)
 	if err != nil {
 		return IndexSummary{}, err
 	}
@@ -1050,7 +1046,7 @@ func (store IndexStore) claimsByIDsUnlocked(workspace string, ids []string) ([]I
 	if err != nil {
 		return nil, err
 	}
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 	placeholders := strings.TrimRight(strings.Repeat("?,", len(ids)), ",")
 	queryArgs := make([]any, 0, len(ids)+1)
 	queryArgs = append(queryArgs, string(ClaimStatusApproved))
@@ -1064,7 +1060,7 @@ where status = ? and id in (`+placeholders+`)`, queryArgs...)
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	results := []IndexedClaim{}
 	for rows.Next() {
 		var result IndexedClaim
@@ -1102,7 +1098,7 @@ func (store IndexStore) searchUnlockedInternal(workspace string, options SearchO
 	if err != nil {
 		return nil, err
 	}
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 	if checkIntegrity {
 		if err := integrityCheck(db); err != nil {
 			return nil, err
@@ -1136,7 +1132,7 @@ limit ?`, args...)
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	results := []IndexedClaim{}
 	for rows.Next() {
 		var result IndexedClaim

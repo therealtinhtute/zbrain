@@ -303,6 +303,6 @@ func tryWorkspaceExclusiveLock(paths Paths, workspace string) error {
 	if err != nil {
 		return err
 	}
-	defer unix.Close(fd)
+	defer func() { _ = unix.Close(fd) }()
 	return unix.Flock(fd, unix.LOCK_EX|unix.LOCK_NB)
 }

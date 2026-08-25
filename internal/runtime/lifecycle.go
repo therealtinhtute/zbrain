@@ -232,7 +232,7 @@ func (store ClaimStore) PrepareChallenge(workspace string, prepare ChallengePrep
 	if err := store.validateChallengeAgainstClaim(challenge, claim, digest); err != nil {
 		return PreparedChallenge{}, err
 	}
-	return (ChallengeStore{Paths: store.Paths, Now: store.Now}).prepareUnlocked(workspace, prepare)
+	return (ChallengeStore(store)).prepareUnlocked(workspace, prepare)
 }
 
 // ApplyChallenge validates and consumes a challenge token, then commits the
@@ -250,7 +250,7 @@ func (store ClaimStore) ApplyChallenge(workspace string, challengeID string, tok
 		return Claim{}, err
 	}
 
-	challengeStore := ChallengeStore{Paths: store.Paths, Now: store.Now}
+	challengeStore := ChallengeStore(store)
 	challenge, err := challengeStore.readChallengeUnlocked(workspace, challengeID)
 	if err != nil {
 		return Claim{}, err

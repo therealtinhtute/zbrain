@@ -59,7 +59,7 @@ func TestViewHeaders(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GET / error = %v", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("GET / status = %d, want 200", resp.StatusCode)
 	}
@@ -85,7 +85,7 @@ func TestViewServesEmbeddedAssets(t *testing.T) {
 			t.Fatalf("GET %s status = %d, want 200", path, resp.StatusCode)
 		}
 		checkStrictHeaders(t, resp.Header)
-		resp.Body.Close()
+		_ = resp.Body.Close()
 	}
 }
 
@@ -101,7 +101,7 @@ func TestViewRejectsMutations(t *testing.T) {
 		if err != nil {
 			t.Fatalf("%s / error = %v", method, err)
 		}
-		resp.Body.Close()
+		_ = resp.Body.Close()
 		if resp.StatusCode != http.StatusMethodNotAllowed {
 			t.Errorf("%s / status = %d, want 405", method, resp.StatusCode)
 		}
@@ -115,7 +115,7 @@ func TestViewNoCORS(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GET / error = %v", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	for name := range resp.Header {
 		if strings.HasPrefix(strings.ToLower(name), "access-control-") {
 			t.Errorf("unexpected CORS header %q", name)
@@ -130,7 +130,7 @@ func TestViewNotFound(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GET /missing.html error = %v", err)
 	}
-	resp.Body.Close()
+	_ = resp.Body.Close()
 	if resp.StatusCode != http.StatusNotFound {
 		t.Errorf("GET /missing.html status = %d, want 404", resp.StatusCode)
 	}
@@ -206,7 +206,7 @@ func TestViewEscaping(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GET / error = %v", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("GET / status = %d, want 200", resp.StatusCode)
 	}
@@ -238,7 +238,7 @@ func TestViewEscaping(t *testing.T) {
 			t.Fatalf("GET %s error = %v", path, err)
 		}
 		body, readErr := io.ReadAll(resp.Body)
-		resp.Body.Close()
+		_ = resp.Body.Close()
 		if readErr != nil {
 			t.Fatalf("ReadAll(%s) error = %v", path, readErr)
 		}
@@ -255,7 +255,7 @@ func TestViewEscaping(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GET /api/workspace error = %v", err)
 	}
-	defer wsResp.Body.Close()
+	defer func() { _ = wsResp.Body.Close() }()
 	var ws struct {
 		Workspace string `json:"workspace"`
 	}
@@ -276,28 +276,11 @@ func TestViewEscaping(t *testing.T) {
 		if err != nil {
 			t.Fatalf("%s / error = %v", method, err)
 		}
-		resp.Body.Close()
+		_ = resp.Body.Close()
 		if resp.StatusCode != http.StatusMethodNotAllowed {
 			t.Errorf("%s / status = %d, want 405", method, resp.StatusCode)
 		}
 	}
-}
-
-type safeBuffer struct {
-	mu  sync.Mutex
-	buf strings.Builder
-}
-
-func (b *safeBuffer) Write(p []byte) (int, error) {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	return b.buf.Write(p)
-}
-
-func (b *safeBuffer) String() string {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	return b.buf.String()
 }
 
 type signalBuffer struct {
@@ -381,7 +364,7 @@ func TestViewRunAndServeErrors(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GET / via Run error = %v", err)
 	}
-	resp.Body.Close()
+	_ = resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("GET / via Run status = %d, want 200", resp.StatusCode)
 	}
@@ -403,7 +386,7 @@ func TestViewStaticAndNotFound(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GET /index.html error = %v", err)
 	}
-	resp.Body.Close()
+	_ = resp.Body.Close()
 	if resp.StatusCode != http.StatusNotFound {
 		t.Errorf("GET /index.html status = %d, want 404", resp.StatusCode)
 	}
@@ -412,7 +395,7 @@ func TestViewStaticAndNotFound(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GET /missing.css error = %v", err)
 	}
-	resp.Body.Close()
+	_ = resp.Body.Close()
 	if resp.StatusCode != http.StatusNotFound {
 		t.Errorf("GET /missing.css status = %d, want 404", resp.StatusCode)
 	}
@@ -425,7 +408,7 @@ func TestViewStaticAndNotFound(t *testing.T) {
 	if err != nil {
 		t.Fatalf("HEAD /style.css error = %v", err)
 	}
-	resp.Body.Close()
+	_ = resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		t.Errorf("HEAD /style.css status = %d, want 200", resp.StatusCode)
 	}
@@ -490,7 +473,7 @@ func TestViewAPIErrorsAndHappyPath(t *testing.T) {
 			t.Fatalf("GET %s error = %v", path, err)
 		}
 		body, _ := io.ReadAll(resp.Body)
-		resp.Body.Close()
+		_ = resp.Body.Close()
 		if resp.StatusCode != http.StatusOK {
 			t.Fatalf("GET %s status = %d, want 200", path, resp.StatusCode)
 		}
@@ -504,7 +487,7 @@ func TestViewAPIErrorsAndHappyPath(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GET /api/claim valid error = %v", err)
 	}
-	resp.Body.Close()
+	_ = resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("GET /api/claim valid status = %d, want 200", resp.StatusCode)
 	}
@@ -514,7 +497,7 @@ func TestViewAPIErrorsAndHappyPath(t *testing.T) {
 			t.Fatalf("GET %s error = %v", bad, err)
 		}
 		body, _ := io.ReadAll(resp.Body)
-		resp.Body.Close()
+		_ = resp.Body.Close()
 		if resp.StatusCode != http.StatusNotFound {
 			t.Errorf("GET %s status = %d, want 404", bad, resp.StatusCode)
 		}
@@ -530,7 +513,7 @@ func TestViewAPIErrorsAndHappyPath(t *testing.T) {
 		t.Fatalf("GET /api/evidence valid error = %v", err)
 	}
 	body, _ := io.ReadAll(resp.Body)
-	resp.Body.Close()
+	_ = resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("GET /api/evidence valid status = %d, want 200", resp.StatusCode)
 	}
@@ -543,7 +526,7 @@ func TestViewAPIErrorsAndHappyPath(t *testing.T) {
 			t.Fatalf("GET %s error = %v", bad, err)
 		}
 		b, _ := io.ReadAll(resp.Body)
-		resp.Body.Close()
+		_ = resp.Body.Close()
 		if resp.StatusCode != http.StatusNotFound {
 			t.Errorf("GET %s status = %d, want 404", bad, resp.StatusCode)
 		}
@@ -571,7 +554,7 @@ func TestViewAPIErrorsAndHappyPath(t *testing.T) {
 			t.Fatalf("GET %s (bad workspace) error = %v", path, err)
 		}
 		b, _ := io.ReadAll(resp.Body)
-		resp.Body.Close()
+		_ = resp.Body.Close()
 		if resp.StatusCode != http.StatusInternalServerError {
 			t.Errorf("GET %s (bad workspace) status = %d, want 500", path, resp.StatusCode)
 		}
@@ -585,7 +568,7 @@ func TestViewAPIErrorsAndHappyPath(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GET /notfound error = %v", err)
 	}
-	resp.Body.Close()
+	_ = resp.Body.Close()
 	if resp.StatusCode != http.StatusNotFound {
 		t.Errorf("GET /notfound status = %d, want 404", resp.StatusCode)
 	}
@@ -598,7 +581,7 @@ func TestViewAPIErrorsAndHappyPath(t *testing.T) {
 	if err != nil {
 		t.Fatalf("HEAD / error = %v", err)
 	}
-	resp.Body.Close()
+	_ = resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		t.Errorf("HEAD / status = %d, want 200", resp.StatusCode)
 	}
@@ -638,7 +621,7 @@ func TestViewPageError(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GET / (broken workspace) error = %v", err)
 	}
-	resp.Body.Close()
+	_ = resp.Body.Close()
 	// Should be 500 because ScanWorkspaceForTrust fails
 	if resp.StatusCode != http.StatusInternalServerError {
 		t.Errorf("GET / (broken workspace) status = %d, want 500", resp.StatusCode)

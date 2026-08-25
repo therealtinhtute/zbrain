@@ -210,11 +210,12 @@ func TestDependencyInvalidation(t *testing.T) {
 			dependentBefore := sha256Hex(t, dependentPath)
 			middleBefore := sha256Hex(t, middlePath)
 			basePath := filepath.Join(paths.WorkspacesDir, "research", "wiki", "projects", base.ID+".md")
-			if mode == "revoked" {
+			switch mode {
+			case "revoked":
 				if _, err := store.Revoke("research", base.ID, "support withdrawn"); err != nil {
 					t.Fatalf("Revoke(base) error = %v", err)
 				}
-			} else if mode == "superseded" {
+			case "superseded":
 				replacement := queryClaim("clm_eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee", "Replacement Support", ClaimBasisOwner)
 				if _, err := store.WriteSupersedingDraft("research", base.ID, replacement); err != nil {
 					t.Fatalf("WriteSupersedingDraft(base) error = %v", err)
@@ -222,7 +223,7 @@ func TestDependencyInvalidation(t *testing.T) {
 				if _, err := store.Approve("research", replacement.ID); err != nil {
 					t.Fatalf("Approve(replacement) error = %v", err)
 				}
-			} else {
+			default:
 				backupPath := basePath + ".bak"
 				if err := os.Rename(basePath, backupPath); err != nil {
 					t.Fatalf("Rename(missing support) error = %v", err)
@@ -478,7 +479,7 @@ func forgeTrustFreshnessRows(t *testing.T, paths Paths, idx IndexStore, workspac
 	if err != nil {
 		t.Fatalf("sql.Open() error = %v", err)
 	}
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 	mtimes, err := readTrustInputMtimes(db)
 	if err != nil {
 		t.Fatalf("readTrustInputMtimes() error = %v", err)

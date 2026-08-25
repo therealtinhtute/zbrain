@@ -98,7 +98,7 @@ func (store EvidenceStore) AddFile(workspace string, sourcePath string, origin s
 	if err != nil {
 		return Evidence{}, err
 	}
-	defer source.Close()
+	defer func() { _ = source.Close() }()
 
 	id, err := NewEvidenceID()
 	if err != nil {
@@ -294,9 +294,9 @@ const evidenceSnapshotDigestPrefix = "sha256:evidence-v1:"
 func evidenceSnapshotDigest(metadata []byte, evidence Evidence) string {
 	hash := sha256.New()
 	hash.Write([]byte("zbrain.evidence/v1\n"))
-	fmt.Fprintf(hash, "metadata-length:%d\n", len(metadata))
+	_, _ = fmt.Fprintf(hash, "metadata-length:%d\n", len(metadata))
 	hash.Write(metadata)
-	fmt.Fprintf(hash, "\nraw-byte-length:%d\nraw-sha256:%s\n", evidence.ByteLength, evidence.SHA256)
+	_, _ = fmt.Fprintf(hash, "\nraw-byte-length:%d\nraw-sha256:%s\n", evidence.ByteLength, evidence.SHA256)
 	return evidenceSnapshotDigestPrefix + hex.EncodeToString(hash.Sum(nil))
 }
 
@@ -438,7 +438,7 @@ func splitEvidenceLines(raw []byte) [][]byte {
 
 func EvidenceSpanDigest(snapshotDigest string, startLine, endLine int, rawBytes []byte) string {
 	hash := sha256.New()
-	fmt.Fprintf(hash, "zbrain.span/v1\nsnapshot:%s\nrange:%d-%d\n", snapshotDigest, startLine, endLine)
+	_, _ = fmt.Fprintf(hash, "zbrain.span/v1\nsnapshot:%s\nrange:%d-%d\n", snapshotDigest, startLine, endLine)
 	hash.Write(rawBytes)
 	return "sha256:span-v1:" + hex.EncodeToString(hash.Sum(nil))
 }
