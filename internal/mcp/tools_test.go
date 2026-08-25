@@ -219,14 +219,33 @@ func TestToolSurface(t *testing.T) {
 		t.Errorf("claim_lifecycle prepare must fail closed with isError; %s", resultText(res))
 	}
 
-	// Invalid parameters map to -32602.
-	_, err = callTool(t, cs, "memory_ask", map[string]any{})
+	// Structurally invalid input fails closed as a tool-level isError
+	// (generated-schema validation), not a wire error.
+	res, err = callTool(t, cs, "memory_ask", map[string]any{})
+	if err != nil {
+		t.Fatalf("missing-query memory_ask error = %v", err)
+	}
+	if !res.IsError {
+		t.Errorf("missing-query memory_ask must fail closed with isError; %s", resultText(res))
+	}
+
+	// An empty query passes schema validation and is rejected by the guard.
+	res, err = callTool(t, cs, "memory_ask", map[string]any{"query": ""})
+	if err != nil {
+		t.Fatalf("empty-query memory_ask error = %v", err)
+	}
+	if !res.IsError {
+		t.Errorf("empty-query memory_ask must be isError; %s", resultText(res))
+	}
+
+	// Unknown tools map to -32602.
+	_, err = callTool(t, cs, "no_such_tool", map[string]any{})
 	var rpcErr *jsonrpc.Error
 	if !errors.As(err, &rpcErr) {
-		t.Fatalf("missing-query memory_ask error type = %T, want *jsonrpc.Error (%v)", err, err)
+		t.Fatalf("unknown-tool error type = %T, want *jsonrpc.Error (%v)", err, err)
 	}
 	if rpcErr.Code != jsonrpc.CodeInvalidParams {
-		t.Errorf("missing-query memory_ask code = %d, want %d", rpcErr.Code, jsonrpc.CodeInvalidParams)
+		t.Errorf("unknown-tool code = %d, want %d", rpcErr.Code, jsonrpc.CodeInvalidParams)
 	}
 
 	// Domain failures map to isError.

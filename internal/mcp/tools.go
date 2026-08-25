@@ -111,9 +111,11 @@ type lifecycleResult struct {
 // registerTools registers the seven typed gateway tools.
 //
 // Domain failures return a regular error, which the SDK embeds in a
-// CallToolResult with IsError set; structurally invalid parameters are rejected
-// by the generated JSON schema with -32602; genuine server failures surface as
-// -32603. No tool exposes grant/approval UI or mutation HTTP behavior.
+// CallToolResult with IsError set; structurally invalid parameters fail
+// closed as tool-level isError results via generated JSON schema
+// validation; oversized inputs and unknown tools map to -32602; genuine
+// server failures surface as -32603. No tool exposes grant/approval UI or
+// mutation HTTP behavior.
 func registerTools(server *mcp.Server, opts Options) error {
 	type currentIn struct{}
 
