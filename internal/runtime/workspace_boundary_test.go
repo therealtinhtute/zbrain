@@ -254,9 +254,16 @@ func TestWorkspaceBoundaryFuzz(t *testing.T) {
 		if root == "" {
 			t.Fatalf("ValidateWorkspace(valid) returned empty root")
 		}
-		if !pathWithin(paths.WorkspacesDir, root) {
-			t.Fatalf("ValidateWorkspace(valid) root %q not within %q", root, paths.WorkspacesDir)
-		}
+	// The expectation must be canonical for the same reason ValidateWorkspace
+	// canonicalizes: on macOS, /tmp is a symlink (/var -> /private/var), so the
+	// unresolved WorkspacesDir prefix differs from the returned root.
+	boundary, canonErr := canonicalExistingDirectory(paths.WorkspacesDir)
+	if canonErr != nil {
+		t.Fatalf("canonicalize workspaces root: %v", canonErr)
+	}
+	if !pathWithin(boundary, root) {
+		t.Fatalf("ValidateWorkspace(valid) root %q not within %q", root, boundary)
+	}
 	})
 
 	// --- safeRelativePath: direct traversal payloads ---
