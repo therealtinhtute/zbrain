@@ -29,7 +29,7 @@ Important nuance: *stateless protocol does not mean stateless application.* Cros
 
 Short version, three points:
 
-1. `internal/mcp/` already documents the `2026-07-28` stateless handshake among its supported protocol revisions. Everything learned building `crashlens` against the new core (per-request metadata, header validation, MRTR, Tasks store) transfers directly to the zbrain gateway's stateless path.
+1. `internal/mcp/` currently speaks at most `2025-11-25`: it pins `go-sdk` v1.4.0, whose latest supported spec is `2025-11-25` per the SDK compatibility table (the only protocol version string in this repo's tests is `2025-06-18`). Nothing here documents `2026-07-28` yet — building `crashlens` would be this repository's first contact with the new core, on an SDK bump to v1.7.0+ (already planned as a Day-1 milestone). Everything learned there (per-request metadata, header validation, MRTR, Tasks store) transfers directly to the zbrain gateway's future stateless path.
 2. The explicit-handle pattern mirrors zbrain's existing design language: durable, digest-verifiable handles (claims, approval challenges/tokens) instead of implicit sessions. `crashlens` is a low-risk place to exercise HMAC-signed handles end to end before touching gateway code.
 3. The human-approval flow planned for `crashlens` (MRTR elicitation + scope gating) is structurally the same problem as zbrain's owner-pinned claim approval lifecycle; comparing both implementations will inform the gateway's long-term UX.
 
@@ -87,8 +87,8 @@ All columns higher-is-better (1–5). `SecSim`/`DataSim` = security/data-access 
 | 2 | Go codebase researcher | 4 | 4 | 3 | 4 | 3 | 4 | 3 | 25 |
 | 3 | Multi-JDK/SDKMAN assistant | 5 | 3 | 3 | 4 | 3 | 4 | 3 | 25 |
 | 4 | IntelliJ project assistant | 2 | 3 | 3 | 3 | 3 | 2 | 3 | 19 |
-| 5 | GitHub repository auditor | 4 | 4 | 3 | 3 | 4 | 4 | 2 | 23 |
-| 6 | SDLC workflow auditor | 3 | 3 | 3 | 3 | 4 | 3 | 4 | 22 |
+| 5 | GitHub repository auditor | 4 | 4 | 3 | 3 | 4 | 4 | 2 | 24 |
+| 6 | SDLC workflow auditor | 3 | 3 | 3 | 3 | 4 | 3 | 4 | 23 |
 | 7 | **Linux crash/log analyzer** | **5** | **5** | **3** | **4** | **5** | **4** | **4** | **30** |
 | 8 | Vector search knowledge server | 4 | 4 | 3 | 3 | 3 | 3 | 2 | 22 |
 | 9 | CI/CD incident assistant | 4 | 5 | 2 | 3 | 5 | 3 | 4 | 26 |
