@@ -18,7 +18,7 @@ import (
 	"github.com/therealtinhtute/zbrain/internal/view"
 )
 
-const Version = "0.3.0"
+const Version = "0.3.1"
 
 var (
 	noFlags  = map[string]struct{}{}

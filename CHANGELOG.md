@@ -1,5 +1,32 @@
 # CHANGELOG
 
+## 0.3.1 (2026-08-26) — docs site + Pages deploy + CI runtime bumps
+
+Docs site and landing page ship to GitHub Pages; CI actions move off the
+deprecated Node 20 runtime. No Go runtime or trust contract change.
+
+### Added
+- `site/` — static docs site + landing page (vanilla HTML/CSS/JS, Hallmark Garden design, teal primary `#124b68`): landing, getting-started, concepts, CLI reference (from real `--help`), MCP gateway, architecture; deployed by `.github/workflows/pages.yml` to `https://therealtinhtute.github.io/zbrain/`
+- `site/assets/` — diagrams copied from `docs/diagrams/` (originals untouched)
+
+### Changed
+- Masthead centered with brand on its own row; active nav link bold + 1px underline; main column widened to min 50% of viewport (capped 60rem)
+
+### Fixed
+- CI actions pinned to Node 24 runtimes (Node 20 deprecated): `checkout@v6`, `setup-go@v6`, `configure-pages@v6`, `upload-pages-artifact@v5`, `deploy-pages@v5`, `upload-artifact@v6`, `codeql-action@v4`, `golangci-lint-action@v9`
+
+## 0.3.0 (2026-08-25) — MCP protocol era + security gate close
+
+MCP gateway moves to the 2026-07-28 stateless protocol era; phase-5 security
+gates close with go1.25.13, lint 0, govulncheck 0.
+
+### Added
+- `feat(mcp)`: speak MCP 2026-07-28 era via go-sdk v1.7.0 — stateless handshake, `server/discover`, per-request `_meta`
+
+### Fixed
+- `fix(security)`: close phase-5 gates — go1.25.13 toolchain, golangci-lint v2.13, govulncheck 0 affected, CI blocking removed
+- `fix(ci)`: golangci-lint-action v7 for golangci-lint v2; smoke cleanup falls back to rm when trash is absent
+
 ## 0.2.3 (2026-08-25) — perf+eval harness (Wave 0-3 fanout)
 
 Wave 0 baseline + Wave 1 perf/search + Wave 2 trust/drift/CLI + Wave 3 security/docs. No trust contract change.
