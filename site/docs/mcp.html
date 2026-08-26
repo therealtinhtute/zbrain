@@ -1,0 +1,148 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="The zbrain stdio MCP gateway, the owner-pinned approval ceremony, the loopback-only viewer, and optional local hybrid retrieval.">
+  <title>MCP gateway · zbrain</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Geist+Mono:wght@400&family=Hanken+Grotesk:wght@400;600&family=Young+Serif&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="../tokens.css">
+  <link rel="stylesheet" href="../css/main.css">
+  <script src="../js/main.js" defer></script>
+</head>
+<body>
+  <header class="nav-mast">
+    <div class="nav-mast__bar">
+      <a class="nav-mast__brand" href="../index.html">zbrain</a>
+      <span class="label">GO-NATIVE · LOCAL-FIRST</span>
+      <button id="nav-toggle" class="nav-mast__toggle" type="button" aria-expanded="false" aria-controls="nav-links">Menu</button>
+    </div>
+    <nav id="nav-links" class="nav-mast__links" aria-label="Primary">
+      <a href="getting-started.html">Getting started</a>
+      <a href="concepts.html">Concepts</a>
+      <a href="cli.html">CLI reference</a>
+      <a href="mcp.html">MCP gateway</a>
+      <a href="architecture.html">Architecture</a>
+    </nav>
+  </header>
+  <main>
+    <h1>MCP gateway</h1>
+    <p>The shipped binary is standalone and Go-native. It includes the local integration surfaces described in <code>docs/trusted-agent-gateway-spec.md</code>: the stdio gateway, the local owner ceremony, and the loopback viewer. All three surfaces reuse workspace boundaries and fail-closed trust validation; canonical Markdown and immutable evidence remain the trust inputs.</p>
+
+    <section>
+      <h2>zbrain mcp serve</h2>
+      <p>Run the MCP stdio gateway. stdout is protocol-only; diagnostics go to stderr.</p>
+      <p>The gateway serves the trusted-agent MCP gateway over stdio. Protocol frames stay on stdout and diagnostics stay on stderr. Help output, verbatim:</p>
+      <pre><code>Usage: zbrain mcp serve
+
+Serve the trusted-agent MCP gateway over stdio.</code></pre>
+      <pre><code>Usage: zbrain mcp serve
+
+Run the MCP stdio gateway. stdout is protocol-only; diagnostics go to stderr.</code></pre>
+      <p>The gateway operates on the same workspace boundaries as the CLI: the runtime root configured by <code>ZBRAIN_HOME</code> or the default <code>~/.zbrain/</code>. Canonical Markdown and immutable evidence remain the trust inputs; raw evidence is not indexed or treated as trusted instructions.</p>
+      <p>The gateway exposes these tools:</p>
+      <ul class="specimen">
+        <li class="specimen__item">
+          <p class="specimen__term">memory_reindex</p>
+          <p class="specimen__desc">Rebuilds the workspace index over MCP. Exposes the same embedding opt-in as <code>embedding: true</code>; the default is <code>false</code>.</p>
+        </li>
+        <li class="specimen__item">
+          <p class="specimen__term">memory_ask</p>
+          <p class="specimen__desc">Returns trusted context JSON over MCP. Exposes the same embedding opt-in as <code>embedding: true</code>; the default is <code>false</code>.</p>
+        </li>
+        <li class="specimen__item">
+          <p class="specimen__term">claim_lifecycle</p>
+          <p class="specimen__desc">The tool through which an agent requests a lifecycle transition. It applies the mutation itself; no HTTP endpoint does.</p>
+        </li>
+      </ul>
+    </section>
+
+    <section>
+      <h2>Approval ceremony</h2>
+      <p>An agent requests a lifecycle transition through the MCP <code>claim_lifecycle</code> tool; the local owner approves it. The agent receives a one-time grant token, and the gateway, not an HTTP endpoint, applies the mutation.</p>
+      <p>This is the owner-pinned lifecycle described in <code>docs/trusted-agent-gateway-spec.md</code>. The ceremony takes four steps:</p>
+      <pre><code>zbrain approval show &lt;challenge-id&gt;
+zbrain approval grant &lt;challenge-id&gt;</code></pre>
+      <ol>
+        <li><code>prepare</code> binds the workspace, operation, claim ID, canonical draft digest, superseded IDs, prior verification digest, and revoke reason, then returns a challenge ID, action summary, and SHA-256 action digest.</li>
+        <li>The owner runs <code>zbrain approval show &lt;challenge-id&gt;</code> to inspect the bound action.</li>
+        <li>In an interactive TTY, the owner runs <code>zbrain approval grant &lt;challenge-id&gt;</code>, confirms the final 16 hexadecimal digest characters, and receives the one-time token.</li>
+        <li>The agent calls <code>claim_lifecycle</code> with <code>apply</code> and the challenge ID/token; the gateway revalidates the workspace, token, expiry, and current canonical state under the workspace lock before applying the transition.</li>
+      </ol>
+      <p>The two owner commands, verbatim from their help output:</p>
+      <pre><code>Usage: zbrain approval show &lt;challenge-id&gt;
+
+Print the challenge action summary as JSON.</code></pre>
+      <pre><code>Usage: zbrain approval grant &lt;challenge-id&gt;
+
+Confirm the last 16 hex characters of the action digest in an interactive
+TTY, then verify and print the one-time token as JSON for later apply.</code></pre>
+      <p>The gateway is launched per use with <code>zbrain mcp serve</code>; there is no background service, and MCP is stdio-only.</p>
+      <p>Timing and replay facts:</p>
+      <ul class="specimen">
+        <li class="specimen__item">
+          <p class="specimen__term">Challenge</p>
+          <p class="specimen__desc">Valid for 15 minutes from preparation. <code>prepare</code> emits no plaintext token.</p>
+        </li>
+        <li class="specimen__item">
+          <p class="specimen__term">Grant token</p>
+          <p class="specimen__desc">The owner grant issues one with its own lifetime of up to 5 minutes, capped by the challenge expiry. The grant step records owner approval without consuming the token; <code>apply</code> atomically consumes it once.</p>
+        </li>
+        <li class="specimen__item">
+          <p class="specimen__term">Replay</p>
+          <p class="specimen__desc">Replay of a consumed token, an expired challenge or token, a mismatched digest, workspace, or claim, and a stale canonical draft all fail closed; the agent must prepare a fresh challenge rather than retrying a stale action.</p>
+        </li>
+      </ul>
+      <p>This is the owner-pinned ceremony: <code>prepare</code> emits no plaintext token, the owner grant issues the one-time token, and <code>apply</code> consumes it once under the workspace lock.</p>
+    </section>
+
+    <section>
+      <h2>zbrain view</h2>
+      <p>The loopback-only read-only viewer via <code>zbrain view</code> serves an embedded viewer on <code>127.0.0.1</code> only. Help output, verbatim:</p>
+      <pre><code>Usage: zbrain view
+
+Serve the embedded read-only viewer over loopback (127.0.0.1).
+
+The viewer binds loopback only, sends strict CSP and nosniff headers,
+has no CORS, and returns 405 for every method other than GET and HEAD.</code></pre>
+      <p>The viewer is read-only: it only reads workspace state, and its strict header policy leaves no room for embedding or cross-origin calls.</p>
+    </section>
+
+    <section>
+      <h2>Optional hybrid retrieval</h2>
+      <p>Lexical retrieval is the default for both the CLI and the MCP gateway. Hybrid retrieval is an explicit opt-in, never the default:</p>
+      <p>The behavior, verbatim from the README:</p>
+      <pre><code>Lexical retrieval is the default for both the CLI and the MCP gateway. Pass
+--embed to zbrain ask to opt into local hybrid retrieval, and use
+zbrain reindex --embed to build the local loopback embedding sidecar. The MCP
+memory_reindex and memory_ask tools expose the same opt-in as
+embedding: true; their default is false. Embedding work is local-only and
+never calls a network service. If the sidecar is missing or empty, an
+embedding request falls back to lexical results instead of failing or
+changing trust semantics.</code></pre>
+      <ul class="specimen">
+        <li class="specimen__item">
+          <p class="specimen__term">CLI</p>
+          <p class="specimen__desc">Pass <code>--embed</code> to <code>zbrain ask</code> to opt into local hybrid retrieval, and use <code>zbrain reindex --embed</code> to build the local loopback embedding sidecar.</p>
+        </li>
+        <li class="specimen__item">
+          <p class="specimen__term">MCP</p>
+          <p class="specimen__desc">The <code>memory_reindex</code> and <code>memory_ask</code> tools expose the same opt-in as <code>embedding: true</code>; their default is <code>false</code>.</p>
+        </li>
+        <li class="specimen__item">
+          <p class="specimen__term">Local-only</p>
+          <p class="specimen__desc">Embedding work is local-only and never calls a network service. If the sidecar is missing or empty, an embedding request falls back to lexical results instead of failing or changing trust semantics.</p>
+        </li>
+      </ul>
+      <p>All gateway surfaces preserve the fail-closed runtime contract: <code>ask</code> fails closed for dirty, missing, stale, or rejected indexes, and <code>claim_lifecycle apply</code> revalidates workspace, token, expiry, and canonical state before mutating. MCP is stdio-only; there is no remote or HTTP MCP transport.</p>
+      <p>See the <a href="cli.html">CLI reference</a> for the <code>mcp</code>, <code>view</code>, and <code>approval</code> command details, <a href="concepts.html">Concepts</a> for the trust model, and <a href="getting-started.html">Getting started</a> for the workflow.</p>
+    </section>
+  </main>
+  <footer class="foot-letter">
+    <p class="foot-letter__sign">zbrain — local-first trusted memory for AI agents.</p>
+        <p class="foot-letter__meta">Version 0.2.0 · <a href="https://github.com/therealtinhtute/zbrain">GitHub</a> · <a href="../LICENSE">MIT License</a> · <a href="../index.html">Docs</a></p>
+  </footer>
+</body>
+</html>

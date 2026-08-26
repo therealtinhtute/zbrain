@@ -1,0 +1,127 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="zbrain is a Go-native CLI for local-first trusted memory and workspace-isolated agent context.">
+  <title>zbrain — local-first trusted memory</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Geist+Mono:wght@400;500&family=Hanken+Grotesk:wght@400;600&family=Young+Serif&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="tokens.css">
+  <link rel="stylesheet" href="css/main.css">
+  <script src="js/main.js" defer></script>
+</head>
+<body>
+  <header class="nav-mast">
+    <div class="nav-mast__bar">
+      <a class="nav-mast__brand" href="index.html">zbrain</a>
+      <span class="label">GO-NATIVE · LOCAL-FIRST</span>
+      <button id="nav-toggle" class="nav-mast__toggle" type="button" aria-expanded="false" aria-controls="nav-links">Menu</button>
+    </div>
+    <nav id="nav-links" class="nav-mast__links" aria-label="Primary">
+      <a href="docs/getting-started.html">Getting started</a>
+      <a href="docs/concepts.html">Concepts</a>
+      <a href="docs/cli.html">CLI reference</a>
+      <a href="docs/mcp.html">MCP gateway</a>
+      <a href="docs/architecture.html">Architecture</a>
+    </nav>
+  </header>
+
+  <main>
+    <section aria-labelledby="masthead-title">
+      <h1 id="masthead-title">zbrain</h1>
+      <p>zbrain is a Go-native CLI for local-first trusted memory and workspace-isolated agent context.</p>
+      <p class="label">GO-NATIVE · LOCAL-FIRST · NO LLM REQUIRED</p>
+      <p>
+        <a class="cta" href="docs/getting-started.html">Get started</a>
+        <a href="https://github.com/therealtinhtute/zbrain/blob/master/README.md">Read the README</a>
+      </p>
+    </section>
+
+    <section aria-labelledby="what-title">
+      <h2 id="what-title">What it is</h2>
+      <p>The shipped runtime keeps canonical OKF-style Markdown claims and immutable local evidence snapshots, builds a disposable SQLite FTS5 index, and returns trusted context JSON. It does not call an LLM or model provider.</p>
+    </section>
+
+    <section aria-labelledby="features-title">
+      <h2 id="features-title">Features</h2>
+      <ul class="specimen">
+        <li class="specimen__item">
+          <p class="specimen__term">Workspace isolation</p>
+          <p class="specimen__desc">Workspace-isolated memory rooted at <code>~/.zbrain/</code> or <code>ZBRAIN_HOME</code>.</p>
+        </li>
+        <li class="specimen__item">
+          <p class="specimen__term">Claim tiers</p>
+          <p class="specimen__desc">OKF-style claim concepts in the <code>axioms</code>, <code>mental-models</code>, <code>projects</code>, and <code>decisions</code> tiers.</p>
+        </li>
+        <li class="specimen__item">
+          <p class="specimen__term">Claim lifecycle</p>
+          <p class="specimen__desc">Explicit claim lifecycle: <code>draft -&gt; approved -&gt; superseded|revoked</code>.</p>
+        </li>
+        <li class="specimen__item">
+          <p class="specimen__term">Evidence snapshots</p>
+          <p class="specimen__desc">Immutable local evidence snapshots with origin, capture time, media type, byte length, and SHA-256 metadata.</p>
+        </li>
+        <li class="specimen__item">
+          <p class="specimen__term">Lexical index</p>
+          <p class="specimen__desc">Rebuildable per-workspace SQLite FTS5 lexical indexes.</p>
+        </li>
+        <li class="specimen__item">
+          <p class="specimen__term">Fail-closed retrieval</p>
+          <p class="specimen__desc">Fail-closed trusted retrieval with visible <code>ready</code>, <code>gap</code>, and <code>blocked</code> outcomes.</p>
+        </li>
+        <li class="specimen__item">
+          <p class="specimen__term">Diagnostics</p>
+          <p class="specimen__desc"><code>status</code> and <code>doctor</code> diagnostics for index and embedding configuration.</p>
+        </li>
+        <li class="specimen__item">
+          <p class="specimen__term">Hybrid retrieval</p>
+          <p class="specimen__desc">Optional local hybrid retrieval through <code>ask --embed</code>; lexical retrieval remains the default and fallback.</p>
+        </li>
+        <li class="specimen__item">
+          <p class="specimen__term">MCP gateway</p>
+          <p class="specimen__desc">A stdio MCP gateway via <code>zbrain mcp serve</code>, with an owner-pinned approval ceremony.</p>
+        </li>
+        <li class="specimen__item">
+          <p class="specimen__term">Loopback viewer</p>
+          <p class="specimen__desc">A loopback-only read-only viewer via <code>zbrain view</code>.</p>
+        </li>
+        <li class="specimen__item">
+          <p class="specimen__term">Embedded assets</p>
+          <p class="specimen__desc">Embedded runtime assets extracted by <code>zbrain setup</code>.</p>
+        </li>
+      </ul>
+    </section>
+
+    <section aria-labelledby="trust-title">
+      <h2 id="trust-title">Trust and data flow</h2>
+      <ol class="trustflow">
+        <li><code>evidence add</code> copies an already-local file into an immutable evidence snapshot and records its metadata.</li>
+        <li><code>claim draft</code> writes an OKF claim candidate. The claim body is read from stdin; drafts are never trusted answer material.</li>
+        <li><code>claim approve</code> validates the claim basis and referenced evidence or supporting claims, then records <code>verified.at</code>, <code>verified.by</code>, and <code>verified.digest</code>.</li>
+        <li><code>reindex</code> scans canonical Markdown and evidence, validates trust inputs, and publishes a clean or rejected disposable index without rewriting canonical files.</li>
+        <li><code>ask</code> checks index freshness and the returned claim's canonical binding and trust dependencies before returning JSON. Conflicts produce <code>blocked</code>; no matching approved claim produces <code>gap</code>.</li>
+      </ol>
+    </section>
+
+    <section aria-labelledby="install-title">
+      <h2 id="install-title">Install</h2>
+      <pre><code>go install github.com/therealtinhtute/zbrain/cmd/zbrain@latest
+zbrain setup</code></pre>
+      <p><code>ZBRAIN_HOME</code> overrides the runtime root. Without it, the default is <code>~/.zbrain/</code>. Use it for tests, smoke runs, and isolated experiments:</p>
+      <pre><code>ZBRAIN_HOME=/tmp/zbrain-dev go run ./cmd/zbrain setup</code></pre>
+    </section>
+
+    <section aria-labelledby="boundaries-title">
+      <h2 id="boundaries-title">Boundaries</h2>
+      <p>The current slice is intentionally local and minimal: no hosted sync, no network crawling, no background service, and no model-provider integration. MCP is stdio-only, the viewer is loopback-only, and optional embeddings are local sidecars rather than a trust or availability requirement. All surfaces preserve the fail-closed runtime contract.</p>
+    </section>
+  </main>
+
+  <footer class="foot-letter">
+    <p class="foot-letter__sign">zbrain — local-first trusted memory for AI agents.</p>
+    <p class="foot-letter__meta">Version 0.2.0 · <a href="https://github.com/therealtinhtute/zbrain">GitHub</a> · <a href="LICENSE">MIT License</a> · <a href="https://github.com/therealtinhtute/zbrain/blob/master/README.md">README</a> · <code>zbrain --help</code></p>
+  </footer>
+</body>
+</html>

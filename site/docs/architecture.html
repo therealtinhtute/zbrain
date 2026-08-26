@@ -1,0 +1,150 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="How zbrain is built: edge CLI, canonical Markdown and evidence, a disposable SQLite index, and the trust and data flow.">
+  <title>Architecture · zbrain</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Geist+Mono:wght@400&family=Hanken+Grotesk:wght@400;600&family=Young+Serif&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="../tokens.css">
+  <link rel="stylesheet" href="../css/main.css">
+  <script src="../js/main.js" defer></script>
+</head>
+<body>
+  <header class="nav-mast">
+    <div class="nav-mast__bar">
+      <a class="nav-mast__brand" href="../index.html">zbrain</a>
+      <span class="label">GO-NATIVE · LOCAL-FIRST</span>
+      <button id="nav-toggle" class="nav-mast__toggle" type="button" aria-expanded="false" aria-controls="nav-links">Menu</button>
+    </div>
+    <nav id="nav-links" class="nav-mast__links" aria-label="Primary">
+      <a href="getting-started.html">Getting started</a>
+      <a href="concepts.html">Concepts</a>
+      <a href="cli.html">CLI reference</a>
+      <a href="mcp.html">MCP gateway</a>
+      <a href="architecture.html">Architecture</a>
+    </nav>
+  </header>
+  <main>
+    <h1>Architecture</h1>
+    <p>The CLI keeps argument parsing and output at the edge. Durable behavior lives in <code>internal/runtime/</code>; Markdown and evidence are canonical, while SQLite is a derived cache that can be discarded and rebuilt.</p>
+    <p>The shipped runtime keeps canonical OKF-style Markdown claims and immutable local evidence snapshots, builds a disposable SQLite FTS5 index, and returns trusted context JSON. It does not call an LLM or model provider.</p>
+
+    <section>
+      <h2>Overview</h2>
+      <figure class="diagram-figure">
+        <img src="../assets/architecture-overview.png" width="1672" height="941" loading="lazy" alt="Architecture overview: CLI, runtime packages, canonical inputs, embedded assets, disposable index, and JSON outputs.">
+        <figcaption>Architecture overview: CLI, runtime packages, canonical inputs, embedded assets, disposable index, and JSON outputs.</figcaption>
+      </figure>
+      <figure class="diagram-figure">
+        <img src="../assets/trust-data-flow.png" width="1672" height="941" loading="lazy" alt="Trust flow: evidence capture, claim approval, rebuild validation, and trusted query outcomes.">
+        <figcaption>Trust flow: evidence capture, claim approval, rebuild validation, and trusted query outcomes.</figcaption>
+      </figure>
+    </section>
+
+    <section>
+      <h2>Canonical and derived state</h2>
+      <p>zbrain distinguishes what is canonical from what can be thrown away and rebuilt:</p>
+      <ul class="specimen">
+        <li class="specimen__item">
+          <p class="specimen__term">Canonical</p>
+          <p class="specimen__desc">OKF-style Markdown claims and immutable local evidence snapshots. These are the trust inputs for every surface.</p>
+        </li>
+        <li class="specimen__item">
+          <p class="specimen__term">Disposable</p>
+          <p class="specimen__desc">The per-workspace SQLite FTS5 lexical index. <code>reindex</code> scans canonical Markdown and evidence, validates trust inputs, and publishes a clean or rejected index without rewriting canonical files.</p>
+        </li>
+        <li class="specimen__item">
+          <p class="specimen__term">Extracted</p>
+          <p class="specimen__desc"><code>setup</code> extracts <code>README.md</code>, <code>agents/</code>, <code>engine/</code>, <code>skills/</code>, and <code>templates/</code> from the embedded <code>assets/</code> filesystem; it does not activate a workspace seed.</p>
+        </li>
+      </ul>
+    </section>
+
+    <section>
+      <h2>Trust and data flow</h2>
+      <ol class="trustflow">
+        <li><code>evidence add</code> copies an already-local file into an immutable evidence snapshot and records its metadata.</li>
+        <li><code>claim draft</code> writes an OKF claim candidate. The claim body is read from stdin; drafts are never trusted answer material.</li>
+        <li><code>claim approve</code> validates the claim basis and referenced evidence or supporting claims, then records <code>verified.at</code>, <code>verified.by</code>, and <code>verified.digest</code>.</li>
+        <li><code>reindex</code> scans canonical Markdown and evidence, validates trust inputs, and publishes a clean or rejected disposable index without rewriting canonical files.</li>
+        <li><code>ask</code> checks index freshness and the returned claim's canonical binding and trust dependencies before returning JSON. Conflicts produce <code>blocked</code>; no matching approved claim produces <code>gap</code>.</li>
+      </ol>
+    </section>
+
+    <section>
+      <h2>Shipped gateway and viewer</h2>
+      <p>The shipped binary is standalone and Go-native. It includes the local integration surfaces described in <code>docs/trusted-agent-gateway-spec.md</code>:</p>
+      <ul class="specimen">
+        <li class="specimen__item">
+          <p class="specimen__term">mcp serve</p>
+          <p class="specimen__desc"><code>zbrain mcp serve</code> runs the trusted-agent gateway over stdio. Protocol frames stay on stdout and diagnostics stay on stderr.</p>
+        </li>
+        <li class="specimen__item">
+          <p class="specimen__term">approval</p>
+          <p class="specimen__desc"><code>zbrain approval show &lt;challenge-id&gt;</code> and <code>zbrain approval grant &lt;challenge-id&gt;</code> provide the local owner ceremony for lifecycle actions. The agent receives a one-time grant token; the gateway, not an HTTP endpoint, applies the mutation.</p>
+        </li>
+        <li class="specimen__item">
+          <p class="specimen__term">view</p>
+          <p class="specimen__desc"><code>zbrain view</code> serves a read-only embedded viewer on <code>127.0.0.1</code> only.</p>
+        </li>
+      </ul>
+      <p>All three surfaces reuse workspace boundaries and fail-closed trust validation; canonical Markdown and immutable evidence remain the trust inputs.</p>
+    </section>
+
+    <section>
+      <h2>Repository structure</h2>
+      <p>The repository keeps command handling thin and durable behavior in the runtime package:</p>
+      <pre><code>cmd/zbrain/         CLI binary entrypoint
+internal/cli/       command dispatch and user-facing behavior
+internal/runtime/   paths, config, assets, workspaces, claims, evidence,
+                    trust validation, index, and query
+assets/             embedded runtime content copied by setup
+docs/               current supporting docs, diagrams, and durable plans</code></pre>
+      <p><code>assets/</code> is the embedded runtime content source of truth; <code>setup</code> copies it into the runtime root, and <code>docs/</code> holds durable plans and supporting documentation.</p>
+    </section>
+
+    <section>
+      <h2>Build and deployment</h2>
+      <p>Build a standalone binary with:</p>
+      <pre><code>make build
+./dist/zbrain --help</code></pre>
+      <p>The binary embeds runtime assets; deployment needs no JavaScript runtime, package manager, hosted database, network crawler, or model provider. Run <code>zbrain setup</code> on the target machine to extract its assets into that machine's runtime root. Keep runtime data outside the repository and do not package populated personal workspaces or credentials.</p>
+    </section>
+
+    <section>
+      <h2>Boundaries</h2>
+      <p>The current slice is intentionally local and minimal. It has no hosted sync, network crawling, background service, GUI editor, remote or HTTP MCP transport, hosted vector database, semantic-search requirement, session transcript store, or model-provider integration:</p>
+      <ul class="specimen">
+        <li class="specimen__item">
+          <p class="specimen__term">No services</p>
+          <p class="specimen__desc">No hosted sync, network crawling, background service, GUI editor, remote or HTTP MCP transport, hosted vector database, semantic-search requirement, session transcript store, or model-provider integration.</p>
+        </li>
+        <li class="specimen__item">
+          <p class="specimen__term">MCP</p>
+          <p class="specimen__desc">MCP is stdio-only.</p>
+        </li>
+        <li class="specimen__item">
+          <p class="specimen__term">Viewer</p>
+          <p class="specimen__desc">The viewer is loopback-only.</p>
+        </li>
+        <li class="specimen__item">
+          <p class="specimen__term">Embeddings</p>
+          <p class="specimen__desc">Optional embeddings are local sidecars rather than a trust or availability requirement.</p>
+        </li>
+        <li class="specimen__item">
+          <p class="specimen__term">Fail-closed</p>
+          <p class="specimen__desc">All surfaces preserve the fail-closed runtime contract.</p>
+        </li>
+      </ul>
+      <p>See <a href="concepts.html">Concepts</a> for the trust model, and <a href="getting-started.html">Getting started</a> for the runtime layout in practice.</p>
+    </section>
+  </main>
+  <footer class="foot-letter">
+    <p class="foot-letter__sign">zbrain — local-first trusted memory for AI agents.</p>
+        <p class="foot-letter__meta">Version 0.2.0 · <a href="https://github.com/therealtinhtute/zbrain">GitHub</a> · <a href="../LICENSE">MIT License</a> · <a href="../index.html">Docs</a></p>
+  </footer>
+</body>
+</html>

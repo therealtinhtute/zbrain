@@ -1,0 +1,158 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="How zbrain models trust: OKF claim frontmatter, the four claim tiers, the claim lifecycle, evidence snapshots, and retrieval outcomes.">
+  <title>Concepts · zbrain</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Geist+Mono:wght@400&family=Hanken+Grotesk:wght@400;600&family=Young+Serif&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="../tokens.css">
+  <link rel="stylesheet" href="../css/main.css">
+  <script src="../js/main.js" defer></script>
+</head>
+<body>
+  <header class="nav-mast">
+    <div class="nav-mast__bar">
+      <a class="nav-mast__brand" href="../index.html">zbrain</a>
+      <span class="label">GO-NATIVE · LOCAL-FIRST</span>
+      <button id="nav-toggle" class="nav-mast__toggle" type="button" aria-expanded="false" aria-controls="nav-links">Menu</button>
+    </div>
+    <nav id="nav-links" class="nav-mast__links" aria-label="Primary">
+      <a href="getting-started.html">Getting started</a>
+      <a href="concepts.html">Concepts</a>
+      <a href="cli.html">CLI reference</a>
+      <a href="mcp.html">MCP gateway</a>
+      <a href="architecture.html">Architecture</a>
+    </nav>
+  </header>
+  <main>
+    <h1>Concepts</h1>
+    <p>zbrain treats a small set of concepts as the trust boundary: OKF-style claim documents, immutable evidence snapshots, and a disposable index that is rebuilt from canonical Markdown. Everything below traces to the shipped trust model.</p>
+
+    <section>
+      <h2>What a claim is</h2>
+      <p>Trusted claims are OKF-style Markdown documents with a typed frontmatter block. The shipped profile is <code>zbrain.trusted-memory/v1</code>:</p>
+      <pre><code>type: zbrain.claim
+zbrain:
+  profile: zbrain.trusted-memory/v1
+  id: clm_&lt;32 lowercase hex characters&gt;
+  tier: axioms | mental-models | projects | decisions
+  basis: owner | evidence | derived
+status: draft | approved | superseded | revoked</code></pre>
+      <p><code>zbrain.id</code> is the stable trust identity; the path is not the identity. Approved claims carry a verification digest over their canonical rendered content.</p>
+      <h3>Basis</h3>
+      <p>Every claim carries a basis, recorded in the frontmatter and passed with <code>--basis &lt;owner|evidence|derived&gt;</code> on <code>claim draft</code>:</p>
+      <ul class="specimen">
+        <li class="specimen__item">
+          <p class="specimen__term">owner</p>
+          <p class="specimen__desc">Claims asserted directly by the owner. The getting-started tour drafts and approves one with <code>--basis owner</code> and no further references.</p>
+        </li>
+        <li class="specimen__item">
+          <p class="specimen__term">evidence</p>
+          <p class="specimen__desc">Evidence-based claims must pass an evidence ID from <code>evidence add</code> using <code>--evidence</code>.</p>
+        </li>
+        <li class="specimen__item">
+          <p class="specimen__term">derived</p>
+          <p class="specimen__desc">Derived claims must reference approved supporting claims or verified evidence.</p>
+        </li>
+      </ul>
+    </section>
+
+    <section>
+      <h2>Tiers</h2>
+      <p>Claim concepts live in four tiers, recorded in the frontmatter and passed with <code>--tier &lt;tier&gt;</code> on <code>claim draft</code> and <code>claim supersede</code>:</p>
+      <ul>
+        <li><code>axioms</code></li>
+        <li><code>mental-models</code></li>
+        <li><code>projects</code></li>
+        <li><code>decisions</code></li>
+      </ul>
+      <p><code>claim supersede</code> accepts a <code>--tier</code> for the replacement claim.</p>
+    </section>
+
+    <section>
+      <h2>Lifecycle</h2>
+      <p>Every claim follows an explicit lifecycle: <code>draft -&gt; approved -&gt; superseded|revoked</code>.</p>
+      <ul>
+        <li><code>claim draft</code> writes an OKF claim candidate. The claim body is read from stdin; drafts are never trusted answer material.</li>
+        <li><code>claim approve</code> validates the claim basis and referenced evidence or supporting claims, then records <code>verified.at</code>, <code>verified.by</code>, and <code>verified.digest</code>.</li>
+        <li>Approved claims are replaced through supersession, not in-place editing. Only valid <code>approved</code> claims enter trusted results.</li>
+      </ul>
+      <ul>
+        <li><code>claim supersede &lt;id&gt;</code> is how approved claims are replaced: the replacement carries the supplied <code>--tier</code>, <code>--title</code>, and <code>--basis</code>. Supersession, not in-place editing.</li>
+        <li><code>claim revoke &lt;id&gt; --reason &lt;text&gt;</code> marks a claim revoked with a recorded reason.</li>
+      </ul>
+      <p>Use <code>migrate okf</code> for legacy <code>schema: zbrain.claim/v1</code> files. It reports whether reapproval is required; migration does not silently make an old approval trusted.</p>
+    </section>
+
+    <section>
+      <h2>Evidence</h2>
+      <p><code>evidence add</code> copies an already-local file into an immutable evidence snapshot and records its metadata: origin, capture time, media type, byte length, and SHA-256.</p>
+      <ul>
+        <li>Evidence snapshots are immutable local copies; raw evidence is not indexed or treated as trusted instructions.</li>
+      </ul>
+      <p>Claims cite snapshots by evidence ID (<code>--evidence &lt;id&gt;</code>); <code>claim approve</code> validates the claim basis and the referenced evidence or supporting claims before recording the verification digest.</p>
+    </section>
+
+    <section>
+      <h2>Trust and retrieval outcomes</h2>
+      <p>Retrieval is fail-closed with visible <code>ready</code>, <code>gap</code>, and <code>blocked</code> outcomes. <code>ask</code> checks index freshness and the returned claim's canonical binding and trust dependencies before returning JSON.</p>
+      <ul class="specimen">
+        <li class="specimen__item">
+          <p class="specimen__term">ready</p>
+          <p class="specimen__desc">A matching valid approved claim passes validation and is returned as trusted context JSON.</p>
+        </li>
+        <li class="specimen__item">
+          <p class="specimen__term">gap</p>
+          <p class="specimen__desc">No matching approved claim produces <code>status: "gap"</code>. A <code>gap</code> is a trusted-memory miss, not permission to use drafts or raw evidence. Add or approve a valid claim, then reindex.</p>
+        </li>
+        <li class="specimen__item">
+          <p class="specimen__term">blocked</p>
+          <p class="specimen__desc">Explicit claim conflicts return <code>status: "blocked"</code>. The matched approved claims contain an explicit conflict; resolve it through the claim lifecycle.</p>
+        </li>
+      </ul>
+    </section>
+
+    <section>
+      <h2>Promotion candidates</h2>
+      <p>Drafts are returned, when matched, only as <code>promotion_candidates</code>. They are never trusted answer material; promotion is a separate step in the lifecycle.</p>
+    </section>
+
+    <section>
+      <h2>Fail-closed rules</h2>
+      <ul class="specimen">
+        <li class="specimen__item">
+          <p class="specimen__term">reindex</p>
+          <p class="specimen__desc"><code>reindex</code> rejects invalid claims, invalid evidence, broken supporting-claim closures, and stale or legacy-unindexed trust inputs without rewriting them.</p>
+        </li>
+        <li class="specimen__item">
+          <p class="specimen__term">ask</p>
+          <p class="specimen__desc"><code>ask</code> fails closed for dirty, missing, stale, or rejected indexes.</p>
+        </li>
+      </ul>
+      <p>See the <a href="cli.html">CLI reference</a> for the commands behind these rules, and <a href="getting-started.html">Getting started</a> for the workflow in practice.</p>
+    </section>
+    <section>
+      <h2>Trust model at a glance</h2>
+      <p>The shipped trust model, in full:</p>
+      <ul>
+        <li><code>zbrain.id</code> is the stable trust identity; the path is not the identity.</li>
+        <li>Approved claims are replaced through supersession, not in-place editing.</li>
+        <li>Only valid <code>approved</code> claims enter trusted results.</li>
+        <li>Drafts are returned, when matched, only as <code>promotion_candidates</code>.</li>
+        <li>Approved claims carry a verification digest over their canonical rendered content.</li>
+        <li>Evidence snapshots are immutable local copies; raw evidence is not indexed or treated as trusted instructions.</li>
+        <li><code>reindex</code> rejects invalid claims, invalid evidence, broken supporting-claim closures, and stale or legacy-unindexed trust inputs without rewriting them.</li>
+        <li><code>ask</code> fails closed for dirty, missing, stale, or rejected indexes.</li>
+        <li>Explicit claim conflicts return <code>status: "blocked"</code>; no matching trusted claim returns <code>status: "gap"</code>.</li>
+      </ul>
+    </section>
+  </main>
+  <footer class="foot-letter">
+    <p class="foot-letter__sign">zbrain — local-first trusted memory for AI agents.</p>
+        <p class="foot-letter__meta">Version 0.2.0 · <a href="https://github.com/therealtinhtute/zbrain">GitHub</a> · <a href="../LICENSE">MIT License</a> · <a href="../index.html">Docs</a></p>
+  </footer>
+</body>
+</html>

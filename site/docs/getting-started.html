@@ -1,0 +1,174 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="Install zbrain, configure ZBRAIN_HOME, create a workspace, and run your first trusted query.">
+  <title>Getting started · zbrain</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Geist+Mono:wght@400&family=Hanken+Grotesk:wght@400;600&family=Young+Serif&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="../tokens.css">
+  <link rel="stylesheet" href="../css/main.css">
+  <script src="../js/main.js" defer></script>
+</head>
+<body>
+  <header class="nav-mast">
+    <div class="nav-mast__bar">
+      <a class="nav-mast__brand" href="../index.html">zbrain</a>
+      <span class="label">GO-NATIVE · LOCAL-FIRST</span>
+      <button id="nav-toggle" class="nav-mast__toggle" type="button" aria-expanded="false" aria-controls="nav-links">Menu</button>
+    </div>
+    <nav id="nav-links" class="nav-mast__links" aria-label="Primary">
+      <a href="getting-started.html">Getting started</a>
+      <a href="concepts.html">Concepts</a>
+      <a href="cli.html">CLI reference</a>
+      <a href="mcp.html">MCP gateway</a>
+      <a href="architecture.html">Architecture</a>
+    </nav>
+  </header>
+  <main>
+    <h1>Getting started</h1>
+    <p>zbrain is a Go-native CLI for local-first trusted memory and workspace-isolated agent context. The shipped runtime keeps canonical OKF-style Markdown claims and immutable local evidence snapshots, builds a disposable SQLite FTS5 index, and returns trusted context JSON. It does not call an LLM or model provider.</p>
+
+    <section>
+      <h2>Prerequisites</h2>
+      <ul>
+        <li>Go 1.24 or newer.</li>
+        <li>SQLite with FTS5 support is provided by the Go SQLite dependency; no external database or retrieval service is required.</li>
+      </ul>
+    </section>
+
+    <section>
+      <h2>Install the published binary</h2>
+      <p>Install the latest published binary:</p>
+      <pre><code>go install github.com/therealtinhtute/zbrain/cmd/zbrain@latest
+zbrain setup</code></pre>
+    </section>
+
+    <section>
+      <h2>Local development</h2>
+      <p>For local development:</p>
+      <pre><code>git clone &lt;repo&gt;
+cd zbrain
+export ZBRAIN_HOME=/tmp/zbrain-dev
+go run ./cmd/zbrain setup</code></pre>
+    </section>
+
+    <section>
+      <h2>Configuration and ZBRAIN_HOME</h2>
+      <p><code>ZBRAIN_HOME</code> overrides the runtime root. Without it, the default is <code>~/.zbrain/</code>. Use it for tests, smoke runs, and isolated experiments:</p>
+      <pre><code>ZBRAIN_HOME=/tmp/zbrain-dev go run ./cmd/zbrain setup</code></pre>
+      <p><code>zbrain setup</code> creates <code>config.yml</code> when needed. The first <code>workspace create &lt;name&gt;</code> sets <code>default_workspace</code>; later commands use that workspace unless they receive <code>--workspace &lt;name&gt;</code>.</p>
+    </section>
+
+    <section>
+      <h2>Runtime layout</h2>
+      <p>Runtime layout after setup and <code>workspace create research</code>:</p>
+      <pre><code>&lt;ZBRAIN_HOME&gt;/
+  config.yml
+  README.md                  # extracted runtime asset
+  agents/
+  engine/
+  skills/
+  templates/
+  indexes/
+    research.sqlite          # disposable SQLite FTS5 index
+    research.dirty           # present while rebuild is incomplete
+  workspaces/
+    research/
+      workspace.md
+      agents/
+      wiki/
+        axioms/
+        mental-models/
+        projects/
+        decisions/
+      evidence/
+        _index.md
+        sources/&lt;evd_id&gt;/
+          raw
+          source.yaml
+        analysis/
+        qa/
+        applied/
+        archive/</code></pre>
+      <p><code>setup</code> extracts <code>README.md</code>, <code>agents/</code>, <code>engine/</code>, <code>skills/</code>, and <code>templates/</code> from the embedded <code>assets/</code> filesystem. It does not activate a workspace seed; <code>workspace create</code> creates the selected workspace and <code>reindex</code> creates its disposable index.</p>
+    </section>
+
+    <section>
+      <h2>Create a workspace and capture evidence</h2>
+      <p>Create an isolated workspace and capture evidence:</p>
+      <pre><code>export ZBRAIN_HOME=/tmp/zbrain-dev
+go run ./cmd/zbrain setup
+go run ./cmd/zbrain workspace create research
+go run ./cmd/zbrain workspace current
+go run ./cmd/zbrain evidence add \
+  --file ./notes.txt \
+  --origin file://notes.txt \
+  --media-type text/plain</code></pre>
+    </section>
+
+    <section>
+      <h2>Quick tour: draft, approve, reindex, ask</h2>
+      <p>Create a claim from stdin, approve it, rebuild, and query it:</p>
+      <pre><code>claim_json=$(printf 'The local source is authoritative.\n' | \
+  go run ./cmd/zbrain claim draft \
+    --tier projects \
+    --title 'Source authority' \
+    --basis owner)
+claim_id=$(printf '%s' "$claim_json" | python3 -c \
+  'import json,sys; print(json.load(sys.stdin)["id"])')
+go run ./cmd/zbrain claim approve "$claim_id"
+go run ./cmd/zbrain reindex
+go run ./cmd/zbrain status
+go run ./cmd/zbrain ask authoritative source</code></pre>
+      <p>Evidence-based claims must pass an evidence ID from <code>evidence add</code> using <code>--evidence</code>. Derived claims must reference approved supporting claims or verified evidence. <code>--include &lt;name&gt;</code> adds an explicit read-only secondary workspace; it is never implicit.</p>
+      <p>Use <code>migrate okf</code> for legacy <code>schema: zbrain.claim/v1</code> files. It reports whether reapproval is required; migration does not silently make an old approval trusted.</p>
+      <p>See the <a href="cli.html">CLI reference</a> for the full command surface, and <a href="concepts.html">Concepts</a> for the trust model behind the workflow.</p>
+    </section>
+
+    <section>
+      <h2>Troubleshooting</h2>
+      <table>
+        <thead>
+          <tr>
+            <th scope="col">Symptom</th>
+            <th scope="col">What to do</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><code>no default workspace configured</code></td>
+            <td>Run <code>zbrain workspace create &lt;name&gt;</code>.</td>
+          </tr>
+          <tr>
+            <td><code>index does not exist</code>, <code>index is dirty</code>, <code>index is stale</code>, or <code>index is rejected</code></td>
+            <td>Run <code>zbrain reindex</code>, then inspect <code>zbrain status</code> and <code>zbrain doctor</code>.</td>
+          </tr>
+          <tr>
+            <td><code>doctor</code> reports domain findings with exit code <code>2</code></td>
+            <td>Its JSON includes <code>findings</code> and <code>next_action</code>.</td>
+          </tr>
+          <tr>
+            <td><code>ask</code> returns <code>gap</code></td>
+            <td>A <code>gap</code> is a trusted-memory miss, not permission to use drafts or raw evidence. Add or approve a valid claim, then reindex.</td>
+          </tr>
+          <tr>
+            <td><code>ask</code> returns <code>blocked</code></td>
+            <td>The matched approved claims contain an explicit conflict; resolve it through the claim lifecycle.</td>
+          </tr>
+          <tr>
+            <td><code>ZBRAIN_HOME</code> differs between commands</td>
+            <td>If <code>ZBRAIN_HOME</code> is set, every command in the session must use the same value to inspect the same runtime.</td>
+          </tr>
+        </tbody>
+      </table>
+    </section>
+  </main>
+  <footer class="foot-letter">
+    <p class="foot-letter__sign">zbrain — local-first trusted memory for AI agents.</p>
+        <p class="foot-letter__meta">Version 0.2.0 · <a href="https://github.com/therealtinhtute/zbrain">GitHub</a> · <a href="../LICENSE">MIT License</a> · <a href="../index.html">Docs</a></p>
+  </footer>
+</body>
+</html>
