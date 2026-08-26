@@ -18,9 +18,14 @@ body {
 }
 
 main {
-  max-width: var(--measure);
+  width: min(100%, max(50%, 34rem));
+  max-width: 60rem;
   margin: 0 auto;
   padding: 0 1.25rem;
+}
+
+p, li {
+  max-width: var(--measure);
 }
 
 section + section {
@@ -122,22 +127,25 @@ pre code {
 .nav-mast__bar {
   display: flex;
   align-items: center;
-  gap: 1rem;
+  justify-content: center;
+  gap: 0.875rem;
   min-height: var(--banner-height);
-  padding: 0 1.25rem;
+  padding: 0.75rem 1.25rem;
 }
 
 .nav-mast__brand {
   font-family: var(--font-display);
-  font-size: 1.5rem;
+  font-size: 1.75rem;
   line-height: 1;
   color: var(--color-ink);
   text-decoration: none;
+  text-align: center;
 }
 
 .nav-mast__links {
   display: flex;
   flex-wrap: wrap;
+  justify-content: center;
   gap: 0.25rem 1.5rem;
   padding: 0 1.25rem 0.75rem;
 }
@@ -164,7 +172,6 @@ pre code {
   justify-content: center;
   min-height: 44px;
   min-width: 44px;
-  margin-left: auto;
   padding: 0 0.75rem;
   background: none;
   border: 1px solid var(--color-rule);
@@ -364,6 +371,18 @@ thead th {
 
   .nav-mast__toggle {
     display: inline-flex;
+    position: absolute;
+    top: 50%;
+    right: 0.75rem;
+    transform: translateY(-50%);
+  }
+
+  .nav-mast__bar {
+    position: relative;
+  }
+
+  .nav-mast__bar .label {
+    display: none;
   }
 
   .nav-mast__links {
