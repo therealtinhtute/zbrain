@@ -29,7 +29,7 @@ Important nuance: *stateless protocol does not mean stateless application.* Cros
 
 Short version, three points:
 
-1. `internal/mcp/` currently speaks at most `2025-11-25`: it pins `go-sdk` v1.4.0, whose latest supported spec is `2025-11-25` per the SDK compatibility table (the only protocol version string in this repo's tests is `2025-06-18`). Nothing here documents `2026-07-28` yet — building `crashlens` would be this repository's first contact with the new core, on an SDK bump to v1.7.0+ (already planned as a Day-1 milestone). Everything learned there (per-request metadata, header validation, MRTR, Tasks store) transfers directly to the zbrain gateway's future stateless path.
+1. Update: since this brainstorm was drafted, the gateway already moved — `516f38a` bumps `go-sdk` to v1.7.0 and `internal/mcp/` now speaks the `2026-07-28` era. That removes the "learn on a prototype first" motivation but strengthens the comparison one: `crashlens` becomes a second, independent implementation of the stateless core (per-request metadata, header validation, MRTR, Tasks store) in a different domain — useful for cross-validating the patterns the gateway just adopted before they calcify.
 2. The explicit-handle pattern mirrors zbrain's existing design language: durable, digest-verifiable handles (claims, approval challenges/tokens) instead of implicit sessions. `crashlens` is a low-risk place to exercise HMAC-signed handles end to end before touching gateway code.
 3. The human-approval flow planned for `crashlens` (MRTR elicitation + scope gating) is structurally the same problem as zbrain's owner-pinned claim approval lifecycle; comparing both implementations will inform the gateway's long-term UX.
 
