@@ -169,7 +169,7 @@ pre code {
   font-weight: 600;
   text-decoration: underline;
   text-underline-offset: 0.25em;
-  text-decoration-thickness: 2px;
+  text-decoration-thickness: 1px;
 }
 
 .nav-mast__toggle {
