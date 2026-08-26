@@ -1,0 +1,167 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="The complete zbrain command reference: setup, workspace, evidence, claim, migrate, reindex, ask, status, doctor, mcp, view, and approval.">
+  <title>CLI reference · zbrain</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Geist+Mono:wght@400&family=Hanken+Grotesk:wght@400;600&family=Young+Serif&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="../tokens.css">
+  <link rel="stylesheet" href="../css/main.css">
+  <script src="../js/main.js" defer></script>
+</head>
+<body>
+  <header class="nav-mast">
+    <div class="nav-mast__bar">
+      <a class="nav-mast__brand" href="../index.html">zbrain</a>
+      <span class="label">GO-NATIVE · LOCAL-FIRST</span>
+      <button id="nav-toggle" class="nav-mast__toggle" type="button" aria-expanded="false" aria-controls="nav-links">Menu</button>
+    </div>
+    <nav id="nav-links" class="nav-mast__links" aria-label="Primary">
+      <a href="getting-started.html">Getting started</a>
+      <a href="concepts.html">Concepts</a>
+      <a href="cli.html">CLI reference</a>
+      <a href="mcp.html">MCP gateway</a>
+      <a href="architecture.html">Architecture</a>
+    </nav>
+  </header>
+  <main>
+    <h1>CLI reference</h1>
+    <p>zbrain - Go-native OKF trusted memory CLI</p>
+    <p>Usage:</p>
+    <pre><code>zbrain &lt;command&gt; [arguments]
+zbrain &lt;command&gt; --help</code></pre>
+    <p>Use <code>zbrain &lt;command&gt; --help</code> for command-specific help. All examples below are the real shipped help output.</p>
+
+    <section>
+      <h2>Workspace and evidence</h2>
+      <ul class="specimen">
+        <li class="specimen__item">
+          <p class="specimen__term">setup</p>
+          <p class="specimen__desc"><code>Usage: zbrain setup</code><br>Prepare the runtime directory and extract embedded assets.</p>
+        </li>
+        <li class="specimen__item">
+          <p class="specimen__term">workspace</p>
+          <p class="specimen__desc"><code>Usage:</code><br><code>zbrain workspace create &lt;name&gt;</code><br><code>zbrain workspace current</code><br>Manage the active workspace.</p>
+        </li>
+        <li class="specimen__item">
+          <p class="specimen__term">evidence</p>
+          <p class="specimen__desc"><code>Usage: zbrain evidence add --file &lt;path&gt; --origin &lt;uri-or-path&gt; [--media-type &lt;type&gt;] [--workspace &lt;name&gt;]</code><br>Options: <code>--file &lt;path&gt;</code> local source file to snapshot; <code>--origin &lt;uri-or-path&gt;</code> origin recorded in evidence metadata; <code>--media-type &lt;type&gt;</code> optional media type; <code>--workspace &lt;name&gt;</code> target workspace; defaults to the current workspace.</p>
+        </li>
+      </ul>
+    </section>
+
+    <section>
+      <h2>Claims and lifecycle</h2>
+      <ul class="specimen">
+        <li class="specimen__item">
+          <p class="specimen__term">claim</p>
+          <p class="specimen__desc"><code>Usage:</code><br><code>zbrain claim draft --tier &lt;tier&gt; --title &lt;title&gt; --basis &lt;owner|evidence|derived&gt; [--evidence &lt;id&gt;]... [--support &lt;id&gt;]... [--conflicts-with &lt;id&gt;]... [--workspace &lt;name&gt;]</code><br><code>zbrain claim approve &lt;id&gt; [--workspace &lt;name&gt;]</code><br><code>zbrain claim supersede &lt;id&gt; --tier &lt;tier&gt; --title &lt;title&gt; --basis &lt;owner|evidence|derived&gt; [--evidence &lt;id&gt;]... [--support &lt;id&gt;]... [--conflicts-with &lt;id&gt;]... [--workspace &lt;name&gt;]</code><br><code>zbrain claim revoke &lt;id&gt; --reason &lt;text&gt; [--workspace &lt;name&gt;]</code><br>Manage the four-state OKF claim lifecycle.</p>
+        </li>
+        <li class="specimen__item">
+          <p class="specimen__term">migrate</p>
+          <p class="specimen__desc"><code>Usage: zbrain migrate okf [--workspace &lt;name&gt;]</code><br>Convert legacy zbrain claim files to OKF concepts.</p>
+        </li>
+      </ul>
+    </section>
+
+    <section>
+      <h2>Index and query</h2>
+      <ul class="specimen">
+        <li class="specimen__item">
+          <p class="specimen__term">reindex</p>
+          <p class="specimen__desc"><code>Usage: zbrain reindex [--workspace &lt;name&gt;] [--embed]</code><br>Rebuild the disposable workspace index. Option <code>--embed</code>: also compute and store loopback embedding vectors.</p>
+        </li>
+        <li class="specimen__item">
+          <p class="specimen__term">ask</p>
+          <p class="specimen__desc"><code>Usage: zbrain ask [--workspace &lt;name&gt;] [--include &lt;name&gt;]... [--embed] &lt;query&gt;</code><br>Return trusted context JSON without calling an LLM. Options: <code>--workspace &lt;name&gt;</code> primary workspace; defaults to the current workspace; <code>--include &lt;name&gt;</code> explicit read-only secondary workspace, repeatable; <code>--embed</code> also use local embedding vectors; defaults to lexical-only.</p>
+        </li>
+      </ul>
+    </section>
+
+    <section>
+      <h2>Diagnostics</h2>
+      <ul class="specimen">
+        <li class="specimen__item">
+          <p class="specimen__term">status</p>
+          <p class="specimen__desc"><code>Usage: zbrain status [--workspace &lt;name&gt;]</code><br><code>status</code> and <code>doctor</code> provide diagnostics for index and embedding configuration.</p>
+        </li>
+        <li class="specimen__item">
+          <p class="specimen__term">doctor</p>
+          <p class="specimen__desc"><code>Usage: zbrain doctor [--workspace &lt;name&gt;] [--probe-embedder]</code><br><code>doctor</code> reports domain findings with exit code <code>2</code>; its JSON includes <code>findings</code> and <code>next_action</code>.</p>
+        </li>
+      </ul>
+    </section>
+
+    <section>
+      <h2>Gateway and viewer</h2>
+      <ul class="specimen">
+        <li class="specimen__item">
+          <p class="specimen__term">mcp</p>
+          <p class="specimen__desc"><code>Usage: zbrain mcp serve</code><br>Serve the trusted-agent MCP gateway over stdio.</p>
+        </li>
+        <li class="specimen__item">
+          <p class="specimen__term">mcp serve</p>
+          <p class="specimen__desc"><code>Usage: zbrain mcp serve</code><br>Run the MCP stdio gateway. stdout is protocol-only; diagnostics go to stderr.</p>
+        </li>
+        <li class="specimen__item">
+          <p class="specimen__term">view</p>
+          <p class="specimen__desc"><code>Usage: zbrain view</code><br>Serve the embedded read-only viewer over loopback (127.0.0.1). The viewer binds loopback only, sends strict CSP and nosniff headers, has no CORS, and returns 405 for every method other than GET and HEAD.</p>
+        </li>
+        <li class="specimen__item">
+          <p class="specimen__term">approval</p>
+          <p class="specimen__desc"><code>Usage:</code><br><code>zbrain approval show &lt;challenge-id&gt;</code><br><code>zbrain approval grant &lt;challenge-id&gt;</code><br>Run the local owner-pinned approval ceremony for a lifecycle challenge.</p>
+        </li>
+        <li class="specimen__item">
+          <p class="specimen__term">approval show</p>
+          <p class="specimen__desc"><code>Usage: zbrain approval show &lt;challenge-id&gt;</code><br>Print the challenge action summary as JSON.</p>
+        </li>
+        <li class="specimen__item">
+          <p class="specimen__term">approval grant</p>
+          <p class="specimen__desc"><code>Usage: zbrain approval grant &lt;challenge-id&gt;</code><br>Confirm the last 16 hex characters of the action digest in an interactive TTY, then verify and print the one-time token as JSON for later apply.</p>
+        </li>
+      </ul>
+      <p>See <a href="mcp.html">MCP gateway</a> for how the gateway, approval ceremony, and viewer fit together.</p>
+    </section>
+
+    <section>
+      <h2>Root help</h2>
+      <p>The full shipped root help output:</p>
+      <pre><code>zbrain - Go-native OKF trusted memory CLI
+
+Usage:
+  zbrain &lt;command&gt; [arguments]
+  zbrain &lt;command&gt; --help
+
+Commands:
+  setup
+  workspace create &lt;name&gt;
+  workspace current
+  evidence add --file &lt;path&gt; --origin &lt;uri-or-path&gt; [--media-type &lt;type&gt;] [--workspace &lt;name&gt;]
+  claim draft --tier &lt;tier&gt; --title &lt;title&gt; --basis &lt;owner|evidence|derived&gt; [--evidence &lt;id&gt;]... [--support &lt;id&gt;]... [--conflicts-with &lt;id&gt;]... [--workspace &lt;name&gt;]
+  claim approve &lt;id&gt; [--workspace &lt;name&gt;]
+  claim supersede &lt;id&gt; --tier &lt;tier&gt; --title &lt;title&gt; --basis &lt;owner|evidence|derived&gt; [--evidence &lt;id&gt;]... [--support &lt;id&gt;]... [--conflicts-with &lt;id&gt;]... [--workspace &lt;name&gt;]
+  claim revoke &lt;id&gt; --reason &lt;text&gt; [--workspace &lt;name&gt;]
+  migrate okf [--workspace &lt;name&gt;]
+  reindex [--workspace &lt;name&gt;] [--embed]
+  ask [--workspace &lt;name&gt;] [--include &lt;name&gt;]... [--embed] &lt;query&gt;
+  status [--workspace &lt;name&gt;]
+  doctor [--workspace &lt;name&gt;] [--probe-embedder]
+  mcp serve
+  view
+  approval show &lt;challenge-id&gt;
+  approval grant &lt;challenge-id&gt;
+  version
+
+Use `zbrain &lt;command&gt; --help` for command-specific help.</code></pre>
+      <p>See <a href="getting-started.html">Getting started</a> for a complete draft-to-query walkthrough.</p>
+    </section>
+  </main>
+  <footer class="foot-letter">
+    <p class="foot-letter__sign">zbrain — local-first trusted memory for AI agents.</p>
+        <p class="foot-letter__meta">Version 0.2.0 · <a href="https://github.com/therealtinhtute/zbrain">GitHub</a> · <a href="../LICENSE">MIT License</a> · <a href="../index.html">Docs</a></p>
+  </footer>
+</body>
+</html>
