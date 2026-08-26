@@ -1,6 +1,6 @@
 # Plan: MCP v2 (2026-07-28) Protocol Upgrade
 
-**Status:** active · **Created:** 2026-08-25 ·
+**Status:** completed · **Created:** 2026-08-25 · **Completed:** 2026-08-26 ·
 **Authority:** owner request (research MCP v2 via Exa, plan implementation) ·
 **Amends:** `docs/trusted-agent-gateway-spec.md` §MCP surface
 
