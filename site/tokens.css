@@ -1,20 +1,20 @@
-/* Hallmark · theme: garden · token system */
+/* Hallmark · theme: garden · token system (accent: #124b68 deep teal) */
 :root {
   --color-paper:    oklch(95.5% 0.022 92);
   --color-paper-2:  oklch(92.5% 0.026 92);
   --color-paper-3:  oklch(88.5% 0.030 90);
-  --color-rule:     oklch(83%   0.028 115);
-  --color-rule-2:   oklch(62%   0.045 132);
-  --color-muted:    oklch(48%   0.040 138);
-  --color-neutral:  oklch(40%   0.045 142);
-  --color-ink-2:    oklch(33%   0.050 150);
-  --color-ink:      oklch(24%   0.052 152);
-  --color-accent:   oklch(47%   0.13  140);
-  --color-accent-2: oklch(54%   0.14  46);
+  --color-rule:     oklch(83%   0.025 200);
+  --color-rule-2:   oklch(62%   0.045 205);
+  --color-muted:    oklch(48%   0.040 205);
+  --color-neutral:  oklch(40%   0.045 205);
+  --color-ink-2:    oklch(33%   0.050 205);
+  --color-ink:      oklch(24%   0.050 205);
+  --color-accent:   oklch(39%   0.075 236);
+  --color-accent-2: oklch(58%   0.13  45);
   --color-accent-ink: oklch(96% 0.02 92);
-  --color-focus:    oklch(47%   0.13  140);
-  --tint-moss:      oklch(47% 0.13 140 / 0.10);
-  --tint-clay:      oklch(54% 0.14 46 / 0.10);
+  --color-focus:    oklch(39%   0.075 236);
+  --tint-moss:      oklch(39% 0.075 236 / 0.10);
+  --tint-clay:      oklch(58% 0.13 45 / 0.10);
   --font-display: "Young Serif", ui-serif, Georgia, serif;
   --font-body:    "Hanken Grotesk", "Geist", ui-sans-serif, system-ui, sans-serif;
   --font-serif:   "Newsreader", ui-serif, Georgia, serif;
