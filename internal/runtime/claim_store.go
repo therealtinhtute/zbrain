@@ -84,6 +84,11 @@ func (store ClaimStore) writeDraftUnlocked(workspace string, claim Claim) (Claim
 	if err := ValidateClaim(claim); err != nil {
 		return Claim{}, err
 	}
+	approvedClaims, err := store.approvedClaimsForContradictions(workspace)
+	if err != nil {
+		return Claim{}, err
+	}
+	claim.Contradicts = DetectContradictions(claim, approvedClaims)
 	path, err := store.claimPath(workspace, claim)
 	if err != nil {
 		return Claim{}, err
@@ -130,6 +135,31 @@ func (store ClaimStore) writeDraftUnlocked(workspace string, claim Claim) (Claim
 	}
 	claim.Path = claimRelPath(claim)
 	return claim, nil
+}
+
+// approvedClaimsForContradictions returns the approved claims scanned from
+// the workspace so draft creation can evaluate contradiction heuristics.
+// Approved sets are trust-gated and stay small; the scan is bounded and
+// in-memory. A workspace without a wiki root has no claims to contradict.
+func (store ClaimStore) approvedClaimsForContradictions(workspace string) ([]Claim, error) {
+	wikiRoot, err := ResolveWorkspacePath(store.Paths, workspace, "wiki")
+	if err != nil {
+		return nil, err
+	}
+	if _, err := os.Stat(wikiRoot); os.IsNotExist(err) {
+		return nil, nil
+	}
+	scan, err := store.ScanWorkspace(workspace)
+	if err != nil {
+		return nil, err
+	}
+	approved := make([]Claim, 0, len(scan.Claims))
+	for _, claim := range scan.Claims {
+		if claim.Status == ClaimStatusApproved {
+			approved = append(approved, claim)
+		}
+	}
+	return approved, nil
 }
 
 func (store ClaimStore) Approve(workspace string, id string) (Claim, error) {

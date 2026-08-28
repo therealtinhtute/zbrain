@@ -482,3 +482,162 @@ func validOwnerClaim() Claim {
 		Body:      "Body\n",
 	}
 }
+
+func TestDetectContradictionsHeuristics(t *testing.T) {
+	approved := func(title string, body string) Claim {
+		claim := validOwnerClaim()
+		claim.ID = "clm_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+		claim.Title = title
+		claim.Body = body
+		return claim
+	}
+	tests := []struct {
+		name        string
+		draftTitle  string
+		draftBody   string
+		title       string
+		body        string
+		wantIDs     []string
+		wantKinds   []ContradictionHeuristic
+		noContradic bool
+	}{
+		{
+			name:       "negation flip on title",
+			draftTitle: "zbrain runs without network calls",
+			draftBody:  "Body\n",
+			title:      "zbrain runs with network calls",
+			body:       "Body\n",
+			wantIDs:    []string{"clm_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},
+			wantKinds:  []ContradictionHeuristic{ContradictionNegation},
+		},
+		{
+			name:       "value swap on title",
+			draftTitle: "zbrain uses SQLite for indexes",
+			draftBody:  "Body\n",
+			title:      "zbrain uses BoltDB for indexes",
+			body:       "Body\n",
+			wantIDs:    []string{"clm_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},
+			wantKinds:  []ContradictionHeuristic{ContradictionValueSwap},
+		},
+		{
+			name:       "status change on title",
+			draftTitle: "Node runtime is deprecated",
+			draftBody:  "Body\n",
+			title:      "Node runtime is recommended",
+			body:       "Body\n",
+			wantIDs:    []string{"clm_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},
+			wantKinds:  []ContradictionHeuristic{ContradictionStatusChange},
+		},
+		{
+			name:        "unrelated claims do not contradict",
+			draftTitle:  "zbrain indexes live in SQLite",
+			draftBody:   "Body\n",
+			title:       "Owner preference",
+			body:        "Body\n",
+			noContradic: true,
+		},
+		{
+			name:        "same polarity does not contradict",
+			draftTitle:  "zbrain runs with network calls",
+			draftBody:   "Body\n",
+			title:       "zbrain runs with network calls",
+			body:        "Body\n",
+			noContradic: true,
+		},
+		{
+			name:        "different subjects do not value swap",
+			draftTitle:  "viewer binds loopback only",
+			draftBody:   "Body\n",
+			title:       "gateway binds loopback only",
+			body:        "Body\n",
+			noContradic: true,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			draft := approved("draft placeholder", "Body\n")
+			draft.ID = "clm_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+			draft.Title = tt.draftTitle
+			draft.Body = tt.draftBody
+			got := DetectContradictions(draft, []Claim{approved(tt.title, tt.body)})
+			if tt.noContradic {
+				if len(got) != 0 {
+					t.Fatalf("DetectContradictions() = %#v, want none", got)
+				}
+				return
+			}
+			if len(got) != len(tt.wantIDs) {
+				t.Fatalf("DetectContradictions() = %#v, want %d hits", got, len(tt.wantIDs))
+			}
+			for index, want := range got {
+				if want.ClaimID != tt.wantIDs[index] || want.Heuristic != tt.wantKinds[index] {
+					t.Fatalf("DetectContradictions()[%d] = {ClaimID: %q, Heuristic: %q}, want {ClaimID: %q, Heuristic: %q}", index, want.ClaimID, want.Heuristic, tt.wantIDs[index], tt.wantKinds[index])
+				}
+			}
+		})
+	}
+}
+
+func TestDetectContradictionsDeduplicatesAndSkipsSelf(t *testing.T) {
+	approved := validOwnerClaim()
+	approved.ID = "clm_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	approved.Title = "zbrain uses SQLite for indexes"
+	draft := validOwnerClaim()
+	draft.ID = approved.ID
+	draft.Title = "zbrain uses BoltDB for indexes"
+	if got := DetectContradictions(draft, []Claim{approved}); len(got) != 0 {
+		t.Fatalf("DetectContradictions(self) = %#v, want none", got)
+	}
+	draft.ID = "clm_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+	got := DetectContradictions(draft, []Claim{approved, approved})
+	if len(got) != 1 || got[0].ClaimID != approved.ID || got[0].Heuristic != ContradictionValueSwap {
+		t.Fatalf("DetectContradictions(duplicates) = %#v, want one value_swap hit", got)
+	}
+}
+
+func TestContradictsFrontmatterRoundTripAndValidation(t *testing.T) {
+	claim := validOwnerClaim()
+	claim.Contradicts = []Contradiction{
+		{ClaimID: "clm_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", Heuristic: ContradictionNegation},
+		{ClaimID: "clm_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", Heuristic: ContradictionValueSwap},
+	}
+	rendered, err := RenderClaimMarkdown(claim)
+	if err != nil {
+		t.Fatalf("RenderClaimMarkdown() error = %v", err)
+	}
+	if !strings.Contains(string(rendered), "contradicts:") || !strings.Contains(string(rendered), "heuristic: negation") {
+		t.Fatalf("rendered claim missing contradicts metadata:\n%s", rendered)
+	}
+	parsed, err := ParseClaimMarkdown("projects", "projects/"+claim.ID+".md", rendered)
+	if err != nil {
+		t.Fatalf("ParseClaimMarkdown() error = %v", err)
+	}
+	if len(parsed.Contradicts) != 2 || parsed.Contradicts[0] != claim.Contradicts[0] || parsed.Contradicts[1] != claim.Contradicts[1] {
+		t.Fatalf("Contradicts round trip = %#v, want %#v", parsed.Contradicts, claim.Contradicts)
+	}
+	renderedAgain, err := RenderClaimMarkdown(parsed)
+	if err != nil {
+		t.Fatalf("RenderClaimMarkdown(parsed) error = %v", err)
+	}
+	if string(renderedAgain) != string(rendered) {
+		t.Fatalf("render is not deterministic with contradicts metadata")
+	}
+	digest, err := ClaimVerificationDigest(claim)
+	if err != nil {
+		t.Fatalf("ClaimVerificationDigest() error = %v", err)
+	}
+	claim.VerifiedDigest = digest
+	if err := VerifyClaimDigest(claim); err != nil {
+		t.Fatalf("VerifyClaimDigest() with contradicts metadata error = %v", err)
+	}
+	invalid := validOwnerClaim()
+	invalid.Contradicts = []Contradiction{{ClaimID: "not-a-claim-id", Heuristic: ContradictionNegation}}
+	if err := ValidateClaim(invalid); err == nil {
+		t.Fatalf("ValidateClaim() error = nil, want invalid contradiction claim id error")
+	}
+	invalidHeuristic := validOwnerClaim()
+	invalidHeuristic.Contradicts = []Contradiction{{ClaimID: "clm_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", Heuristic: "vibes"}}
+	if err := ValidateClaim(invalidHeuristic); err == nil {
+		t.Fatalf("ValidateClaim() error = nil, want unsupported contradiction heuristic error")
+	}
+}

@@ -845,6 +845,83 @@ func TestTrustedQueryDoesNotUseOmittedWorkspace(t *testing.T) {
 	}
 }
 
+func TestTrustedQuerySurfacesContradictionDraftAsConflictCandidate(t *testing.T) {
+	paths := queryTestPaths(t)
+	store := ClaimStore{Paths: paths, Now: fixedQueryNow}
+
+	approved := queryClaim("clm_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "zbrain uses SQLite for indexes", ClaimBasisOwner)
+	approved.Body = "zbrain database storage uses SQLite indexes\n"
+	if _, err := store.WriteDraft("research", approved); err != nil {
+		t.Fatalf("WriteDraft(approved) error = %v", err)
+	}
+	if _, err := store.Approve("research", approved.ID); err != nil {
+		t.Fatalf("Approve(approved) error = %v", err)
+	}
+
+	conflictingDraft := queryClaim("clm_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", "zbrain uses BoltDB for indexes", ClaimBasisOwner)
+	conflictingDraft.Body = "zbrain database storage uses BoltDB indexes\n"
+	if _, err := store.WriteDraft("research", conflictingDraft); err != nil {
+		t.Fatalf("WriteDraft(conflictingDraft) error = %v", err)
+	}
+
+	cleanDraft := queryClaim("clm_cccccccccccccccccccccccccccccccc", "Viewer binds loopback only", ClaimBasisOwner)
+	cleanDraft.Body = "zbrain loopback viewer tool\n"
+	if _, err := store.WriteDraft("research", cleanDraft); err != nil {
+		t.Fatalf("WriteDraft(cleanDraft) error = %v", err)
+	}
+
+	idx := IndexStore{Paths: paths}
+	if _, err := idx.Rebuild("research"); err != nil {
+		t.Fatalf("Rebuild() error = %v", err)
+	}
+
+	// Query matching both approved claim and contradicting draft:
+	// - response.Status remains "ready" (trust gating unchanged)
+	// - response.Claims has approved claim with Status "approved"
+	// - response.PromotionCandidates has conflicting draft with Status "conflict" and populated Contradicts metadata
+	response, err := TrustedQuery(paths, TrustedQueryOptions{Query: "database storage indexes", Limit: 10})
+	if err != nil {
+		t.Fatalf("TrustedQuery(database storage) error = %v", err)
+	}
+	if response.Status != QueryStatusReady {
+		t.Fatalf("response.Status = %q, want ready", response.Status)
+	}
+	if len(response.Claims) != 1 || response.Claims[0].ID != approved.ID || response.Claims[0].Status != ClaimStatusApproved {
+		t.Fatalf("response.Claims = %#v, want 1 approved claim %s", response.Claims, approved.ID)
+	}
+	if len(response.PromotionCandidates) != 1 {
+		t.Fatalf("response.PromotionCandidates = %#v, want 1 candidate", response.PromotionCandidates)
+	}
+	candidate := response.PromotionCandidates[0]
+	if candidate.ID != conflictingDraft.ID {
+		t.Fatalf("candidate.ID = %q, want %q", candidate.ID, conflictingDraft.ID)
+	}
+	if candidate.Status != ClaimStatusConflict {
+		t.Fatalf("candidate.Status = %q, want %q", candidate.Status, ClaimStatusConflict)
+	}
+	if len(candidate.Contradicts) != 1 || candidate.Contradicts[0].ClaimID != approved.ID || candidate.Contradicts[0].Heuristic != ContradictionValueSwap {
+		t.Fatalf("candidate.Contradicts = %#v, want 1 value_swap against %s", candidate.Contradicts, approved.ID)
+	}
+
+	// Query matching only the clean draft:
+	// - response.Status is "gap" (no approved claims match)
+	// - clean draft remains Status "draft" with empty Contradicts
+	gapResponse, err := TrustedQuery(paths, TrustedQueryOptions{Query: "loopback viewer", Limit: 10})
+	if err != nil {
+		t.Fatalf("TrustedQuery(loopback viewer) error = %v", err)
+	}
+	if gapResponse.Status != QueryStatusGap {
+		t.Fatalf("gapResponse.Status = %q, want gap", gapResponse.Status)
+	}
+	if len(gapResponse.PromotionCandidates) != 1 {
+		t.Fatalf("gapResponse.PromotionCandidates = %#v, want 1 candidate", gapResponse.PromotionCandidates)
+	}
+	cleanCandidate := gapResponse.PromotionCandidates[0]
+	if cleanCandidate.ID != cleanDraft.ID || cleanCandidate.Status != ClaimStatusDraft || len(cleanCandidate.Contradicts) != 0 {
+		t.Fatalf("clean candidate = %#v, want draft status and no contradicts", cleanCandidate)
+	}
+}
+
 func queryTestPaths(t *testing.T) Paths {
 	t.Helper()
 	tmp := t.TempDir()

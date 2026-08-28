@@ -1591,3 +1591,78 @@ func truncateForDiff(b []byte) string {
 	}
 	return string(b[:limit]) + "...[truncated]"
 }
+
+func TestRunAskSurfacesConflictCandidate(t *testing.T) {
+	app, _ := testApp(t)
+	setupResearchApp(t, &app)
+
+	// Draft and approve approved claim
+	app.Stdout = &bytes.Buffer{}
+	app.Stdin = strings.NewReader("zbrain uses SQLite for indexes\n")
+	if err := app.Run([]string{"claim", "draft", "--tier", "projects", "--title", "zbrain uses SQLite for indexes", "--basis", "owner"}); err != nil {
+		t.Fatalf("Run(claim draft approved) error = %v", err)
+	}
+	var approvedDraft struct {
+		ID string `json:"id"`
+	}
+	decodeJSON(t, stdout(app), &approvedDraft)
+	if err := app.Run([]string{"claim", "approve", approvedDraft.ID}); err != nil {
+		t.Fatalf("Run(claim approve) error = %v", err)
+	}
+
+	// Draft contradicting claim (value swap on title)
+	app.Stdout = &bytes.Buffer{}
+	app.Stdin = strings.NewReader("zbrain uses BoltDB for indexes\n")
+	if err := app.Run([]string{"claim", "draft", "--tier", "projects", "--title", "zbrain uses BoltDB for indexes", "--basis", "owner"}); err != nil {
+		t.Fatalf("Run(claim draft conflicting) error = %v", err)
+	}
+	var conflictingDraft struct {
+		ID string `json:"id"`
+	}
+	decodeJSON(t, stdout(app), &conflictingDraft)
+
+	// Reindex
+	app.Stdout = &bytes.Buffer{}
+	if err := app.Run([]string{"reindex"}); err != nil {
+		t.Fatalf("Run(reindex) error = %v", err)
+	}
+
+	// Ask matching both
+	app.Stdout = &bytes.Buffer{}
+	if err := app.Run([]string{"ask", "uses", "indexes"}); err != nil {
+		t.Fatalf("Run(ask) error = %v", err)
+	}
+	var response struct {
+		SchemaVersion int    `json:"schema_version"`
+		Status        string `json:"status"`
+		Claims        []struct {
+			ID     string `json:"id"`
+			Status string `json:"status"`
+		} `json:"claims"`
+		PromotionCandidates []struct {
+			ID          string `json:"id"`
+			Status      string `json:"status"`
+			Contradicts []struct {
+				ClaimID   string `json:"claim_id"`
+				Heuristic string `json:"heuristic"`
+			} `json:"contradicts"`
+		} `json:"promotion_candidates"`
+	}
+	decodeJSON(t, stdout(app), &response)
+	if response.SchemaVersion != 1 || response.Status != "ready" {
+		t.Fatalf("response status = %q, want ready", response.Status)
+	}
+	if len(response.Claims) != 1 || response.Claims[0].ID != approvedDraft.ID || response.Claims[0].Status != "approved" {
+		t.Fatalf("response.Claims = %#v, want 1 approved claim", response.Claims)
+	}
+	if len(response.PromotionCandidates) != 1 {
+		t.Fatalf("response.PromotionCandidates = %#v, want 1 candidate", response.PromotionCandidates)
+	}
+	candidate := response.PromotionCandidates[0]
+	if candidate.ID != conflictingDraft.ID || candidate.Status != "conflict" {
+		t.Fatalf("candidate = %#v, want status conflict", candidate)
+	}
+	if len(candidate.Contradicts) != 1 || candidate.Contradicts[0].ClaimID != approvedDraft.ID || candidate.Contradicts[0].Heuristic != "value_swap" {
+		t.Fatalf("candidate.Contradicts = %#v, want value_swap against %s", candidate.Contradicts, approvedDraft.ID)
+	}
+}

@@ -10,6 +10,7 @@ import (
 	"regexp"
 	"strings"
 	"time"
+	"unicode"
 
 	"gopkg.in/yaml.v3"
 )
@@ -57,9 +58,26 @@ type Claim struct {
 	SupportingClaimIDs []string
 	Supersedes         []string
 	ConflictsWith      []string
+	Contradicts        []Contradiction
 	Tags               []string
 	Transitions        []ClaimTransition
 	Body               string
+}
+
+type ContradictionHeuristic string
+
+const (
+	ContradictionNegation     ContradictionHeuristic = "negation"
+	ContradictionValueSwap    ContradictionHeuristic = "value_swap"
+	ContradictionStatusChange ContradictionHeuristic = "status_change"
+)
+
+// Contradiction records one advisory, rule-based contradiction hit between a
+// draft and an approved claim. It never changes claim status, blocks the
+// draft, or alters lifecycle promotion.
+type Contradiction struct {
+	ClaimID   string                 `yaml:"claim_id" json:"claim_id"`
+	Heuristic ContradictionHeuristic `yaml:"heuristic" json:"heuristic"`
 }
 
 type ClaimTransitionKind string
@@ -142,6 +160,7 @@ type zbrainProfile struct {
 	SupportingClaimIDs []string          `yaml:"supporting_claim_ids,omitempty"`
 	Supersedes         []string          `yaml:"supersedes,omitempty"`
 	ConflictsWith      []string          `yaml:"conflicts_with,omitempty"`
+	Contradicts        []Contradiction   `yaml:"contradicts,omitempty"`
 	Transitions        []ClaimTransition `yaml:"transitions,omitempty"`
 }
 
@@ -240,6 +259,7 @@ func RenderClaimMarkdown(claim Claim) ([]byte, error) {
 			SupportingClaimIDs: append([]string(nil), claim.SupportingClaimIDs...),
 			Supersedes:         append([]string(nil), claim.Supersedes...),
 			ConflictsWith:      append([]string(nil), claim.ConflictsWith...),
+			Contradicts:        append([]Contradiction(nil), claim.Contradicts...),
 			Transitions:        append([]ClaimTransition(nil), claim.Transitions...),
 		},
 	}
@@ -332,6 +352,16 @@ func ValidateClaim(claim Claim) error {
 			if !claimIDPattern.MatchString(id) {
 				return fmt.Errorf("related claim id %q must match clm_<32 lowercase hex chars>", id)
 			}
+		}
+	}
+	for _, contradiction := range claim.Contradicts {
+		if !claimIDPattern.MatchString(contradiction.ClaimID) {
+			return fmt.Errorf("contradiction claim id %q must match clm_<32 lowercase hex chars>", contradiction.ClaimID)
+		}
+		switch contradiction.Heuristic {
+		case ContradictionNegation, ContradictionValueSwap, ContradictionStatusChange:
+		default:
+			return fmt.Errorf("contradiction heuristic %q is not supported", contradiction.Heuristic)
 		}
 	}
 	if err := ValidateClaimTransitions(claim.Transitions); err != nil {
@@ -548,6 +578,7 @@ func parseOKFClaimFrontmatter(frontmatter []byte, tier string, relPath string, b
 		SupportingClaimIDs: append([]string(nil), metadata.Zbrain.SupportingClaimIDs...),
 		Supersedes:         append([]string(nil), metadata.Zbrain.Supersedes...),
 		ConflictsWith:      append([]string(nil), metadata.Zbrain.ConflictsWith...),
+		Contradicts:        append([]Contradiction(nil), metadata.Zbrain.Contradicts...),
 		Tags:               append([]string(nil), metadata.Tags...),
 		Transitions:        append([]ClaimTransition(nil), metadata.Zbrain.Transitions...),
 		Body:               string(body),
@@ -609,4 +640,226 @@ func isKnownClaimBasis(basis ClaimBasis) bool {
 	default:
 		return false
 	}
+}
+
+// DetectContradictions applies deterministic, rule-based heuristics between a
+// draft and approved claims. It only compares normalized text (lowercase,
+// whitespace-collapsed, punctuation-stripped) of matching fields — title to
+// title and body to body — and never touches the index, network, or a model.
+// Hits are advisory: callers record them as draft metadata.
+func DetectContradictions(draft Claim, approvedClaims []Claim) []Contradiction {
+	contradictions := make([]Contradiction, 0)
+	seen := make(map[string]bool)
+	for _, approved := range approvedClaims {
+		if approved.ID == draft.ID {
+			continue
+		}
+		heuristics := make(map[ContradictionHeuristic]bool)
+		for _, pair := range [][2]string{
+			{draft.Title, approved.Title},
+			{draft.Body, approved.Body},
+		} {
+			if heuristic, ok := classifyContradiction(pair[0], pair[1]); ok {
+				heuristics[heuristic] = true
+			}
+		}
+		for _, heuristic := range []ContradictionHeuristic{ContradictionStatusChange, ContradictionNegation, ContradictionValueSwap} {
+			if !heuristics[heuristic] || seen[approved.ID+"/"+string(heuristic)] {
+				continue
+			}
+			seen[approved.ID+"/"+string(heuristic)] = true
+			contradictions = append(contradictions, Contradiction{ClaimID: approved.ID, Heuristic: heuristic})
+		}
+	}
+	return contradictions
+}
+
+// classifyContradiction reports the most specific heuristic firing between a
+// draft text and an approved text, if any. Status change outranks negation,
+// which outranks value swap, so "X is deprecated" vs "X is recommended"
+// records status_change rather than the weaker value_swap.
+func classifyContradiction(draftText string, approvedText string) (ContradictionHeuristic, bool) {
+	if detectStatusChange(draftText, approvedText) {
+		return ContradictionStatusChange, true
+	}
+	if detectNegationFlip(draftText, approvedText) {
+		return ContradictionNegation, true
+	}
+	if detectValueSwap(draftText, approvedText) {
+		return ContradictionValueSwap, true
+	}
+	return "", false
+}
+
+var contradictionNegators = map[string]bool{
+	"not": true, "no": true, "never": true, "cannot": true, "cant": true,
+	"dont": true, "doesnt": true, "isnt": true, "arent": true, "wont": true,
+	"without": true,
+}
+
+var contradictionPredicates = map[string]bool{
+	"is": true, "are": true, "uses": true, "requires": true, "supports": true,
+	"has": true, "equals": true, "defaults": true,
+}
+
+var contradictionStatusWords = map[string]bool{
+	"deprecated": true, "obsolete": true, "active": true, "current": true,
+	"recommended": true, "rejected": true, "approved": true, "stable": true,
+	"experimental": true, "required": true, "optional": true, "enabled": true,
+	"disabled": true,
+}
+
+func contradictionTokens(text string) []string {
+	return strings.FieldsFunc(strings.ToLower(text), func(r rune) bool {
+		return !unicode.IsLetter(r) && !unicode.IsDigit(r)
+	})
+}
+
+func equalTokenSlices(left []string, right []string) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for index := range left {
+		if left[index] != right[index] {
+			return false
+		}
+	}
+	return true
+}
+
+var contradictionAuxiliaries = map[string]bool{
+	"do": true, "does": true, "did": true, "can": true, "will": true,
+	"would": true, "may": true, "might": true, "with": true, "without": true,
+	"also": true, "even": true, "still": true,
+}
+
+// stemContradictionToken collapses a trailing plural "s" so "supports" and
+// "support" compare equal. Claims keep the crudeness deliberately: the
+// heuristics are tuned only through tests.
+func stemContradictionToken(token string) string {
+	if len(token) > 3 && strings.HasSuffix(token, "s") && !strings.HasSuffix(token, "ss") {
+		return token[:len(token)-1]
+	}
+	return token
+}
+
+// stripNegators removes negator tokens, reporting whether any were present.
+func stripNegators(tokens []string) ([]string, bool) {
+	stripped := make([]string, 0, len(tokens))
+	found := false
+	for _, token := range tokens {
+		if contradictionNegators[token] {
+			found = true
+			continue
+		}
+		stripped = append(stripped, token)
+	}
+	return stripped, found
+}
+
+// normalizeContradictionCore strips negator and auxiliary tokens and stems
+// plurals, returning the comparable core plus whether the text was negated.
+func normalizeContradictionCore(tokens []string) ([]string, bool) {
+	stripped, negated := stripNegators(tokens)
+	core := make([]string, 0, len(stripped))
+	for _, token := range stripped {
+		if contradictionAuxiliaries[token] {
+			continue
+		}
+		core = append(core, stemContradictionToken(token))
+	}
+	if len(core) == 0 {
+		return nil, negated
+	}
+	return core, negated
+}
+
+// detectNegationFlip fires when the two texts share the same core tokens but
+// exactly one side carries a negator: "zbrain is not deployed on edge nodes"
+// vs "zbrain is deployed on edge nodes", or "runs without network" vs "runs
+// with network".
+func detectNegationFlip(draftText string, approvedText string) bool {
+	draftTokens := contradictionTokens(draftText)
+	approvedTokens := contradictionTokens(approvedText)
+	if len(draftTokens) == 0 || len(approvedTokens) == 0 {
+		return false
+	}
+	draftCore, draftNegated := normalizeContradictionCore(draftTokens)
+	approvedCore, approvedNegated := normalizeContradictionCore(approvedTokens)
+	if draftNegated == approvedNegated {
+		return false
+	}
+	if draftCore == nil || approvedCore == nil {
+		return false
+	}
+	return equalTokenSlices(draftCore, approvedCore)
+}
+
+// splitContradictionClause extracts "<subject> <verb> <object>" from the
+// first predicate token. Clauses whose object starts with a negator are
+// rejected so negation flips stay in the negation heuristic.
+type contradictionClause struct {
+	subject []string
+	verb    string
+	object  []string
+}
+
+func splitContradictionClause(text string) (contradictionClause, bool) {
+	tokens := contradictionTokens(text)
+	for index, token := range tokens {
+		if !contradictionPredicates[token] {
+			continue
+		}
+		subject := tokens[:index]
+		object := tokens[index+1:]
+		if len(subject) == 0 || len(object) == 0 || contradictionNegators[object[0]] {
+			return contradictionClause{}, false
+		}
+		return contradictionClause{subject: subject, verb: token, object: object}, true
+	}
+	return contradictionClause{}, false
+}
+
+// detectValueSwap fires when both texts assert the same subject with the
+// same predicate but a different exact object: "X uses Postgres 15" vs
+// "X uses Postgres 16".
+func detectValueSwap(draftText string, approvedText string) bool {
+	draftClause, ok := splitContradictionClause(draftText)
+	if !ok {
+		return false
+	}
+	approvedClause, ok := splitContradictionClause(approvedText)
+	if !ok {
+		return false
+	}
+	if draftClause.verb != approvedClause.verb {
+		return false
+	}
+	if !equalTokenSlices(draftClause.subject, approvedClause.subject) {
+		return false
+	}
+	return !equalTokenSlices(draftClause.object, approvedClause.object)
+}
+
+// detectStatusChange fires when both texts assert the same subject with a
+// single-word status object and the status words differ: "X is deprecated"
+// vs "X is recommended".
+func detectStatusChange(draftText string, approvedText string) bool {
+	draftClause, ok := splitContradictionClause(draftText)
+	if !ok {
+		return false
+	}
+	approvedClause, ok := splitContradictionClause(approvedText)
+	if !ok {
+		return false
+	}
+	if len(draftClause.object) != 1 || len(approvedClause.object) != 1 {
+		return false
+	}
+	draftStatus := draftClause.object[0]
+	approvedStatus := approvedClause.object[0]
+	if !contradictionStatusWords[draftStatus] || !contradictionStatusWords[approvedStatus] {
+		return false
+	}
+	return equalTokenSlices(draftClause.subject, approvedClause.subject) && draftStatus != approvedStatus
 }

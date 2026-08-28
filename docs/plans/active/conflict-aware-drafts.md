@@ -59,7 +59,7 @@ updated: 2026-08-26
 - phases:
   - phase_slug: contradiction-detection
     story_id: 01M0ZBG7SHDE95Q9FGHBJACPPV
-    status: planned
+    status: checked
     goal: Detect negation/value-swap/status-change contradictions at claim draft time and record advisory metadata
     depends_on: none
     requirements: [R1, R2, R4, R5]
@@ -100,7 +100,7 @@ updated: 2026-08-26
 
   - phase_slug: conflict-surface
     story_id: 01M0ZBGRD7695ATGCPYSNBW5A1
-    status: planned
+    status: checked
     goal: Surface contradiction drafts as status conflict alongside ready approved claims in ask retrieval
     depends_on: contradiction-detection
     requirements: [R3, R5]
@@ -140,6 +140,13 @@ updated: 2026-08-26
 ## Progress
 <!-- Append-only durable entries record timestamp, phase, wave, task, task_status, run_id, trace_id, exact verification/result, and changed surfaces or blocker. -->
 - none
+- 2026-08-28T07:53Z | phase: contradiction-detection | wave: W1 | task: W1.T1 | task_status: done | run_id: none (zharness installer-only, no DB lifecycle) | verification: `go test ./internal/runtime -run 'TestDetectContradictions|TestContradictsFrontmatter' -count=1` pass (heuristic table + non-contradiction controls) | surfaces: internal/runtime/claim.go, internal/runtime/claim_test.go
+- 2026-08-28T07:53Z | phase: contradiction-detection | wave: W1 | task: W1.T2 | task_status: done | run_id: none | verification: round-trip test proves `contradicts` preserved draft → render → parse and `ClaimVerificationDigest` stable (it hashes rendered frontmatter); invalid claim id/heuristic rejected by `ValidateClaim` | surfaces: internal/runtime/claim.go, internal/runtime/claim_test.go
+- 2026-08-28T07:53Z | phase: contradiction-detection | wave: W2 | task: W2.T1 | task_status: done | run_id: none | verification: `TestClaimStoreDraftRecordsContradictionMetadata` pass — `ClaimStore.WriteDraft` persists `contradicts` frontmatter listing conflicting approved id; advisory only (draft stays draft, approved untouched, clean draft gets no metadata) | surfaces: internal/runtime/claim_store.go, internal/runtime/claim_store_test.go
+- 2026-08-28T07:53Z | phase: contradiction-detection | wave: W2 | task: W2.T2 | task_status: done | run_id: none | verification: `TestClaimStoreContradictsPreservedThroughApproveAndReindex` pass — approve preserves contradicts, digest verifies, `IndexStore.Rebuild` keeps both approved claims valid (summary.Approved=2), scan has no invalid, approved canonical digest unchanged | surfaces: internal/runtime/claim_store.go, internal/runtime/claim_store_test.go
+- 2026-08-28T08:25Z | phase: conflict-surface | wave: W1 | task: W1.T1 | task_status: done | run_id: none | verification: `TestTrustedQuerySurfacesContradictionDraftAsConflictCandidate` pass — `TrustedQuery` surfaces contradicting draft under `promotion_candidates` with populated `contradicts` metadata while keeping approved `ready` result unchanged; query matching only clean draft preserves `draft` status | surfaces: internal/runtime/query.go, internal/runtime/query_test.go
+- 2026-08-28T08:25Z | phase: conflict-surface | wave: W1 | task: W1.T2 | task_status: done | run_id: none | verification: `QueryClaim.Status` exposed as `conflict` (`ClaimStatusConflict`) when draft has contradiction hits; `ask` JSON output distinguishes `ready` vs `conflict` without altering `ready`/`gap`/`blocked` top-level semantics | surfaces: internal/runtime/query.go, internal/cli/cli_test.go
+- 2026-08-28T08:25Z | phase: conflict-surface | wave: W2 | task: W2.T1 | task_status: done | run_id: none | verification: `TestRunAskSurfacesConflictCandidate` pass in `cli_test.go` (draft approved -> draft conflicting -> reindex -> ask asserts ready + conflict); `make smoke` pass | surfaces: internal/cli/cli_test.go
 
 ## Decisions
 <!-- Append-only durable entries record timestamp, phase/task, decision, and rationale. -->
@@ -148,14 +155,16 @@ updated: 2026-08-26
 ## Validation
 <!-- Append-only durable entries record timestamp, phase, exact command/result/output, run_id, check_id, verdict, and proof_gaps. -->
 - none
+- 2026-08-28T07:53Z | phase: contradiction-detection | `go test ./...` pass (all packages) | `go vet ./...` clean | `CGO_ENABLED=0 go build ./cmd/zbrain` ok | `go test -race ./internal/runtime ./internal/cli ./internal/mcp ./internal/view` pass | `git diff --check` clean | verdict: checked | proof_gaps: none for phase scope; end-to-end `make smoke` conflict-path proof belongs to conflict-surface phase
+- 2026-08-28T08:25Z | phase: conflict-surface | `go test ./...` pass (all packages) | `go vet ./...` clean | `go test -race ./internal/runtime ./internal/cli ./internal/mcp ./internal/view` pass | `make smoke` pass | `git diff --check` clean | `CGO_ENABLED=0 go build ./cmd/zbrain` ok | verdict: checked | proof_gaps: none
 
 ## Current State and Next Action
-- active_phase: contradiction-detection
-- lifecycle_status: planned
-- latest_run_id: none
+- active_phase: conflict-surface
+- lifecycle_status: checked
+- latest_run_id: none (DB unavailable; zharness 0.15.0 is installer-only)
 - latest_trace_ids: []
 - latest_check_id: none
 - latest_handoff_id: none
 - blockers: none
-- open_items: [run work full phase contradiction-detection]
-- exact_next_action: work full phase contradiction-detection
+- open_items: [all 2 phases completed and checked]
+- exact_next_action: complete initiative
