@@ -3,7 +3,7 @@ id: 01M0ZCT4ER8HS9Y72W5AAB1HZ0
 type: plan
 intake_id: 01M0ZCYZ38DE4FLTN2DXUQU5YF
 lane: normal
-status: active
+status: completed
 created: 2026-08-28
 updated: 2026-08-28
 ---
