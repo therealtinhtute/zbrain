@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 )
 
 type QueryStatus string
@@ -38,7 +39,10 @@ type TrustedQueryOptions struct {
 	// Embedding enables hybrid retrieval: lexical search merged with vector
 	// search when the workspace has an embedding database. When the database
 	// is missing, behavior is identical to pure lexical search.
-	Embedding bool `json:"embedding,omitempty"`
+	Embedding bool   `json:"embedding,omitempty"`
+	After     string `json:"after,omitempty"`
+	Before    string `json:"before,omitempty"`
+	AsOf      string `json:"as_of,omitempty"`
 }
 
 type TrustedQueryResponse struct {
@@ -111,6 +115,10 @@ func ResolveQueryScopes(paths Paths, options QueryScopeOptions) (QueryScopes, er
 }
 
 func TrustedQuery(paths Paths, options TrustedQueryOptions) (TrustedQueryResponse, error) {
+	temporal, err := parseTemporalOptions(options)
+	if err != nil {
+		return TrustedQueryResponse{}, err
+	}
 	scopes, err := ResolveQueryScopes(paths, QueryScopeOptions{Workspace: options.Workspace, Includes: options.Includes})
 	if err != nil {
 		return TrustedQueryResponse{}, err
@@ -154,7 +162,11 @@ func TrustedQuery(paths Paths, options TrustedQueryOptions) (TrustedQueryRespons
 	}
 	for _, workspace := range workspaces {
 		manifest := manifests[workspace]
-		approved, err := idx.searchUnlockedInternal(workspace, SearchOptions{Query: options.Query, Statuses: []ClaimStatus{ClaimStatusApproved}, Limit: limit}, false, true)
+		trustedStatuses := []ClaimStatus{ClaimStatusApproved}
+		if temporal.asOf != nil {
+			trustedStatuses = []ClaimStatus{ClaimStatusApproved, ClaimStatusSuperseded, ClaimStatusRevoked}
+		}
+		approved, err := idx.searchUnlockedInternal(workspace, SearchOptions{Query: options.Query, Statuses: trustedStatuses, Limit: limit}, false, true)
 		if err != nil {
 			return TrustedQueryResponse{}, err
 		}
@@ -168,13 +180,19 @@ func TrustedQuery(paths Paths, options TrustedQueryOptions) (TrustedQueryRespons
 			if err := validateIndexedClaimBindingInternal(paths, workspace, claim, &manifest, nil, nil, false); err != nil {
 				return TrustedQueryResponse{}, err
 			}
-			queryClaim := toQueryClaim(workspace, claim)
 			canonical, readErr := (ClaimStore{Paths: paths}).Read(workspace, claim.ID)
 			if readErr != nil {
 				return TrustedQueryResponse{}, readErr
 			}
+			if !matchTemporalClaim(canonical, temporal) {
+				continue
+			}
+			queryClaim := toQueryClaim(workspace, claim)
 			queryClaim.Sources = canonical.Sources
 			queryClaim.Contradicts = canonical.Contradicts
+			if temporal.asOf != nil && (canonical.Status == ClaimStatusSuperseded || canonical.Status == ClaimStatusRevoked) {
+				queryClaim.Status = ClaimStatusApproved
+			}
 			response.Claims = append(response.Claims, queryClaim)
 		}
 		drafts, err := idx.searchUnlockedInternal(workspace, SearchOptions{Query: options.Query, Statuses: []ClaimStatus{ClaimStatusDraft}, Limit: limit}, false, false)
@@ -185,11 +203,14 @@ func TrustedQuery(paths Paths, options TrustedQueryOptions) (TrustedQueryRespons
 			if err := validateIndexedClaimBindingInternal(paths, workspace, claim, &manifest, nil, nil, false); err != nil {
 				return TrustedQueryResponse{}, err
 			}
-			queryClaim := toQueryClaim(workspace, claim)
 			canonical, readErr := (ClaimStore{Paths: paths}).Read(workspace, claim.ID)
 			if readErr != nil {
 				return TrustedQueryResponse{}, readErr
 			}
+			if !matchTemporalClaim(canonical, temporal) {
+				continue
+			}
+			queryClaim := toQueryClaim(workspace, claim)
 			queryClaim.Sources = canonical.Sources
 			queryClaim.Contradicts = canonical.Contradicts
 			if len(canonical.Contradicts) > 0 {
@@ -537,4 +558,112 @@ func findQueryConflicts(paths Paths, claims []QueryClaim) ([]QueryConflict, erro
 func validateWorkspaceExists(paths Paths, workspace string) error {
 	_, err := ValidateWorkspace(paths, workspace)
 	return err
+}
+
+type temporalFilter struct {
+	after  *time.Time
+	before *time.Time
+	asOf   *time.Time
+}
+
+func parseTemporalOptions(options TrustedQueryOptions) (temporalFilter, error) {
+	var filter temporalFilter
+	if options.After != "" {
+		t, err := time.Parse(time.RFC3339, options.After)
+		if err != nil {
+			return filter, fmt.Errorf("invalid after timestamp %q: %w", options.After, err)
+		}
+		tUTC := t.UTC()
+		filter.after = &tUTC
+	}
+	if options.Before != "" {
+		t, err := time.Parse(time.RFC3339, options.Before)
+		if err != nil {
+			return filter, fmt.Errorf("invalid before timestamp %q: %w", options.Before, err)
+		}
+		tUTC := t.UTC()
+		filter.before = &tUTC
+	}
+	if options.AsOf != "" {
+		t, err := time.Parse(time.RFC3339, options.AsOf)
+		if err != nil {
+			return filter, fmt.Errorf("invalid as_of timestamp %q: %w", options.AsOf, err)
+		}
+		tUTC := t.UTC()
+		filter.asOf = &tUTC
+	}
+	if filter.after != nil && filter.before != nil && filter.after.After(*filter.before) {
+		return filter, fmt.Errorf("after timestamp %q is after before timestamp %q", options.After, options.Before)
+	}
+	return filter, nil
+}
+
+func matchTemporalClaim(canonical Claim, filter temporalFilter) bool {
+	if filter.after == nil && filter.before == nil && filter.asOf == nil {
+		return true
+	}
+
+	claimTimeStr := canonical.VerifiedAt
+	if claimTimeStr == "" {
+		claimTimeStr = canonical.CreatedAt
+	}
+	if claimTimeStr == "" {
+		return false
+	}
+	claimTime, err := time.Parse(time.RFC3339, claimTimeStr)
+	if err != nil {
+		return false
+	}
+	claimTime = claimTime.UTC()
+
+	if filter.asOf != nil {
+		asOf := *filter.asOf
+		if claimTime.After(asOf) {
+			return false
+		}
+		if canonical.StaleAfter != "" {
+			staleTime, err := time.Parse(time.RFC3339, canonical.StaleAfter)
+			if err != nil {
+				return false
+			}
+			if !staleTime.UTC().After(asOf) {
+				return false
+			}
+		}
+		if canonical.Status == ClaimStatusSuperseded || canonical.Status == ClaimStatusRevoked {
+			wasActiveAtAsOf := false
+			for _, trans := range canonical.Transitions {
+				if trans.Kind == ClaimTransitionSupersede || trans.Kind == ClaimTransitionRevoke {
+					transTime, err := time.Parse(time.RFC3339, trans.At)
+					if err != nil {
+						return false
+					}
+					if transTime.UTC().After(asOf) {
+						wasActiveAtAsOf = true
+					} else {
+						return false
+					}
+				}
+			}
+			if !wasActiveAtAsOf {
+				return false
+			}
+		}
+	}
+
+	if filter.after != nil {
+		after := *filter.after
+		if claimTime.Before(after) {
+			return false
+		}
+	}
+
+	if filter.before != nil {
+		before := *filter.before
+		if claimTime.After(before) {
+			return false
+		}
+	}
+
+	return true
 }

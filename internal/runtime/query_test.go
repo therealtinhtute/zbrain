@@ -922,6 +922,197 @@ func TestTrustedQuerySurfacesContradictionDraftAsConflictCandidate(t *testing.T)
 	}
 }
 
+func TestTrustedQueryTemporalOptionsValidation(t *testing.T) {
+	paths := queryTestPaths(t)
+	tests := []struct {
+		name    string
+		options TrustedQueryOptions
+		wantErr string
+	}{
+		{
+			name:    "invalid after",
+			options: TrustedQueryOptions{Query: "test", After: "not-a-date"},
+			wantErr: "invalid after timestamp",
+		},
+		{
+			name:    "invalid before",
+			options: TrustedQueryOptions{Query: "test", Before: "2026/08/01"},
+			wantErr: "invalid before timestamp",
+		},
+		{
+			name:    "invalid as_of",
+			options: TrustedQueryOptions{Query: "test", AsOf: "yesterday"},
+			wantErr: "invalid as_of timestamp",
+		},
+		{
+			name:    "after is after before",
+			options: TrustedQueryOptions{Query: "test", After: "2026-08-20T00:00:00Z", Before: "2026-08-10T00:00:00Z"},
+			wantErr: "after timestamp \"2026-08-20T00:00:00Z\" is after before timestamp \"2026-08-10T00:00:00Z\"",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := TrustedQuery(paths, tt.options)
+			if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
+				t.Fatalf("TrustedQuery() error = %v, want error containing %q", err, tt.wantErr)
+			}
+		})
+	}
+}
+
+func TestTrustedQueryTemporalAfterBeforeRange(t *testing.T) {
+	paths := queryTestPaths(t)
+	store := ClaimStore{Paths: paths, Now: fixedQueryNow}
+	approveWithTime := func(id string, t time.Time) {
+		s := ClaimStore{Paths: paths, Now: func() time.Time { return t }}
+		if _, err := s.Approve("research", id); err != nil {
+			panic(err)
+		}
+	}
+
+	// Claim A: verified 2026-08-01
+	claimA := queryClaim("clm_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "Claim Early", ClaimBasisOwner)
+	claimA.Body = "temporal corpus alpha marker\n"
+	if _, err := store.WriteDraft("research", claimA); err != nil {
+		t.Fatalf("WriteDraft(A) error = %v", err)
+	}
+	approveWithTime(claimA.ID, time.Date(2026, 8, 1, 10, 0, 0, 0, time.UTC))
+
+	// Claim B: verified 2026-08-15
+	claimB := queryClaim("clm_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", "Claim Mid", ClaimBasisOwner)
+	claimB.Body = "temporal corpus beta marker\n"
+	if _, err := store.WriteDraft("research", claimB); err != nil {
+		t.Fatalf("WriteDraft(B) error = %v", err)
+	}
+	approveWithTime(claimB.ID, time.Date(2026, 8, 15, 10, 0, 0, 0, time.UTC))
+
+	// Claim C: verified 2026-08-28
+	claimC := queryClaim("clm_cccccccccccccccccccccccccccccccc", "Claim Late", ClaimBasisOwner)
+	claimC.Body = "temporal corpus gamma marker\n"
+	if _, err := store.WriteDraft("research", claimC); err != nil {
+		t.Fatalf("WriteDraft(C) error = %v", err)
+	}
+	approveWithTime(claimC.ID, time.Date(2026, 8, 28, 10, 0, 0, 0, time.UTC))
+
+	idx := IndexStore{Paths: paths}
+	if _, err := idx.Rebuild("research"); err != nil {
+		t.Fatalf("Rebuild() error = %v", err)
+	}
+
+	// 1. Query without temporal filter returns all 3
+	allRes, err := TrustedQuery(paths, TrustedQueryOptions{Query: "temporal corpus", Limit: 10})
+	if err != nil {
+		t.Fatalf("TrustedQuery(all) error = %v", err)
+	}
+	if len(allRes.Claims) != 3 {
+		t.Fatalf("len(allRes.Claims) = %d, want 3", len(allRes.Claims))
+	}
+
+	// 2. Query --after 2026-08-10 returns B and C
+	afterRes, err := TrustedQuery(paths, TrustedQueryOptions{Query: "temporal corpus", After: "2026-08-10T00:00:00Z", Limit: 10})
+	if err != nil {
+		t.Fatalf("TrustedQuery(after) error = %v", err)
+	}
+	if len(afterRes.Claims) != 2 || afterRes.Claims[0].ID != claimB.ID || afterRes.Claims[1].ID != claimC.ID {
+		t.Fatalf("afterRes.Claims = %#v, want B and C", afterRes.Claims)
+	}
+
+	// 3. Query --before 2026-08-10 returns A
+	beforeRes, err := TrustedQuery(paths, TrustedQueryOptions{Query: "temporal corpus", Before: "2026-08-10T00:00:00Z", Limit: 10})
+	if err != nil {
+		t.Fatalf("TrustedQuery(before) error = %v", err)
+	}
+	if len(beforeRes.Claims) != 1 || beforeRes.Claims[0].ID != claimA.ID {
+		t.Fatalf("beforeRes.Claims = %#v, want A", beforeRes.Claims)
+	}
+
+	// 4. Query range: --after 2026-08-10 --before 2026-08-20 returns only B
+	rangeRes, err := TrustedQuery(paths, TrustedQueryOptions{Query: "temporal corpus", After: "2026-08-10T00:00:00Z", Before: "2026-08-20T00:00:00Z", Limit: 10})
+	if err != nil {
+		t.Fatalf("TrustedQuery(range) error = %v", err)
+	}
+	if len(rangeRes.Claims) != 1 || rangeRes.Claims[0].ID != claimB.ID {
+		t.Fatalf("rangeRes.Claims = %#v, want only B", rangeRes.Claims)
+	}
+}
+
+func TestTrustedQueryTemporalAsOfHistoricalAndStaleness(t *testing.T) {
+	paths := queryTestPaths(t)
+	store := ClaimStore{Paths: paths, Now: fixedQueryNow}
+	approveWithTime := func(id string, t time.Time) {
+		s := ClaimStore{Paths: paths, Now: func() time.Time { return t }}
+		if _, err := s.Approve("research", id); err != nil {
+			panic(err)
+		}
+	}
+
+	// Claim 1: verified 2026-08-01, stale_after 2026-08-10
+	claim1 := queryClaim("clm_11111111111111111111111111111111", "Stale Lifecycle Claim", ClaimBasisOwner)
+	claim1.StaleAfter = "2026-08-10T00:00:00Z"
+	claim1.Body = "point in time historical memory\n"
+	if _, err := store.WriteDraft("research", claim1); err != nil {
+		t.Fatalf("WriteDraft(1) error = %v", err)
+	}
+	approveWithTime(claim1.ID, time.Date(2026, 8, 1, 10, 0, 0, 0, time.UTC))
+
+	// Claim 2: verified 2026-08-05, will be superseded by Claim 3 at 2026-08-20
+	claim2 := queryClaim("clm_22222222222222222222222222222222", "Superseded Claim", ClaimBasisOwner)
+	claim2.Body = "point in time historical memory\n"
+	if _, err := store.WriteDraft("research", claim2); err != nil {
+		t.Fatalf("WriteDraft(2) error = %v", err)
+	}
+	approveWithTime(claim2.ID, time.Date(2026, 8, 5, 10, 0, 0, 0, time.UTC))
+
+	// Claim 3: supersedes Claim 2 at 2026-08-20
+	claim3 := queryClaim("clm_33333333333333333333333333333333", "Replacement Claim", ClaimBasisOwner)
+	claim3.Body = "point in time historical memory\n"
+	storeSupersede := ClaimStore{Paths: paths, Now: func() time.Time { return time.Date(2026, 8, 20, 10, 0, 0, 0, time.UTC) }}
+	if _, err := storeSupersede.WriteSupersedingDraft("research", claim2.ID, claim3); err != nil {
+		t.Fatalf("WriteSupersedingDraft(3) error = %v", err)
+	}
+	approveWithTime(claim3.ID, time.Date(2026, 8, 20, 10, 0, 0, 0, time.UTC))
+	idx := IndexStore{Paths: paths}
+	if _, err := idx.Rebuild("research"); err != nil {
+		t.Fatalf("Rebuild() error = %v", err)
+	}
+
+	// Point in time 1: as of 2026-08-03T00:00:00Z:
+	// - Claim 1 is active (verified 08-01 <= 08-03, stale 08-10 > 08-03)
+	// - Claim 2 was not yet verified (verified 08-05 > 08-03)
+	// - Claim 3 was not yet verified (verified 08-20 > 08-03)
+	resEarly, err := TrustedQuery(paths, TrustedQueryOptions{Query: "historical memory", AsOf: "2026-08-03T00:00:00Z", Limit: 10})
+	if err != nil {
+		t.Fatalf("TrustedQuery(early) error = %v", err)
+	}
+	if len(resEarly.Claims) != 1 || resEarly.Claims[0].ID != claim1.ID || resEarly.Claims[0].Status != ClaimStatusApproved {
+		t.Fatalf("resEarly.Claims = %#v, want only Claim 1", resEarly.Claims)
+	}
+
+	// Point in time 2: as of 2026-08-15T00:00:00Z:
+	// - Claim 1 is stale (stale 08-10 <= 08-15) -> excluded
+	// - Claim 2 was active (verified 08-05 <= 08-15, superseded 08-20 > 08-15) -> included as approved!
+	// - Claim 3 was not yet verified (verified 08-20 > 08-15) -> excluded
+	resMid, err := TrustedQuery(paths, TrustedQueryOptions{Query: "historical memory", AsOf: "2026-08-15T00:00:00Z", Limit: 10})
+	if err != nil {
+		t.Fatalf("TrustedQuery(mid) error = %v", err)
+	}
+	if len(resMid.Claims) != 1 || resMid.Claims[0].ID != claim2.ID || resMid.Claims[0].Status != ClaimStatusApproved {
+		t.Fatalf("resMid.Claims = %#v, want only Claim 2 as approved", resMid.Claims)
+	}
+
+	// Point in time 3: as of 2026-08-25T00:00:00Z:
+	// - Claim 1 is stale -> excluded
+	// - Claim 2 was superseded on 08-20 <= 08-25 -> excluded
+	// - Claim 3 was active (verified 08-20 <= 08-25) -> included as approved!
+	resLate, err := TrustedQuery(paths, TrustedQueryOptions{Query: "historical memory", AsOf: "2026-08-25T00:00:00Z", Limit: 10})
+	if err != nil {
+		t.Fatalf("TrustedQuery(late) error = %v", err)
+	}
+	if len(resLate.Claims) != 1 || resLate.Claims[0].ID != claim3.ID || resLate.Claims[0].Status != ClaimStatusApproved {
+		t.Fatalf("resLate.Claims = %#v, want only Claim 3 as approved", resLate.Claims)
+	}
+}
+
 func queryTestPaths(t *testing.T) Paths {
 	t.Helper()
 	tmp := t.TempDir()
