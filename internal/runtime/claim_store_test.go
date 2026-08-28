@@ -1523,3 +1523,127 @@ func assertPermissionMode(t *testing.T, path string, want os.FileMode) {
 		t.Fatalf("mode(%s) = %04o, want %04o", path, got.Perm(), want.Perm())
 	}
 }
+
+func TestClaimStoreDraftRecordsContradictionMetadata(t *testing.T) {
+	paths, _ := claimStoreTestPaths(t)
+	store := ClaimStore{Paths: paths, Now: fixedClaimStoreNow}
+
+	approved := validStoreClaim(approvalTestClaimID(1), ClaimBasisOwner)
+	approved.Title = "zbrain uses SQLite for indexes"
+	if _, err := store.WriteDraft("research", approved); err != nil {
+		t.Fatalf("WriteDraft(approved) error = %v", err)
+	}
+	if _, err := store.Approve("research", approved.ID); err != nil {
+		t.Fatalf("Approve(approved) error = %v", err)
+	}
+
+	conflicting := validStoreClaim(approvalTestClaimID(2), ClaimBasisOwner)
+	conflicting.Title = "zbrain uses BoltDB for indexes"
+	created, err := store.WriteDraft("research", conflicting)
+	if err != nil {
+		t.Fatalf("WriteDraft(conflicting) error = %v", err)
+	}
+	if len(created.Contradicts) != 1 || created.Contradicts[0].ClaimID != approved.ID || created.Contradicts[0].Heuristic != ContradictionValueSwap {
+		t.Fatalf("created.Contradicts = %#v, want one value_swap hit against %s", created.Contradicts, approved.ID)
+	}
+
+	// Reread from disk: the frontmatter must carry the advisory metadata.
+	stored, err := store.Read("research", conflicting.ID)
+	if err != nil {
+		t.Fatalf("Read(conflicting) error = %v", err)
+	}
+	if len(stored.Contradicts) != 1 || stored.Contradicts[0].Heuristic != ContradictionValueSwap {
+		t.Fatalf("stored.Contradicts = %#v, want persisted contradicts metadata", stored.Contradicts)
+	}
+
+	// Advisory only: draft status unchanged and the approved claim untouched.
+	if stored.Status != ClaimStatusDraft {
+		t.Fatalf("stored status = %q, want draft", stored.Status)
+	}
+	approvedAfter, err := store.Read("research", approved.ID)
+	if err != nil {
+		t.Fatalf("Read(approved) error = %v", err)
+	}
+	if approvedAfter.Status != ClaimStatusApproved || len(approvedAfter.Contradicts) != 0 {
+		t.Fatalf("approved claim changed: status = %q, contradicts = %#v", approvedAfter.Status, approvedAfter.Contradicts)
+	}
+
+	// Clean draft: no contradiction hits recorded.
+	clean := validStoreClaim(approvalTestClaimID(3), ClaimBasisOwner)
+	clean.Title = "Viewer binds loopback only"
+	createdClean, err := store.WriteDraft("research", clean)
+	if err != nil {
+		t.Fatalf("WriteDraft(clean) error = %v", err)
+	}
+	if len(createdClean.Contradicts) != 0 {
+		t.Fatalf("clean draft contradicts = %#v, want none", createdClean.Contradicts)
+	}
+}
+
+func TestClaimStoreContradictsPreservedThroughApproveAndReindex(t *testing.T) {
+	paths, _ := claimStoreTestPaths(t)
+	store := ClaimStore{Paths: paths, Now: fixedClaimStoreNow}
+
+	approved := validStoreClaim(approvalTestClaimID(1), ClaimBasisOwner)
+	approved.Title = "Node runtime is recommended"
+	if _, err := store.WriteDraft("research", approved); err != nil {
+		t.Fatalf("WriteDraft(approved) error = %v", err)
+	}
+	if _, err := store.Approve("research", approved.ID); err != nil {
+		t.Fatalf("Approve(approved) error = %v", err)
+	}
+
+	conflicting := validStoreClaim(approvalTestClaimID(2), ClaimBasisOwner)
+	conflicting.Title = "Node runtime is deprecated"
+	if _, err := store.WriteDraft("research", conflicting); err != nil {
+		t.Fatalf("WriteDraft(conflicting) error = %v", err)
+	}
+	if _, err := store.Approve("research", conflicting.ID); err != nil {
+		t.Fatalf("Approve(conflicting) error = %v", err)
+	}
+
+	// Approve must preserve advisory contradicts metadata without mutating
+	// the canonical approved content of either side.
+	approvedAfter, err := store.Read("research", approved.ID)
+	if err != nil {
+		t.Fatalf("Read(approved) error = %v", err)
+	}
+	conflictingAfter, err := store.Read("research", conflicting.ID)
+	if err != nil {
+		t.Fatalf("Read(conflicting) error = %v", err)
+	}
+	if len(approvedAfter.Contradicts) != 0 {
+		t.Fatalf("approved contradicts = %#v, want none", approvedAfter.Contradicts)
+	}
+	if len(conflictingAfter.Contradicts) != 1 || conflictingAfter.Contradicts[0].ClaimID != approved.ID || conflictingAfter.Contradicts[0].Heuristic != ContradictionStatusChange {
+		t.Fatalf("approved conflicting contradicts = %#v, want preserved status_change hit", conflictingAfter.Contradicts)
+	}
+	if err := VerifyClaimDigest(conflictingAfter); err != nil {
+		t.Fatalf("VerifyClaimDigest(conflicting) error = %v", err)
+	}
+
+	// Reindex validates claims without rewriting canonical files and must
+	// keep both approved claims valid regardless of contradiction metadata.
+	index := IndexStore{Paths: paths}
+	summary, err := index.Rebuild("research")
+	if err != nil {
+		t.Fatalf("Rebuild() error = %v", err)
+	}
+	if summary.Approved != 2 {
+		t.Fatalf("Rebuild() approved = %d, want 2", summary.Approved)
+	}
+	scan, err := store.ScanWorkspace("research")
+	if err != nil {
+		t.Fatalf("ScanWorkspace() error = %v", err)
+	}
+	if len(scan.Invalid) != 0 {
+		t.Fatalf("ScanWorkspace() invalid = %#v, want none", scan.Invalid)
+	}
+	approvedRescanned, err := store.Read("research", approved.ID)
+	if err != nil {
+		t.Fatalf("Read(approved) after rebuild error = %v", err)
+	}
+	if approvedRescanned.Status != ClaimStatusApproved || approvedRescanned.VerifiedDigest != approvedAfter.VerifiedDigest {
+		t.Fatalf("approved claim mutated by rebuild: %#v", approvedRescanned)
+	}
+}
