@@ -143,6 +143,9 @@ func registerTools(server *mcp.Server, opts Options) error {
 		Workspace string   `json:"workspace,omitempty" jsonschema:"workspace to query; defaults to the current workspace"`
 		Include   []string `json:"include,omitempty" jsonschema:"read-only secondary workspace to include"`
 		Embedding bool     `json:"embedding,omitempty" jsonschema:"enable local hybrid embedding retrieval; defaults to false"`
+		After     string   `json:"after,omitempty" jsonschema:"filter claims verified/created at or after RFC3339 timestamp"`
+		Before    string   `json:"before,omitempty" jsonschema:"filter claims verified/created at or before RFC3339 timestamp"`
+		AsOf      string   `json:"as_of,omitempty" jsonschema:"reconstruct active memory state as of RFC3339 timestamp"`
 	}
 
 	mcp.AddTool(server, &mcp.Tool{
@@ -163,6 +166,9 @@ func registerTools(server *mcp.Server, opts Options) error {
 				Query:     in.Query,
 				Limit:     10,
 				Embedding: in.Embedding,
+				After:     in.After,
+				Before:    in.Before,
+				AsOf:      in.AsOf,
 			})
 			if err != nil {
 				return nil, nil, err

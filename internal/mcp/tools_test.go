@@ -783,6 +783,12 @@ func TestToolInputSchemas(t *testing.T) {
 			t.Errorf("%s.embedding description = %q, want false default", name, description)
 		}
 	}
+	askProps := schemaProperties(t, tools["memory_ask"])
+	for _, field := range []string{"after", "before", "as_of"} {
+		if _, ok := askProps[field]; !ok {
+			t.Errorf("memory_ask schema missing %s; properties=%v", field, askProps)
+		}
+	}
 	lifecycleProperties := schemaProperties(t, tools["claim_lifecycle"])
 	for _, field := range []string{
 		"operation", "action", "workspace", "claim_id", "challenge_id", "token",
@@ -982,5 +988,113 @@ func TestBounds(t *testing.T) {
 	}
 	if rpcErr.Code != jsonrpc.CodeInvalidParams {
 		t.Fatalf("oversized claim_lifecycle code = %d, want %d", rpcErr.Code, jsonrpc.CodeInvalidParams)
+	}
+}
+
+func TestMemoryAskTemporalFiltering(t *testing.T) {
+	opts := testOptions(t)
+	server, err := newServer(opts)
+	if err != nil {
+		t.Fatalf("newServer() error = %v", err)
+	}
+	cs := connectClient(t, server)
+
+	// Create Early and Late claims in workspace
+	store := zruntime.ClaimStore{Paths: opts.Paths}
+	claimEarly := zruntime.Claim{
+		Type:      zruntime.OKFClaimType,
+		ID:        "clm_11111111111111111111111111111111",
+		Tier:      "projects",
+		Status:    zruntime.ClaimStatusDraft,
+		Title:     "MCP Temporal Early",
+		Basis:     zruntime.ClaimBasisOwner,
+		CreatedAt: "2026-08-01T09:00:00Z",
+		CreatedBy: "owner",
+		Body:      "mcp temporal query marker\n",
+	}
+	if _, err := store.WriteDraft("research", claimEarly); err != nil {
+		t.Fatalf("WriteDraft(early) error = %v", err)
+	}
+	storeEarly := zruntime.ClaimStore{Paths: opts.Paths, Now: func() time.Time { return time.Date(2026, 8, 1, 10, 0, 0, 0, time.UTC) }}
+	if _, err := storeEarly.Approve("research", claimEarly.ID); err != nil {
+		t.Fatalf("Approve(early) error = %v", err)
+	}
+
+	claimLate := zruntime.Claim{
+		Type:      zruntime.OKFClaimType,
+		ID:        "clm_22222222222222222222222222222222",
+		Tier:      "projects",
+		Status:    zruntime.ClaimStatusDraft,
+		Title:     "MCP Temporal Late",
+		Basis:     zruntime.ClaimBasisOwner,
+		CreatedAt: "2026-08-28T09:00:00Z",
+		CreatedBy: "owner",
+		Body:      "mcp temporal query marker\n",
+	}
+	if _, err := store.WriteDraft("research", claimLate); err != nil {
+		t.Fatalf("WriteDraft(late) error = %v", err)
+	}
+	storeLate := zruntime.ClaimStore{Paths: opts.Paths, Now: func() time.Time { return time.Date(2026, 8, 28, 10, 0, 0, 0, time.UTC) }}
+	if _, err := storeLate.Approve("research", claimLate.ID); err != nil {
+		t.Fatalf("Approve(late) error = %v", err)
+	}
+
+	idx := zruntime.IndexStore{Paths: opts.Paths}
+	if _, err := idx.Rebuild("research"); err != nil {
+		t.Fatalf("Rebuild() error = %v", err)
+	}
+
+	// 1. memory_ask with after 2026-08-10 returns only Late
+	res, err := callTool(t, cs, "memory_ask", map[string]any{
+		"query": "mcp temporal",
+		"after": "2026-08-10T00:00:00Z",
+	})
+	if err != nil || res.IsError {
+		t.Fatalf("memory_ask --after error=%v isError=%v text=%s", err, res != nil && res.IsError, resultText(res))
+	}
+	var afterData struct {
+		Status string `json:"status"`
+		Claims []struct {
+			ID string `json:"id"`
+		} `json:"claims"`
+	}
+	if err := json.Unmarshal([]byte(resultText(res)), &afterData); err != nil {
+		t.Fatalf("decode after result: %v", err)
+	}
+	if afterData.Status != "ready" || len(afterData.Claims) != 1 || afterData.Claims[0].ID != claimLate.ID {
+		t.Fatalf("afterData = %#v, want only late claim", afterData)
+	}
+
+	// 2. memory_ask with before 2026-08-10 returns only Early
+	res, err = callTool(t, cs, "memory_ask", map[string]any{
+		"query":  "mcp temporal",
+		"before": "2026-08-10T00:00:00Z",
+	})
+	if err != nil || res.IsError {
+		t.Fatalf("memory_ask --before error=%v isError=%v text=%s", err, res != nil && res.IsError, resultText(res))
+	}
+	var beforeData struct {
+		Status string `json:"status"`
+		Claims []struct {
+			ID string `json:"id"`
+		} `json:"claims"`
+	}
+	if err := json.Unmarshal([]byte(resultText(res)), &beforeData); err != nil {
+		t.Fatalf("decode before result: %v", err)
+	}
+	if beforeData.Status != "ready" || len(beforeData.Claims) != 1 || beforeData.Claims[0].ID != claimEarly.ID {
+		t.Fatalf("beforeData = %#v, want only early claim", beforeData)
+	}
+
+	// 3. memory_ask with invalid timestamp fails with isError
+	res, err = callTool(t, cs, "memory_ask", map[string]any{
+		"query": "mcp temporal",
+		"after": "bad-timestamp",
+	})
+	if err != nil {
+		t.Fatalf("memory_ask invalid timestamp error = %v", err)
+	}
+	if !res.IsError {
+		t.Fatalf("memory_ask invalid timestamp must return isError; got %s", resultText(res))
 	}
 }

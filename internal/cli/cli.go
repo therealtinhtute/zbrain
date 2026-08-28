@@ -25,6 +25,9 @@ var (
 	askFlags = map[string]struct{}{
 		"workspace": {},
 		"include":   {},
+		"after":     {},
+		"before":    {},
+		"as-of":     {},
 	}
 	evidenceAddFlags = map[string]struct{}{
 		"file":       {},
@@ -484,14 +487,23 @@ func (app App) runAsk(args []string) error {
 		}
 		filtered = append(filtered, arg)
 	}
-	workspace, includes, rest, err := parseWorkspaceIncludeFlags(filtered)
+	workspace, includes, after, before, asOf, rest, err := parseAskFlags(filtered)
 	if err != nil {
 		return err
 	}
 	if len(rest) == 0 {
-		return exitCodeError(2, "usage: zbrain ask [--workspace <name>] [--include <name>]... [--embed] <query>")
+		return exitCodeError(2, "usage: zbrain ask [--workspace <name>] [--include <name>]... [--embed] [--after <time>] [--before <time>] [--as-of <time>] <query>")
 	}
-	response, err := zruntime.TrustedQuery(app.Paths, zruntime.TrustedQueryOptions{Workspace: workspace, Includes: includes, Query: strings.Join(rest, " "), Limit: 10, Embedding: embed})
+	response, err := zruntime.TrustedQuery(app.Paths, zruntime.TrustedQueryOptions{
+		Workspace: workspace,
+		Includes:  includes,
+		Query:     strings.Join(rest, " "),
+		Limit:     10,
+		Embedding: embed,
+		After:     after,
+		Before:    before,
+		AsOf:      asOf,
+	})
 	if err != nil {
 		return err
 	}
@@ -924,9 +936,9 @@ func parseWorkspaceFlag(args []string) (string, []string, error) {
 	return flags.single("workspace"), rest, err
 }
 
-func parseWorkspaceIncludeFlags(args []string) (string, []string, []string, error) {
+func parseAskFlags(args []string) (string, []string, string, string, string, []string, error) {
 	flags, rest, err := parseFlags(args, askFlags)
-	return flags.single("workspace"), flags.values["include"], rest, err
+	return flags.single("workspace"), flags.values["include"], flags.single("after"), flags.single("before"), flags.single("as-of"), rest, err
 }
 
 func unknownFlag(arg string) error {
@@ -1133,7 +1145,7 @@ TTY, then verify and print the one-time token as JSON for later apply.
 }
 
 func (app App) printAskHelp() {
-	_, _ = fmt.Fprint(app.Stdout, `Usage: zbrain ask [--workspace <name>] [--include <name>]... [--embed] <query>
+	_, _ = fmt.Fprint(app.Stdout, `Usage: zbrain ask [--workspace <name>] [--include <name>]... [--embed] [--after <time>] [--before <time>] [--as-of <time>] <query>
 
 Return trusted context JSON without calling an LLM.
 
@@ -1141,6 +1153,9 @@ Options:
   --workspace <name>       Primary workspace; defaults to the current workspace
   --include <name>         Explicit read-only secondary workspace; repeatable
   --embed                  Also use local embedding vectors; defaults to lexical-only
+  --after <rfc3339>        Filter claims verified/created at or after timestamp
+  --before <rfc3339>       Filter claims verified/created at or before timestamp
+  --as-of <rfc3339>        Reconstruct active state at point in time
 `)
 }
 
