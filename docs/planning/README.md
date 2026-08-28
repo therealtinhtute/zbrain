@@ -10,6 +10,7 @@ decision in the v2 release traces back to one of these files.
 | [STRATEGY.md](./STRATEGY.md) | Strategic positioning of zbrain v2: workspace-isolated knowledge retrieval, the MCP-server-as-distribution move (§8), and the human-review gate as a moat. | 2026-06-20 |
 | [V2-ARCHITECTURE.md](./V2-ARCHITECTURE.md) | V2 architecture: files-as-truth storage, FTS5 retrieval, tier-weighted scoring, lifecycle state machine, multi-agent safety. | 2026-06-20 |
 | [MCP-V2-BRAINSTORM.md](./MCP-V2-BRAINSTORM.md) | Brainstorm of ten MCP server ideas against the stateless `2026-07-28` spec revision, scoring, and a mini-PRD for the selected prototype (`crashlens`). | 2026-08-25 |
+| [CONFLICT-AWARE-DRAFTS.md](./CONFLICT-AWARE-DRAFTS.md) | F1 plan — deterministic contradiction heuristics at `claim draft` time with `status: conflict` surfacing in `ask`. | 2026-08-26 |
 
 These are **not** user-facing docs. The authoritative spec is [`SPEC.md`](../../SPEC.md);
 the implementation is the code under `src/`. Read these only when investigating
