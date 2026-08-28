@@ -3,9 +3,9 @@ id: 01M0ZAT3BS4GS7X61V4ZZB9GY9
 type: plan
 intake_id: 01M0ZAYX27CD3EKSN1CWTPT4XE
 lane: normal
-status: active
+status: completed
 created: 2026-08-26
-updated: 2026-08-26
+updated: 2026-08-28
 ---
 
 # Plan: Conflict-aware drafts
