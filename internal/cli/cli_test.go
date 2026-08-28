@@ -1543,6 +1543,12 @@ func TestSurface(t *testing.T) {
 		}
 		captured.WriteString("\n")
 	}
+	if os.Getenv("UPDATE_EXPECT") == "1" {
+		if err := os.WriteFile(snapshotPath, captured.Bytes(), 0o644); err != nil {
+			t.Fatalf("write snapshot %s: %v", snapshotPath, err)
+		}
+		return
+	}
 
 	want, err := os.ReadFile(snapshotPath)
 	if err != nil {
@@ -1664,5 +1670,92 @@ func TestRunAskSurfacesConflictCandidate(t *testing.T) {
 	}
 	if len(candidate.Contradicts) != 1 || candidate.Contradicts[0].ClaimID != approvedDraft.ID || candidate.Contradicts[0].Heuristic != "value_swap" {
 		t.Fatalf("candidate.Contradicts = %#v, want value_swap against %s", candidate.Contradicts, approvedDraft.ID)
+	}
+}
+
+func TestRunAskTemporalFlags(t *testing.T) {
+	app, _ := testApp(t)
+	setupResearchApp(t, &app)
+
+	// 1. Create Early claim verified at 2026-08-01
+	app.Now = func() time.Time { return time.Date(2026, 8, 1, 10, 0, 0, 0, time.UTC) }
+	app.Stdout = &bytes.Buffer{}
+	app.Stdin = strings.NewReader("temporal early decision body\n")
+	if err := app.Run([]string{"claim", "draft", "--tier", "projects", "--title", "Early Decision", "--basis", "owner"}); err != nil {
+		t.Fatalf("Run(claim draft early) error = %v", err)
+	}
+	var earlyDraft struct {
+		ID string `json:"id"`
+	}
+	decodeJSON(t, stdout(app), &earlyDraft)
+	if err := app.Run([]string{"claim", "approve", earlyDraft.ID}); err != nil {
+		t.Fatalf("Run(claim approve early) error = %v", err)
+	}
+
+	// 2. Create Late claim verified at 2026-08-28
+	app.Now = func() time.Time { return time.Date(2026, 8, 28, 10, 0, 0, 0, time.UTC) }
+	app.Stdout = &bytes.Buffer{}
+	app.Stdin = strings.NewReader("temporal late decision body\n")
+	if err := app.Run([]string{"claim", "draft", "--tier", "projects", "--title", "Late Decision", "--basis", "owner"}); err != nil {
+		t.Fatalf("Run(claim draft late) error = %v", err)
+	}
+	var lateDraft struct {
+		ID string `json:"id"`
+	}
+	decodeJSON(t, stdout(app), &lateDraft)
+	if err := app.Run([]string{"claim", "approve", lateDraft.ID}); err != nil {
+		t.Fatalf("Run(claim approve late) error = %v", err)
+	}
+
+	// Reindex
+	app.Stdout = &bytes.Buffer{}
+	if err := app.Run([]string{"reindex"}); err != nil {
+		t.Fatalf("Run(reindex) error = %v", err)
+	}
+
+	type askResponse struct {
+		Status string `json:"status"`
+		Claims []struct {
+			ID string `json:"id"`
+		} `json:"claims"`
+	}
+
+	// Test --after 2026-08-10 returns only Late
+	app.Stdout = &bytes.Buffer{}
+	if err := app.Run([]string{"ask", "--after", "2026-08-10T00:00:00Z", "temporal", "decision"}); err != nil {
+		t.Fatalf("Run(ask --after) error = %v", err)
+	}
+	var afterRes askResponse
+	decodeJSON(t, stdout(app), &afterRes)
+	if afterRes.Status != "ready" || len(afterRes.Claims) != 1 || afterRes.Claims[0].ID != lateDraft.ID {
+		t.Fatalf("ask --after response = %#v, want only late claim", afterRes)
+	}
+
+	// Test --before 2026-08-10 returns only Early
+	app.Stdout = &bytes.Buffer{}
+	if err := app.Run([]string{"ask", "--before", "2026-08-10T00:00:00Z", "temporal", "decision"}); err != nil {
+		t.Fatalf("Run(ask --before) error = %v", err)
+	}
+	var beforeRes askResponse
+	decodeJSON(t, stdout(app), &beforeRes)
+	if beforeRes.Status != "ready" || len(beforeRes.Claims) != 1 || beforeRes.Claims[0].ID != earlyDraft.ID {
+		t.Fatalf("ask --before response = %#v, want only early claim", beforeRes)
+	}
+
+	// Test --as-of 2026-08-05 returns only Early
+	app.Stdout = &bytes.Buffer{}
+	if err := app.Run([]string{"ask", "--as-of", "2026-08-05T00:00:00Z", "temporal", "decision"}); err != nil {
+		t.Fatalf("Run(ask --as-of) error = %v", err)
+	}
+	var asOfRes askResponse
+	decodeJSON(t, stdout(app), &asOfRes)
+	if asOfRes.Status != "ready" || len(asOfRes.Claims) != 1 || asOfRes.Claims[0].ID != earlyDraft.ID {
+		t.Fatalf("ask --as-of response = %#v, want only early claim", asOfRes)
+	}
+
+	// Test invalid timestamp returns error
+	app.Stdout = &bytes.Buffer{}
+	if err := app.Run([]string{"ask", "--after", "bad-date", "temporal"}); err == nil {
+		t.Fatalf("Run(ask invalid timestamp) error = nil, want error")
 	}
 }

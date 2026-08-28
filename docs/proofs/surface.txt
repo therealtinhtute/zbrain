@@ -71,7 +71,7 @@ Options:
   --embed        Also compute and store loopback embedding vectors
 
 === zbrain ask --help ===
-Usage: zbrain ask [--workspace <name>] [--include <name>]... [--embed] <query>
+Usage: zbrain ask [--workspace <name>] [--include <name>]... [--embed] [--after <time>] [--before <time>] [--as-of <time>] <query>
 
 Return trusted context JSON without calling an LLM.
 
@@ -79,6 +79,9 @@ Options:
   --workspace <name>       Primary workspace; defaults to the current workspace
   --include <name>         Explicit read-only secondary workspace; repeatable
   --embed                  Also use local embedding vectors; defaults to lexical-only
+  --after <rfc3339>        Filter claims verified/created at or after timestamp
+  --before <rfc3339>       Filter claims verified/created at or before timestamp
+  --as-of <rfc3339>        Reconstruct active state at point in time
 
 === zbrain status --help ===
 Usage: zbrain status [--workspace <name>]
