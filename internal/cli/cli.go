@@ -941,11 +941,6 @@ func parseAskFlags(args []string) (string, []string, string, string, string, []s
 	return flags.single("workspace"), flags.values["include"], flags.single("after"), flags.single("before"), flags.single("as-of"), rest, err
 }
 
-func parseWorkspaceIncludeFlags(args []string) (string, []string, []string, error) {
-	flags, rest, err := parseFlags(args, askFlags)
-	return flags.single("workspace"), flags.values["include"], rest, err
-}
-
 func unknownFlag(arg string) error {
 	return exitCodeError(2, fmt.Sprintf("unknown flag: %s", arg))
 }
