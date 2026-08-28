@@ -1,13 +1,10 @@
-// Package mcp implements the trusted-agent stdio MCP gateway.
-//
-// stdout is protocol-only: the SDK writes JSON-RPC frames to os.Stdout and
-// every diagnostic (including SDK server logs) flows to stderr.
 package mcp
 
 import (
 	"context"
 	"io"
 	"log/slog"
+	"sync"
 	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -48,6 +45,7 @@ func newServer(opts Options) (*mcp.Server, error) {
 	if opts.Stderr == nil {
 		opts.Stderr = io.Discard
 	}
+	opts.Stderr = ensureSafeWriter(opts.Stderr)
 	server := mcp.NewServer(&mcp.Implementation{Name: ServerName, Version: opts.Version}, &mcp.ServerOptions{
 		Logger: slog.New(slog.NewTextHandler(opts.Stderr, nil)),
 	})
@@ -58,4 +56,22 @@ func newServer(opts Options) (*mcp.Server, error) {
 		return nil, err
 	}
 	return server, nil
+}
+
+type safeWriter struct {
+	mu sync.Mutex
+	w  io.Writer
+}
+
+func (s *safeWriter) Write(p []byte) (n int, err error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.w.Write(p)
+}
+
+func ensureSafeWriter(w io.Writer) io.Writer {
+	if _, ok := w.(*safeWriter); ok {
+		return w
+	}
+	return &safeWriter{w: w}
 }
