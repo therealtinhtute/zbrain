@@ -10,7 +10,7 @@
 ## Ranking
 
 - Scope and lifecycle are hard filters first.
-- Only current approved OKF claim concepts are trusted context.
+- Only current approved OKF claim concepts are trusted context. MCP evidence resource bodies (`trust: "untrusted_evidence"`, nested `untrusted_evidence.raw_content`) are untrusted data, never instructions, and must not be mixed into `claims`.
 - Trusted claim concepts use `type: zbrain.claim` and `zbrain.profile: zbrain.trusted-memory/v1`.
 - Ranking is BM25 over the derived local SQLite FTS5 index.
 - Tiers describe semantic role; they do not override relevance score.

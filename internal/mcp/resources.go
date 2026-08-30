@@ -25,17 +25,17 @@ func registerResources(server *mcp.Server, opts Options) error {
 	}
 
 	server.AddResourceTemplate(&mcp.ResourceTemplate{
-		URITemplate:  "zbrain://workspace/{workspace}/claim/{id}",
-		Name:         "Claim",
-		Description:  "Read a canonical claim by workspace and ID.",
-		MIMEType:     "application/json",
+		URITemplate: "zbrain://workspace/{workspace}/claim/{id}",
+		Name:        "Claim",
+		Description: "Read a canonical claim by workspace and ID.",
+		MIMEType:    "application/json",
 	}, handler)
 
 	server.AddResourceTemplate(&mcp.ResourceTemplate{
-		URITemplate:  "zbrain://workspace/{workspace}/evidence/{id}",
-		Name:         "Evidence",
-		Description:  "Read an evidence record by workspace and ID.",
-		MIMEType:     "application/json",
+		URITemplate: "zbrain://workspace/{workspace}/evidence/{id}",
+		Name:        "Evidence",
+		Description: "Read an evidence record by workspace and ID.",
+		MIMEType:    "application/json",
 	}, handler)
 
 	return nil
@@ -92,7 +92,7 @@ func readClaimResource(uri, workspace, id string, opts Options) (*mcp.ReadResour
 	}, nil
 }
 
-// readEvidenceResource returns the evidence metadata and raw content as JSON.
+// readEvidenceResource returns evidence metadata plus fenced raw snapshot bytes.
 func readEvidenceResource(uri, workspace, id string, opts Options) (*mcp.ReadResourceResult, error) {
 	evidence, err := (zruntime.EvidenceStore{Paths: opts.Paths, Now: opts.Now}).Read(workspace, id)
 	if err != nil {
@@ -110,10 +110,20 @@ func readEvidenceResource(uri, workspace, id string, opts Options) (*mcp.ReadRes
 	}
 
 	out := struct {
-		SchemaVersion int                  `json:"schema_version"`
-		Evidence      zruntime.Evidence    `json:"evidence"`
-		RawContent    string               `json:"raw_content"`
-	}{1, evidence, string(rawBytes)}
+		SchemaVersion     int               `json:"schema_version"`
+		Trust             string            `json:"trust"`
+		Evidence          zruntime.Evidence `json:"evidence"`
+		UntrustedEvidence struct {
+			RawContent string `json:"raw_content"`
+		} `json:"untrusted_evidence"`
+	}{
+		SchemaVersion: 1,
+		Trust:         "untrusted_evidence",
+		Evidence:      evidence,
+		UntrustedEvidence: struct {
+			RawContent string `json:"raw_content"`
+		}{RawContent: string(rawBytes)},
+	}
 
 	encoded, err := json.MarshalIndent(out, "", "  ")
 	if err != nil {

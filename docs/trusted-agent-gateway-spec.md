@@ -22,7 +22,7 @@ TTY input, and the viewer is local loopback; none is a remote service.
 - No LLM, completion, provider SDK, API key, network fetch, remote bind, or
   background daemon in zbrain core.
 - Workspace resolver and runtime locks are reused by every surface.
-- Raw evidence is fenced as `untrusted_evidence`; it is never answer material.
+- MCP evidence resource JSON is `{schema_version, trust: "untrusted_evidence", evidence, untrusted_evidence: {raw_content}}`; nested raw bytes are never answer material and never a top-level `raw_content` field.
 - Drafts are promotion candidates and are excluded from trusted claims.
 - Canonical mutations dirty the derived index and never auto-reindex.
 - Challenge action digests bind workspace, operation, claim ID, canonical draft

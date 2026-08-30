@@ -3,6 +3,7 @@ package mcp
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -121,7 +122,7 @@ func TestResourceSurface(t *testing.T) {
 		t.Errorf("claim resource missing claim content; got %s", claimText)
 	}
 
-	// Reading the evidence resource returns the metadata and raw snapshot.
+	// Reading the evidence resource returns fenced metadata and nested raw bytes.
 	evidenceRes, err := cs.ReadResource(ctx, &mcp.ReadResourceParams{
 		URI: "zbrain://workspace/research/evidence/" + evidenceID,
 	})
@@ -129,8 +130,8 @@ func TestResourceSurface(t *testing.T) {
 		t.Fatalf("ReadResource(evidence) error = %v", err)
 	}
 	evidenceText := resourceText(evidenceRes)
-	if !strings.Contains(evidenceText, evidenceID) || !strings.Contains(evidenceText, "raw snapshot bytes") {
-		t.Errorf("evidence resource missing metadata or raw content; got %s", evidenceText)
+	if !strings.Contains(evidenceText, evidenceID) || !strings.Contains(evidenceText, `"trust": "untrusted_evidence"`) || !strings.Contains(evidenceText, "raw snapshot bytes") {
+		t.Errorf("evidence resource missing fenced envelope; got %s", evidenceText)
 	}
 
 	// Reading a nonexistent claim maps to ResourceNotFound.
@@ -173,6 +174,60 @@ func TestResourceSurface(t *testing.T) {
 	}
 	if readEvidence.SHA256 == "" {
 		t.Errorf("evidence digest empty after resource reads")
+	}
+}
+
+// TestEvidenceResourceFenced asserts the evidence resource envelope: trust is
+// untrusted_evidence, raw bytes live only under untrusted_evidence, and there
+// is no top-level raw_content.
+func TestEvidenceResourceFenced(t *testing.T) {
+	opts, _, evidenceID := resourceFixture(t)
+	server, err := newServer(opts)
+	if err != nil {
+		t.Fatalf("newServer() error = %v", err)
+	}
+	cs := connectClient(t, server)
+	ctx := context.Background()
+
+	evidenceRes, err := cs.ReadResource(ctx, &mcp.ReadResourceParams{
+		URI: "zbrain://workspace/research/evidence/" + evidenceID,
+	})
+	if err != nil {
+		t.Fatalf("ReadResource(evidence) error = %v", err)
+	}
+	evidenceText := resourceText(evidenceRes)
+
+	var envelope struct {
+		SchemaVersion     int             `json:"schema_version"`
+		Trust             string          `json:"trust"`
+		Evidence          json.RawMessage `json:"evidence"`
+		UntrustedEvidence struct {
+			RawContent string `json:"raw_content"`
+		} `json:"untrusted_evidence"`
+	}
+	if err := json.Unmarshal([]byte(evidenceText), &envelope); err != nil {
+		t.Fatalf("unmarshal evidence resource: %v", err)
+	}
+	if envelope.Trust != "untrusted_evidence" {
+		t.Errorf("trust = %q, want untrusted_evidence", envelope.Trust)
+	}
+	if envelope.UntrustedEvidence.RawContent != "raw snapshot bytes" {
+		t.Errorf("untrusted_evidence.raw_content = %q, want %q", envelope.UntrustedEvidence.RawContent, "raw snapshot bytes")
+	}
+
+	var top map[string]any
+	if err := json.Unmarshal([]byte(evidenceText), &top); err != nil {
+		t.Fatalf("unmarshal evidence resource map: %v", err)
+	}
+	if _, ok := top["raw_content"]; ok {
+		t.Errorf("top-level raw_content present")
+	}
+	nested, ok := top["untrusted_evidence"].(map[string]any)
+	if !ok {
+		t.Fatalf("untrusted_evidence missing or not an object: %T", top["untrusted_evidence"])
+	}
+	if nested["raw_content"] != "raw snapshot bytes" {
+		t.Errorf("nested raw_content = %#v, want %q", nested["raw_content"], "raw snapshot bytes")
 	}
 }
 
