@@ -30,6 +30,7 @@ type Evidence struct {
 	MediaType  string `yaml:"media_type" json:"media_type"`
 	ByteLength int64  `yaml:"byte_length" json:"byte_length"`
 	SHA256     string `yaml:"sha256" json:"sha256"`
+	Deduped    bool   `yaml:"-" json:"deduped"`
 }
 
 type EvidenceVerificationError struct {
@@ -94,6 +95,17 @@ func (store EvidenceStore) AddFile(workspace string, sourcePath string, origin s
 	if strings.TrimSpace(mediaType) == "" {
 		mediaType = "application/octet-stream"
 	}
+	digest, err := hashEvidenceSourceFile(sourcePath)
+	if err != nil {
+		return Evidence{}, err
+	}
+	if existing, found, err := store.lookupEvidenceBySHA256(workspace, digest); err != nil {
+		return Evidence{}, err
+	} else if found {
+		existing.Deduped = true
+		return existing, nil
+	}
+
 	source, err := os.Open(sourcePath)
 	if err != nil {
 		return Evidence{}, err
@@ -161,13 +173,17 @@ func (store EvidenceStore) AddFile(workspace string, sourcePath string, origin s
 	if store.Now != nil {
 		now = store.Now
 	}
+	actual := hex.EncodeToString(hash.Sum(nil))
+	if actual != digest {
+		return Evidence{}, fmt.Errorf("source file changed during capture")
+	}
 	evidence := Evidence{
 		ID:         id,
 		Origin:     origin,
 		CapturedAt: now().UTC().Format(time.RFC3339),
 		MediaType:  mediaType,
 		ByteLength: written,
-		SHA256:     hex.EncodeToString(hash.Sum(nil)),
+		SHA256:     digest,
 	}
 	metadata, err := yaml.Marshal(evidence)
 	if err != nil {
@@ -482,4 +498,52 @@ func (store EvidenceStore) markDirty(workspace string) error {
 		return err
 	}
 	return (IndexStore{Paths: store.Paths}).MarkDirty(workspace)
+}
+
+func hashEvidenceSourceFile(path string) (string, error) {
+	source, err := os.Open(path)
+	if err != nil {
+		return "", err
+	}
+	defer func() { _ = source.Close() }()
+	hash := sha256.New()
+	if _, err := io.Copy(hash, source); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(hash.Sum(nil)), nil
+}
+
+func (store EvidenceStore) lookupEvidenceBySHA256(workspace string, digest string) (Evidence, bool, error) {
+	sourcesDir, err := ResolveWorkspacePath(store.Paths, workspace, filepath.ToSlash(filepath.Join("evidence", "sources")))
+	if err != nil {
+		return Evidence{}, false, err
+	}
+	entries, err := os.ReadDir(sourcesDir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return Evidence{}, false, nil
+		}
+		return Evidence{}, false, err
+	}
+	ids := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+		name := entry.Name()
+		if evidenceIDPattern.MatchString(name) {
+			ids = append(ids, name)
+		}
+	}
+	sort.Strings(ids)
+	for _, id := range ids {
+		evidence, err := store.Read(workspace, id)
+		if err != nil {
+			continue
+		}
+		if evidence.SHA256 == digest {
+			return evidence, true, nil
+		}
+	}
+	return Evidence{}, false, nil
 }

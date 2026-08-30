@@ -31,6 +31,31 @@ type IndexSummary struct {
 	ManifestDigest string           `json:"manifest_digest"`
 	RebuiltAt      string           `json:"rebuilt_at"`
 	Embedding      EmbeddingSummary `json:"embedding"`
+	Catalog        []CatalogClaim   `json:"catalog"`
+}
+
+type CatalogClaim struct {
+	ID         string `json:"id"`
+	Title      string `json:"title"`
+	Tier       string `json:"tier"`
+	StaleAfter string `json:"stale_after,omitempty"`
+}
+
+func ApprovedCatalog(claims []Claim) []CatalogClaim {
+	catalog := make([]CatalogClaim, 0)
+	for _, claim := range claims {
+		if claim.Status != ClaimStatusApproved {
+			continue
+		}
+		catalog = append(catalog, CatalogClaim{
+			ID:         claim.ID,
+			Title:      claim.Title,
+			Tier:       claim.Tier,
+			StaleAfter: claim.StaleAfter,
+		})
+	}
+	sort.Slice(catalog, func(i, j int) bool { return catalog[i].ID < catalog[j].ID })
+	return catalog
 }
 
 type EmbeddingSummary struct {
@@ -909,6 +934,7 @@ func (store IndexStore) Rebuild(workspace string) (IndexSummary, error) {
 		RebuildState:   rebuildStatus,
 		ManifestDigest: manifest.Digest,
 		RebuiltAt:      rebuiltAt,
+		Catalog:        ApprovedCatalog(scan.Claims),
 	}
 	tx, err := db.Begin()
 	if err != nil {

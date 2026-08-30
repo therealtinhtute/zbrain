@@ -172,6 +172,9 @@ func TestToolSurface(t *testing.T) {
 	if !strings.Contains(resultText(res), `"workspace": "research"`) {
 		t.Errorf("memory_status missing workspace; %s", resultText(res))
 	}
+	if !strings.Contains(resultText(res), `"catalog"`) {
+		t.Errorf("memory_status missing catalog; %s", resultText(res))
+	}
 
 	// memory_reindex rebuilds the derived index.
 	res, err = callTool(t, cs, "memory_reindex", nil)
@@ -1096,5 +1099,51 @@ func TestMemoryAskTemporalFiltering(t *testing.T) {
 	}
 	if !res.IsError {
 		t.Fatalf("memory_ask invalid timestamp must return isError; got %s", resultText(res))
+	}
+}
+
+func TestEvidenceCaptureDedupesIdenticalFile(t *testing.T) {
+	opts := testOptions(t)
+	server, err := newServer(opts)
+	if err != nil {
+		t.Fatalf("newServer() error = %v", err)
+	}
+	cs := connectClient(t, server)
+	captureSource := filepath.Join(t.TempDir(), "capture.txt")
+	if err := os.WriteFile(captureSource, []byte("capture bytes"), 0o644); err != nil {
+		t.Fatalf("WriteFile(capture) error = %v", err)
+	}
+	type captureOut struct {
+		ID      string `json:"id"`
+		Deduped bool   `json:"deduped"`
+	}
+	res, err := callTool(t, cs, "evidence_capture", map[string]any{"file": captureSource, "origin": "file://capture.txt"})
+	if err != nil {
+		t.Fatalf("evidence_capture error = %v", err)
+	}
+	if res.IsError {
+		t.Fatalf("evidence_capture isError; %s", resultText(res))
+	}
+	var first captureOut
+	if err := json.Unmarshal([]byte(resultText(res)), &first); err != nil {
+		t.Fatalf("decode first capture: %v", err)
+	}
+	if !strings.HasPrefix(first.ID, "evd_") || first.Deduped {
+		t.Fatalf("first capture = %#v", first)
+	}
+
+	res, err = callTool(t, cs, "evidence_capture", map[string]any{"file": captureSource, "origin": "file://capture.txt"})
+	if err != nil {
+		t.Fatalf("evidence_capture duplicate error = %v", err)
+	}
+	if res.IsError {
+		t.Fatalf("evidence_capture duplicate isError; %s", resultText(res))
+	}
+	var second captureOut
+	if err := json.Unmarshal([]byte(resultText(res)), &second); err != nil {
+		t.Fatalf("decode second capture: %v", err)
+	}
+	if second.ID != first.ID || !second.Deduped {
+		t.Fatalf("second capture = %#v, want id %q deduped true", second, first.ID)
 	}
 }

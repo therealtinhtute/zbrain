@@ -196,6 +196,7 @@ func registerTools(server *mcp.Server, opts Options) error {
 				summary.Invalid = len(scan.Invalid)
 				summary.InvalidCount = len(scan.Invalid)
 				summary.InvalidClaims = scan.Invalid
+				summary.Catalog = zruntime.ApprovedCatalog(scan.Claims)
 			}
 			summary.Embedding = (zruntime.EmbeddingStore{Paths: opts.Paths}).Summary(workspace, summary.Approved)
 			if err := (zruntime.IndexStore{Paths: opts.Paths}).CheckFresh(workspace); err != nil {

@@ -176,6 +176,7 @@ func (app App) runStatus(args []string) error {
 		summary.Invalid = len(scan.Invalid)
 		summary.InvalidCount = len(scan.Invalid)
 		summary.InvalidClaims = scan.Invalid
+		summary.Catalog = zruntime.ApprovedCatalog(scan.Claims)
 	}
 	summary.Embedding = (zruntime.EmbeddingStore{Paths: app.Paths}).Summary(workspace, summary.Approved)
 	if err := idx.CheckFresh(workspace); err != nil {
@@ -216,9 +217,16 @@ func (app App) runDoctor(args []string) error {
 		return err
 	}
 	findings := []string{}
+	freshnessFailed := false
 	if err := (zruntime.IndexStore{Paths: app.Paths}).CheckFresh(workspace); err != nil {
 		findings = append(findings, err.Error())
+		freshnessFailed = true
 	}
+	structural, err := zruntime.StructuralFindings(app.Paths, workspace)
+	if err != nil {
+		return err
+	}
+	findings = append(findings, structural...)
 	if probe {
 		embStore := zruntime.EmbeddingStore{Paths: app.Paths}
 		count, err := embStore.Count(workspace)
@@ -232,13 +240,17 @@ func (app App) runDoctor(args []string) error {
 	if len(findings) > 0 {
 		status = "degraded"
 	}
+	nextAction := "zbrain reindex"
+	if !freshnessFailed && len(structural) > 0 {
+		nextAction = "review structural findings"
+	}
 	if err := writeJSON(app.Stdout, struct {
 		SchemaVersion int      `json:"schema_version"`
 		Workspace     string   `json:"workspace"`
 		Status        string   `json:"status"`
 		Findings      []string `json:"findings"`
 		NextAction    string   `json:"next_action"`
-	}{2, workspace, status, findings, "zbrain reindex"}); err != nil {
+	}{2, workspace, status, findings, nextAction}); err != nil {
 		return err
 	}
 	if len(findings) > 0 {

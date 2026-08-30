@@ -178,6 +178,152 @@ func TestEvidenceAddRejectsUnsafeAndMissingWorkspaceWithoutMutation(t *testing.T
 	}
 }
 
+func TestEvidenceAddFileSkipsDuplicateSHA256(t *testing.T) {
+	paths := evidenceTestPaths(t)
+	source := filepath.Join(t.TempDir(), "source.txt")
+	if err := os.WriteFile(source, []byte("original evidence"), 0o644); err != nil {
+		t.Fatalf("WriteFile(source) error = %v", err)
+	}
+	store := EvidenceStore{Paths: paths, Now: fixedEvidenceNow}
+	first, err := store.AddFile("research", source, "file://source.txt", "text/plain")
+	if err != nil {
+		t.Fatalf("AddFile(first) error = %v", err)
+	}
+	if first.Deduped {
+		t.Fatalf("first AddFile Deduped = true")
+	}
+	metadata, err := os.ReadFile(filepath.Join(paths.WorkspacesDir, "research", "evidence", "sources", first.ID, "source.yaml"))
+	if err != nil {
+		t.Fatalf("ReadFile(source.yaml) error = %v", err)
+	}
+	if strings.Contains(string(metadata), "deduped") {
+		t.Fatalf("source.yaml persisted deduped:\n%s", metadata)
+	}
+	before, err := readWorkspaceGeneration(paths, "research")
+	if err != nil {
+		t.Fatalf("readWorkspaceGeneration(before skip) error = %v", err)
+	}
+
+
+	second, err := store.AddFile("research", source, "file://other-origin", "application/json")
+	if err != nil {
+		t.Fatalf("AddFile(duplicate) error = %v", err)
+	}
+	if second.ID != first.ID || !second.Deduped {
+		t.Fatalf("duplicate AddFile = %#v, want id %q Deduped true", second, first.ID)
+	}
+	if second.Origin != first.Origin || second.MediaType != first.MediaType {
+		t.Fatalf("skip merged metadata: %#v", second)
+	}
+	if ids := evidenceSourceIDs(t, paths, "research"); len(ids) != 1 || ids[0] != first.ID {
+		t.Fatalf("evidence dirs = %v, want [%s]", ids, first.ID)
+	}
+	raw, err := os.ReadFile(filepath.Join(paths.WorkspacesDir, "research", "evidence", "sources", first.ID, "raw"))
+	if err != nil {
+		t.Fatalf("ReadFile(raw) error = %v", err)
+	}
+	if string(raw) != "original evidence" {
+		t.Fatalf("raw snapshot = %q", raw)
+	}
+	after, err := readWorkspaceGeneration(paths, "research")
+	if err != nil {
+		t.Fatalf("readWorkspaceGeneration(after skip) error = %v", err)
+	}
+	if after.Current != before.Current {
+		t.Fatalf("generation current bumped on skip: before=%#v after=%#v", before, after)
+	}
+
+
+	other := filepath.Join(t.TempDir(), "other.txt")
+	if err := os.WriteFile(other, []byte("other evidence"), 0o644); err != nil {
+		t.Fatalf("WriteFile(other) error = %v", err)
+	}
+	third, err := store.AddFile("research", other, "file://other.txt", "text/plain")
+	if err != nil {
+		t.Fatalf("AddFile(distinct) error = %v", err)
+	}
+	if third.ID == first.ID || third.Deduped {
+		t.Fatalf("distinct AddFile = %#v, want new id Deduped false", third)
+	}
+	if ids := evidenceSourceIDs(t, paths, "research"); len(ids) != 2 {
+		t.Fatalf("evidence dirs = %v, want 2", ids)
+	}
+}
+
+func TestEvidenceAddFileSkipDoesNotDirtyGeneration(t *testing.T) {
+	paths := evidenceTestPaths(t)
+	source := filepath.Join(t.TempDir(), "source.txt")
+	if err := os.WriteFile(source, []byte("duplicate evidence"), 0o644); err != nil {
+		t.Fatalf("WriteFile(source) error = %v", err)
+	}
+	store := EvidenceStore{Paths: paths, Now: fixedEvidenceNow}
+	first, err := store.AddFile("research", source, "file://source.txt", "text/plain")
+	if err != nil {
+		t.Fatalf("AddFile(first) error = %v", err)
+	}
+	if first.Deduped {
+		t.Fatalf("first AddFile Deduped = true")
+	}
+	dirtyPath := filepath.Join(paths.IndexesDir, "research.dirty")
+	if _, err := os.Stat(dirtyPath); err != nil {
+		t.Fatalf("Stat(dirty after first add) error = %v, want dirty marker", err)
+	}
+	idx := IndexStore{Paths: paths}
+	if _, err := idx.Rebuild("research"); err != nil {
+		t.Fatalf("Rebuild() error = %v", err)
+	}
+	if err := idx.CheckFresh("research"); err != nil {
+		t.Fatalf("CheckFresh() after reindex error = %v", err)
+	}
+	before, err := readWorkspaceGeneration(paths, "research")
+	if err != nil {
+		t.Fatalf("readWorkspaceGeneration(before) error = %v", err)
+	}
+	if _, err := os.Stat(dirtyPath); err == nil {
+		t.Fatalf("dirty marker exists after reindex")
+	}
+
+	second, err := store.AddFile("research", source, "file://source.txt", "text/plain")
+	if err != nil {
+		t.Fatalf("AddFile(duplicate) error = %v", err)
+	}
+	if second.ID != first.ID || !second.Deduped {
+		t.Fatalf("duplicate AddFile = %#v, want id %q Deduped true", second, first.ID)
+	}
+	after, err := readWorkspaceGeneration(paths, "research")
+	if err != nil {
+		t.Fatalf("readWorkspaceGeneration(after) error = %v", err)
+	}
+	if after.Current != before.Current {
+		t.Fatalf("generation current changed on skip: before=%#v after=%#v", before, after)
+	}
+	if err := idx.CheckFresh("research"); err != nil {
+		t.Fatalf("CheckFresh() after skip error = %v", err)
+	}
+	if _, err := os.Stat(dirtyPath); err == nil {
+		t.Fatalf("dirty marker created by skip")
+	}
+	if ids := evidenceSourceIDs(t, paths, "research"); len(ids) != 1 || ids[0] != first.ID {
+		t.Fatalf("evidence dirs = %v, want [%s]", ids, first.ID)
+	}
+}
+
+func evidenceSourceIDs(t *testing.T, paths Paths, workspace string) []string {
+	t.Helper()
+	entries, err := os.ReadDir(filepath.Join(paths.WorkspacesDir, workspace, "evidence", "sources"))
+	if err != nil {
+		t.Fatalf("ReadDir(evidence/sources) error = %v", err)
+	}
+	ids := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		if entry.IsDir() && evidenceIDPattern.MatchString(entry.Name()) {
+			ids = append(ids, entry.Name())
+		}
+	}
+	return ids
+}
+
+
 func sha256String(input string) string {
 	sum := sha256.Sum256([]byte(input))
 	return hex.EncodeToString(sum[:])

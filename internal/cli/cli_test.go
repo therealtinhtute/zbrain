@@ -262,6 +262,45 @@ func TestRunEvidenceAddAndClaimLifecycleJSON(t *testing.T) {
 	}
 }
 
+func TestRunEvidenceAddDedupesIdenticalFile(t *testing.T) {
+	app, tmp := testApp(t)
+	if err := app.Run([]string{"setup"}); err != nil {
+		t.Fatalf("Run(setup) error = %v", err)
+	}
+	if err := app.Run([]string{"workspace", "create", "research"}); err != nil {
+		t.Fatalf("Run(workspace create) error = %v", err)
+	}
+	source := filepath.Join(tmp, "source.txt")
+	if err := os.WriteFile(source, []byte("source bytes"), 0o644); err != nil {
+		t.Fatalf("WriteFile(source) error = %v", err)
+	}
+	type evidenceOut struct {
+		SchemaVersion int    `json:"schema_version"`
+		ID            string `json:"id"`
+		Workspace     string `json:"workspace"`
+		Deduped       bool   `json:"deduped"`
+	}
+	app.Stdout = &bytes.Buffer{}
+	if err := app.Run([]string{"evidence", "add", "--file", source, "--origin", "file://source.txt", "--media-type", "text/plain"}); err != nil {
+		t.Fatalf("Run(evidence add) error = %v", err)
+	}
+	var first evidenceOut
+	decodeJSON(t, stdout(app), &first)
+	if first.SchemaVersion != 1 || first.Workspace != "research" || !strings.HasPrefix(first.ID, "evd_") || first.Deduped {
+		t.Fatalf("first evidence output = %#v", first)
+	}
+
+	app.Stdout = &bytes.Buffer{}
+	if err := app.Run([]string{"evidence", "add", "--file", source, "--origin", "file://source.txt", "--media-type", "text/plain"}); err != nil {
+		t.Fatalf("Run(evidence add duplicate) error = %v", err)
+	}
+	var second evidenceOut
+	decodeJSON(t, stdout(app), &second)
+	if second.SchemaVersion != 1 || second.Workspace != "research" || second.ID != first.ID || !second.Deduped {
+		t.Fatalf("second evidence output = %#v, want id %q deduped true", second, first.ID)
+	}
+}
+
 func TestRunClaimApproveSupersedeRevokeTransitions(t *testing.T) {
 	app, _ := testApp(t)
 	if err := app.Run([]string{"setup"}); err != nil {
@@ -1495,6 +1534,109 @@ func TestExitCodes(t *testing.T) {
 				t.Fatalf("Run(%v) exit code = %d, want %d (err=%v)", tc.args, got, tc.want, err)
 			}
 		})
+	}
+}
+
+func TestDoctorReportsStructuralFinding(t *testing.T) {
+	app, _ := testApp(t)
+	setupResearchApp(t, &app)
+	if err := app.Run([]string{"reindex"}); err != nil {
+		t.Fatalf("Run(reindex) error = %v", err)
+	}
+	missing := "clm_ffffffffffffffffffffffffffffffff"
+	app.Stdin = strings.NewReader("Dangling support body\n")
+	if err := app.Run([]string{"claim", "draft", "--tier", "projects", "--title", "Dangle", "--basis", "derived", "--support", missing}); err != nil {
+		t.Fatalf("Run(claim draft) error = %v", err)
+	}
+	if err := app.Run([]string{"reindex"}); err != nil {
+		t.Fatalf("Run(reindex after draft) error = %v", err)
+	}
+	app.Stdout = &bytes.Buffer{}
+	app.Stderr = &bytes.Buffer{}
+	err := app.Run([]string{"doctor"})
+	if err == nil {
+		t.Fatalf("Run(doctor) error = nil, want exit 2")
+	}
+	if c, ok := err.(interface{ ExitCode() int }); !ok || c.ExitCode() != 2 {
+		t.Fatalf("Run(doctor) err = %v, want exit 2", err)
+	}
+	var response struct {
+		Status     string   `json:"status"`
+		Findings   []string `json:"findings"`
+		NextAction string   `json:"next_action"`
+	}
+	decodeJSON(t, stdout(app), &response)
+	if response.Status != "degraded" {
+		t.Fatalf("status = %q, want degraded", response.Status)
+	}
+	if response.NextAction != "review structural findings" {
+		t.Fatalf("next_action = %q", response.NextAction)
+	}
+	joined := strings.Join(response.Findings, "\n")
+	if !strings.Contains(joined, "supporting_claim_ids references missing "+missing) {
+		t.Fatalf("findings = %v, want dangling support", response.Findings)
+	}
+}
+
+func TestStatusEmitsApprovedCatalog(t *testing.T) {
+	app, _ := testApp(t)
+	setupResearchApp(t, &app)
+	app.Stdout = &bytes.Buffer{}
+	app.Stdin = strings.NewReader("Approved catalog body\n")
+	if err := app.Run([]string{"claim", "draft", "--tier", "projects", "--title", "Approved Catalog", "--basis", "owner"}); err != nil {
+		t.Fatalf("Run(claim draft approved) error = %v", err)
+	}
+	var approvedDraft struct {
+		ID string `json:"id"`
+	}
+	decodeJSON(t, stdout(app), &approvedDraft)
+	if err := app.Run([]string{"claim", "approve", approvedDraft.ID}); err != nil {
+		t.Fatalf("Run(claim approve) error = %v", err)
+	}
+	app.Stdout = &bytes.Buffer{}
+	app.Stdin = strings.NewReader("Draft catalog body\n")
+	if err := app.Run([]string{"claim", "draft", "--tier", "projects", "--title", "Draft Catalog", "--basis", "owner"}); err != nil {
+		t.Fatalf("Run(claim draft leftover) error = %v", err)
+	}
+	if err := app.Run([]string{"reindex"}); err != nil {
+		t.Fatalf("Run(reindex) error = %v", err)
+	}
+	app.Stdout = &bytes.Buffer{}
+	if err := app.Run([]string{"status"}); err != nil {
+		t.Fatalf("Run(status) error = %v", err)
+	}
+	var status struct {
+		Catalog []struct {
+			ID    string `json:"id"`
+			Title string `json:"title"`
+			Tier  string `json:"tier"`
+		} `json:"catalog"`
+	}
+	decodeJSON(t, stdout(app), &status)
+	if len(status.Catalog) != 1 || status.Catalog[0].ID != approvedDraft.ID || status.Catalog[0].Title != "Approved Catalog" || status.Catalog[0].Tier != "projects" {
+		t.Fatalf("status catalog = %#v, want approved only", status.Catalog)
+	}
+	wiki := filepath.Join(app.Paths.WorkspacesDir, "research", "wiki")
+	err := filepath.WalkDir(wiki, func(path string, entry os.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if entry.Name() == "catalog.json" || entry.Name() == "_index.md" {
+			t.Errorf("catalog leaked into wiki: %s", path)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("WalkDir(wiki) error = %v", err)
+	}
+	app.Stdout = &bytes.Buffer{}
+	if err := app.Run([]string{"ask", "Approved", "Catalog"}); err != nil {
+		t.Fatalf("Run(ask) error = %v", err)
+	}
+	var ask map[string]any
+	decodeJSON(t, stdout(app), &ask)
+	if _, ok := ask["catalog"]; ok {
+		t.Fatalf("ask JSON unexpectedly has catalog: %#v", ask)
 	}
 }
 

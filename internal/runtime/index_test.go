@@ -1565,3 +1565,49 @@ func indexDirtyPath(t *testing.T, idx IndexStore, workspace string) string {
 	}
 	return path
 }
+
+func TestApprovedCatalogOmitsDraftsAndSorts(t *testing.T) {
+	draft := Claim{ID: "clm_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", Title: "Draft", Tier: "projects", Status: ClaimStatusDraft}
+	second := Claim{ID: "clm_cccccccccccccccccccccccccccccccc", Title: "Second", Tier: "axioms", Status: ClaimStatusApproved, StaleAfter: "2027-01-01T00:00:00Z"}
+	first := Claim{ID: "clm_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", Title: "First", Tier: "projects", Status: ClaimStatusApproved}
+	revoked := Claim{ID: "clm_dddddddddddddddddddddddddddddddd", Title: "Revoked", Tier: "projects", Status: ClaimStatusRevoked}
+	got := ApprovedCatalog([]Claim{draft, second, first, revoked})
+	if len(got) != 2 {
+		t.Fatalf("catalog len = %d, want 2: %#v", len(got), got)
+	}
+	if got[0].ID != first.ID || got[0].Title != "First" || got[0].Tier != "projects" {
+		t.Fatalf("catalog[0] = %#v", got[0])
+	}
+	if got[1].ID != second.ID || got[1].StaleAfter != "2027-01-01T00:00:00Z" {
+		t.Fatalf("catalog[1] = %#v", got[1])
+	}
+}
+
+func TestRebuildDoesNotWriteWikiCatalog(t *testing.T) {
+	paths := indexTestPaths(t)
+	store := ClaimStore{Paths: paths, Now: fixedIndexNow}
+	claim := indexClaim("clm_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "Catalog Claim", ClaimBasisOwner)
+	if _, err := store.WriteDraft("research", claim); err != nil {
+		t.Fatalf("WriteDraft() error = %v", err)
+	}
+	if _, err := store.Approve("research", claim.ID); err != nil {
+		t.Fatalf("Approve() error = %v", err)
+	}
+	if _, err := (IndexStore{Paths: paths}).Rebuild("research"); err != nil {
+		t.Fatalf("Rebuild() error = %v", err)
+	}
+	wiki := filepath.Join(paths.WorkspacesDir, "research", "wiki")
+	err := filepath.WalkDir(wiki, func(path string, entry os.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		name := entry.Name()
+		if name == "catalog.json" || name == "_catalog.json" || name == "index.md" || name == "_index.md" {
+			t.Errorf("unexpected catalog file %s", path)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("WalkDir(wiki) error = %v", err)
+	}
+}
