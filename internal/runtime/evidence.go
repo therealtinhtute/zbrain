@@ -493,6 +493,154 @@ func (store EvidenceStore) evidenceFilePath(workspace string, id string, name st
 	return ResolveWorkspacePath(store.Paths, workspace, filepath.ToSlash(filepath.Join("evidence", "sources", id, name)))
 }
 
+type EvidenceDriftStatus string
+
+const (
+	EvidenceDriftUnchanged   EvidenceDriftStatus = "unchanged"
+	EvidenceDriftChanged     EvidenceDriftStatus = "changed"
+	EvidenceDriftMissing     EvidenceDriftStatus = "missing"
+	EvidenceDriftUncheckable EvidenceDriftStatus = "uncheckable"
+)
+
+const evidenceDriftRecoveryAction = "supersede and re-approve affected claims against a fresh evidence snapshot"
+
+type EvidenceDriftFinding struct {
+	ID                   string              `json:"id"`
+	Origin               string              `json:"origin"`
+	Status               EvidenceDriftStatus `json:"status"`
+	RecordedSHA256       string              `json:"recorded_sha256,omitempty"`
+	RecomputedSHA256     string              `json:"recomputed_sha256,omitempty"`
+	RecordedByteLength   int64               `json:"recorded_byte_length,omitempty"`
+	RecomputedByteLength int64               `json:"recomputed_byte_length,omitempty"`
+	AffectedClaimIDs     []string            `json:"affected_claim_ids"`
+	RecoveryAction       string              `json:"recovery_action"`
+}
+
+type EvidenceDriftReport struct {
+	Workspace string                 `json:"workspace"`
+	Findings  []EvidenceDriftFinding `json:"findings"`
+}
+
+// CheckDrift re-hashes every evidence snapshot origin against its recorded
+// metadata. It is strictly read-only: snapshots, canonical Markdown, indexes,
+// and mtimes are never touched, and non-local origins are never fetched.
+func (store EvidenceStore) CheckDrift(workspace string) (EvidenceDriftReport, error) {
+	if _, err := ValidateWorkspace(store.Paths, workspace); err != nil {
+		return EvidenceDriftReport{}, err
+	}
+	affected := make(map[string][]string)
+	scan, err := (ClaimStore{Paths: store.Paths}).ScanWorkspace(workspace)
+	if err != nil {
+		return EvidenceDriftReport{}, err
+	}
+	for _, claim := range scan.Claims {
+		for _, id := range claim.EvidenceIDs {
+			affected[id] = append(affected[id], claim.ID)
+		}
+	}
+	sourcesRoot, err := ResolveWorkspacePath(store.Paths, workspace, filepath.ToSlash(filepath.Join("evidence", "sources")))
+	if err != nil {
+		return EvidenceDriftReport{}, err
+	}
+	entries, err := os.ReadDir(sourcesRoot)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return EvidenceDriftReport{Workspace: workspace, Findings: []EvidenceDriftFinding{}}, nil
+		}
+		return EvidenceDriftReport{}, err
+	}
+	report := EvidenceDriftReport{Workspace: workspace, Findings: make([]EvidenceDriftFinding, 0, len(entries))}
+	for _, entry := range entries {
+		if !entry.IsDir() || !evidenceIDPattern.MatchString(entry.Name()) {
+			continue
+		}
+		evidence, err := store.Read(workspace, entry.Name())
+		if err != nil {
+			continue
+		}
+		report.Findings = append(report.Findings, classifyEvidenceDrift(evidence, affected[evidence.ID]))
+	}
+	sort.Slice(report.Findings, func(i, j int) bool { return report.Findings[i].ID < report.Findings[j].ID })
+	return report, nil
+}
+
+func classifyEvidenceDrift(evidence Evidence, affectedClaimIDs []string) EvidenceDriftFinding {
+	affected := make([]string, 0, len(affectedClaimIDs))
+	affected = append(affected, affectedClaimIDs...)
+	sort.Strings(affected)
+	finding := EvidenceDriftFinding{
+		ID:                 evidence.ID,
+		Origin:             evidence.Origin,
+		Status:             EvidenceDriftUnchanged,
+		RecordedSHA256:     evidence.SHA256,
+		RecordedByteLength: evidence.ByteLength,
+		AffectedClaimIDs:   affected,
+		RecoveryAction:     "no action required",
+	}
+	localPath, checkable := evidenceOriginLocalPath(evidence.Origin)
+	if !checkable {
+		finding.Status = EvidenceDriftUncheckable
+		finding.RecoveryAction = "origin is not locally checkable; supersede and re-approve against a fresh snapshot if drift is suspected"
+		return finding
+	}
+	recomputed, length, err := hashLocalOrigin(localPath)
+	if err != nil {
+		finding.Status = EvidenceDriftMissing
+		finding.RecoveryAction = evidenceDriftRecoveryAction
+		if !os.IsNotExist(err) {
+			finding.Status = EvidenceDriftUncheckable
+			finding.RecoveryAction = "origin cannot be read locally; supersede and re-approve against a fresh snapshot if drift is suspected"
+		}
+		return finding
+	}
+	finding.RecomputedSHA256 = recomputed
+	finding.RecomputedByteLength = length
+	if recomputed != evidence.SHA256 || length != evidence.ByteLength {
+		finding.Status = EvidenceDriftChanged
+		finding.RecoveryAction = evidenceDriftRecoveryAction
+	}
+	return finding
+}
+
+// evidenceOriginLocalPath resolves an origin recorded at evidence add time to a
+// local filesystem path. Non-file URI schemes are reported as uncheckable.
+func evidenceOriginLocalPath(origin string) (string, bool) {
+	if index := strings.Index(origin, "://"); index > 0 && isURIScheme(origin[:index]) {
+		if !strings.EqualFold(origin[:index], "file") {
+			return "", false
+		}
+		return strings.TrimPrefix(origin[index+3:], "//"), true
+	}
+	return origin, true
+}
+
+func isURIScheme(value string) bool {
+	for i := 0; i < len(value); i++ {
+		c := value[i]
+		switch {
+		case c >= 'a' && c <= 'z', c >= 'A' && c <= 'Z':
+		case i > 0 && (c >= '0' && c <= '9' || c == '+' || c == '-' || c == '.'):
+		default:
+			return false
+		}
+	}
+	return true
+}
+
+func hashLocalOrigin(path string) (string, int64, error) {
+	file, err := os.Open(path)
+	if err != nil {
+		return "", 0, err
+	}
+	defer func() { _ = file.Close() }()
+	hash := sha256.New()
+	written, err := io.Copy(hash, file)
+	if err != nil {
+		return "", 0, err
+	}
+	return hex.EncodeToString(hash.Sum(nil)), written, nil
+}
+
 func (store EvidenceStore) markDirty(workspace string) error {
 	if _, err := ValidateWorkspace(store.Paths, workspace); err != nil {
 		return err
