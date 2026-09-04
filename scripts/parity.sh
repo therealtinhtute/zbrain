@@ -4,7 +4,7 @@
 # manifests byte-for-byte.
 #
 # Usage: scripts/parity.sh [workspace-name] [op]
-#   op: workspace | setup | claims   (defaults: research, workspace)
+#   op: workspace | setup | claims | lifecycle   (defaults: research, workspace)
 set -euo pipefail
 
 root="$(cd "$(dirname "$0")/.." && pwd)"
@@ -56,6 +56,20 @@ case "$op" in
     run_rs --home "$go_home" --workspace "$workspace" --op claims-verify > "$tmp/rs_of_go.json"
     diff_or_fail "op=claims-verify go-reads-rust" "$tmp/go_of_rs.json" "$tmp/go.json"
     diff_or_fail "op=claims-verify rust-reads-go" "$tmp/rs_of_go.json" "$tmp/go.json"
+    ;;
+  lifecycle)
+    # Build the same draft -> approve -> supersede -> revoke chain with both
+    # runtimes (including the pending-transition journal round trip on
+    # supersede) and diff the lifecycle manifests; then prove two-way tree
+    # readability of the resulting workspace.
+    run_go --home "$go_home" --workspace "$workspace" --op lifecycle > "$tmp/go.json"
+    run_rs --home "$rs_home" --workspace "$workspace" --op lifecycle > "$tmp/rs.json"
+    diff_or_fail "op=lifecycle workspace=$workspace" "$tmp/go.json" "$tmp/rs.json"
+
+    run_go --home "$rs_home" --workspace "$workspace" --op lifecycle-verify > "$tmp/go_of_rs.json"
+    run_rs --home "$go_home" --workspace "$workspace" --op lifecycle-verify > "$tmp/rs_of_go.json"
+    diff_or_fail "op=lifecycle-verify go-reads-rust" "$tmp/go_of_rs.json" "$tmp/go.json"
+    diff_or_fail "op=lifecycle-verify rust-reads-go" "$tmp/rs_of_go.json" "$tmp/go.json"
     ;;
   *)
     echo "parity: unknown op $op" >&2

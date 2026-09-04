@@ -195,7 +195,7 @@ updated: 2026-09-04
 
   - phase_slug: m3-lifecycle-trust
     story_id: rust-m3-lifecycle-trust-20260904
-    status: planned
+    status: done
     goal: Lifecycle transitions, trust validation, doctor lint ported 1:1
     depends_on: m2-claims-evidence
     requirements: [R3, R7]
@@ -441,6 +441,9 @@ updated: 2026-09-04
 - 2026-09-04T23:55Z | phase: m2-claims-evidence | wave: W1-W3 | task: W1.T1,W2.T1,W3.T1 | task_status: DONE | run_id: rust-rewrite-r2-m2 (subagent) | verification: 145 tests (+55); 150-case Go-oracle YAML scalar corpus byte-identical; 3-way claims parity (Go-tree vs Rust-tree manifests byte-identical, Go-verifies-Rust-tree, Rust-verifies-Go-tree); `scripts/parity.sh research claims` OK; Go oracle `go test ./internal/runtime -run TestEvidence` still green | surfaces: crates/zbrain/src/{yaml,claims,evidence,manifest,coordination}.rs, tests/fixtures/*, parity harness --op claims | commit f55b550 on r2-m2, merged to rust-rewrite
 - 2026-09-04T23:56Z | phase: m2-claims-evidence | gate | task_status: DONE_WITH_CONCERNS | judge: same-session | verdict: APPROVED | notes: deferred tests enumerated for m3 (lifecycle/approve/supersede/revoke/migrate/transition ~20 tests) and m4 (evidence skip-does-not-dirty, nested claim boundary, runtime permissions, contradiction-through-approve — 4 tests); pending-transition recovery is a fail-closed stub until m3
 
+- 2026-09-04 | phase: m3-lifecycle-trust | waves: W1-W2(+W3 parity) | task: W1.T1,W1.T2,W2.T1 | task_status: DONE | run_id: rust-rewrite-r3-m3 | verification: 194 tests (+49); clippy -D warnings clean; 3-way lifecycle parity (Go-tree vs Rust-tree manifests byte-identical incl. verified.* digests, transitions, generation, findings; Go-verifies-Rust-tree, Rust-verifies-Go-tree); `scripts/parity.sh research lifecycle` + claims + workspace OK; Go oracle `go test ./internal/runtime -run 'TestLifecycle|TestApprove|TestSupersede|TestRevoke|TestStructural'` green | surfaces: crates/zbrain/src/{lifecycle,transition,trust,lint,claims,evidence,coordination,clock}.rs, parity harness --op lifecycle | commit on r3-m3
+- 2026-09-04 | phase: m3-lifecycle-trust | deferred: challenge-gated lifecycle entry points (PrepareChallenge/ApplyChallenge/ApplyChallengeBatch/validateChallengeAgainstClaim/firstSupersededVerificationDigest/CanonicalDraftDigest wrappers) + their tests (TestApplyChallenge*, TestPrepareAndApplyChallenge*, challenge_test.go suite) → m6-approval-campaign (challenge.go is m6 avoided/allowed surface); IndexStore-dependent tail of TestClaimStoreContradictsPreservedThroughApproveAndReindex → m4 (approve invariants ported now)
+
 ## Decisions
 <!-- Append-only durable entries record timestamp, phase/task, decision, and rationale. -->
 - 2026-09-04: Big-bang over strangler/hybrid; Go binary retained as living parity oracle until cutover.
@@ -456,6 +459,8 @@ updated: 2026-09-04
 - 2026-09-04 (m2): yaml.v3 output is NOT reproducible by any libyaml-based emitter (4-space root indent, yaml.v3-specific quoting rules); serde_yml is parse-only and `yaml.rs` hand-rolls the emitter for the closed frontmatter schemas, oracle-verified by a committed 150-case scalar corpus + byte-identical claim fixtures + 3-way parity manifests. Any drift fails tests loudly instead of silently diverging.
 - 2026-09-04 (m2): `sha2 = "0.10"` added beyond the ≤10-crate budget — SHA-256 is load-bearing everywhere; hand-rolling was rejected. Budget now 11 crates.
 - 2026-09-04 (m2): `recoverPendingTransitionForMutationUnlocked` ships as a fail-closed stub (mutation errors while a transition journal exists); full recovery ports with m3 transition.go. No m2 test covers the journal-present path.
+- 2026-09-04 (m3): transition journal layout is byte-compatible with Go's JSON encoding (serde field order + hand-rolled std-alphabet base64 for target bytes, no new crate); the pending-transition journal is exclusive via hard_link-fails-on-existing (os.Link semantics). m2's fail-closed stub is replaced by real recovery; write_draft/add_file/approve/revoke/migrate now recover the journal before mutating.
+- 2026-09-04 (m3): Go emits nil slices as JSON null in manifests; Rust parity serializes empty `related_claim_ids` as null (null_if_empty) to keep lifecycle manifests byte-identical. Lifecycle parity chain uses owner-basis claims only (evidence IDs are random per run and would leak into verification digests); evidence-closure approval paths are covered by the unit-test port instead.
 
 ## Validation
 <!-- Append-only durable entries record timestamp, phase, exact command/result/output, run_id, check_id, verdict, and proof_gaps. -->
@@ -474,12 +479,12 @@ updated: 2026-09-04
   - receipt: context_sources=plan m0-foundation waves W1-W2, internal/runtime/{paths,config,workspace,workspace_boundary,coordination}.go | policy=AGENTS.md CI gate equivalents | judge=same-session | judge_model=opencode-go/omen-alpha | retries=0 | rollback_point=branch rust-rewrite @ master f0bae10 | failure_ledger=absent | not_independently_verified=cross-process flock probe + self-diffed parity oracle
 
 ## Current State and Next Action
-- active_phase: none (m0/m1/m2 checked; m5 in-progress with W2 gated on m4)
+- active_phase: none (m0/m1/m2/m3 checked; m5 in-progress with W2 gated on m4)
 - lifecycle_status: checked
-- latest_run_id: rust-rewrite-r2-m2 (subagent)
-- latest_trace_ids: [m0-foundation, m1-assets-setup, m2-claims-evidence, m5-mcp-gateway W1]
-- latest_check_id: m2 gate 2026-09-04T23:56Z (145 tests, 3-way claims parity)
+- latest_run_id: rust-rewrite-r3-m3
+- latest_trace_ids: [m0-foundation, m1-assets-setup, m2-claims-evidence, m3-lifecycle-trust, m5-mcp-gateway W1]
+- latest_check_id: m3 self-check 2026-09-04 (194 tests, 3-way lifecycle parity)
 - latest_handoff_id: none
 - blockers: none
-- open_items: ["m5 W2.T2 gated on m4-index-query", "m3-lifecycle-trust next (R3/R4 round)"]
-- exact_next_action: work R3/R4 — m3-lifecycle-trust ∥ m5-W2.T1 (claim resource + evidence_capture, gated on m2 now done)
+- open_items: ["m4-index-query next (core data track)", "m5 W2.T1/W2.T2 gated on m4-index-query", "m6-approval-campaign gated on m3 (done)"]
+- exact_next_action: work m4-index-query ∥ m6-approval-campaign (both unblocked now that m3 is done)

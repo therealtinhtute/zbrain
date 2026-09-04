@@ -15,7 +15,7 @@ impl Clock for SystemClock {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy)]
 pub struct FixedClock(DateTime<Utc>);
 
 impl FixedClock {

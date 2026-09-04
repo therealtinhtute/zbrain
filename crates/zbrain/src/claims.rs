@@ -11,8 +11,7 @@ use sha2::{Digest as ShaDigest, Sha256};
 
 use crate::boundary::{resolve_workspace_path, safe_relative_path, validate_workspace, BoundaryError};
 use crate::coordination::{
-    begin_canonical_mutation_unlocked, recover_pending_transition_check,
-    run_workspace_generation_test_hook, MutationError,
+    begin_canonical_mutation_unlocked, run_workspace_generation_test_hook, MutationError,
     WORKSPACE_GENERATION_HOOK_BEFORE_CANONICAL_WRITE,
 };
 use crate::paths::{ensure_directory_mode, ensure_file_mode, Paths, RUNTIME_DIRECTORY_MODE, RUNTIME_METADATA_MODE};
@@ -1172,6 +1171,9 @@ fn detect_status_change(draft_text: &str, approved_text: &str) -> bool {
 
 pub struct ClaimStore {
     pub paths: Paths,
+    /// Injected clock for deterministic lifecycle timestamps; defaults to the
+    /// system clock.
+    pub now: Option<std::sync::Arc<dyn crate::clock::Clock>>,
 }
 
 #[derive(Debug)]
@@ -1214,17 +1216,29 @@ fn is_zbrain_claim_document(contents: &[u8]) -> bool {
 
 impl ClaimStore {
     pub fn new(paths: Paths) -> Self {
-        Self { paths }
+        Self { paths, now: None }
+    }
+
+    pub fn with_clock(paths: Paths, now: std::sync::Arc<dyn crate::clock::Clock>) -> Self {
+        Self { paths, now: Some(now) }
+    }
+
+    pub(crate) fn now(&self) -> chrono::DateTime<chrono::Utc> {
+        match &self.now {
+            Some(clock) => clock.now(),
+            None => chrono::Utc::now(),
+        }
     }
 
     pub fn write_draft(&self, workspace: &str, claim: Claim) -> Result<Claim, ClaimError> {
         let _lock = crate::coordination::acquire_workspace_lock(&self.paths, workspace, true)
             .map_err(message)?;
-        recover_pending_transition_check(&self.paths, workspace)?;
+        crate::transition::recover_pending_transition_for_mutation_unlocked(&self.paths, workspace)
+            .map_err(|err| message(err.to_string()))?;
         self.write_draft_unlocked(workspace, claim)
     }
 
-    fn write_draft_unlocked(&self, workspace: &str, mut claim: Claim) -> Result<Claim, ClaimError> {
+    pub(crate) fn write_draft_unlocked(&self, workspace: &str, mut claim: Claim) -> Result<Claim, ClaimError> {
         let requested_path = claim.path.clone();
         claim.schema = String::new();
         claim.claim_type = OKF_CLAIM_TYPE.to_string();
@@ -1404,7 +1418,7 @@ impl ClaimStore {
         self.scan_workspace_inner(workspace, false)
     }
 
-    fn scan_workspace_inner(&self, workspace: &str, verify_digests: bool) -> Result<ClaimScan, ClaimError> {
+    pub(crate) fn scan_workspace_inner(&self, workspace: &str, verify_digests: bool) -> Result<ClaimScan, ClaimError> {
         let workspace_root = validate_workspace(&self.paths, workspace)?;
         let wiki_root = resolve_workspace_path(&self.paths, workspace, "wiki")?;
         match std::fs::metadata(&wiki_root) {
@@ -1497,12 +1511,12 @@ impl ClaimStore {
         Ok(scan)
     }
 
-    fn claim_path(&self, workspace: &str, claim: &Claim) -> Result<PathBuf, ClaimError> {
+    pub(crate) fn claim_path(&self, workspace: &str, claim: &Claim) -> Result<PathBuf, ClaimError> {
         let relative = format!("wiki/{}/{id_file}.md", claim.tier, id_file = format!("{}.md", claim.id).replace(".md", ""));
         resolve_workspace_path(&self.paths, workspace, &relative).map_err(ClaimError::Boundary)
     }
 
-    fn claim_file_path(&self, workspace: &str, claim: &Claim) -> Result<PathBuf, ClaimError> {
+    pub(crate) fn claim_file_path(&self, workspace: &str, claim: &Claim) -> Result<PathBuf, ClaimError> {
         if !claim.path.is_empty() {
             if !claim.path.ends_with(".md") {
                 return Err(message(format!("claim path {:?} is not safe", claim.path)));
@@ -1582,6 +1596,13 @@ fn visit_markdown(
         }
     }
     Ok(())
+}
+
+pub fn append_unique_claim_id(mut ids: Vec<String>, id: &str) -> Vec<String> {
+    if !ids.iter().any(|existing| existing == id) {
+        ids.push(id.to_string());
+    }
+    ids
 }
 
 pub fn claim_rel_path(claim: &Claim) -> String {

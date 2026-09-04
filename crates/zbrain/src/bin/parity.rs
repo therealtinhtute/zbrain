@@ -80,6 +80,51 @@ struct SetupManifest {
     runtime_version_line: String,
 }
 
+// ---------------------------------------------------------------------------
+// m3 lifecycle parity (mirrors fixture-gen --op lifecycle[-verify]).
+// ---------------------------------------------------------------------------
+
+#[derive(Serialize)]
+struct TransitionSummary {
+    kind: String,
+    at: String,
+    by: String,
+    #[serde(skip_serializing_if = "String::is_empty")]
+    reason: String,
+    #[serde(serialize_with = "null_if_empty")]
+    related_claim_ids: Vec<String>,
+    #[serde(skip_serializing_if = "String::is_empty")]
+    prior_verification_digest: String,
+}
+
+// Go emits nil slices as JSON null; keep the manifests byte-identical.
+fn null_if_empty<S: serde::Serializer>(value: &[String], serializer: S) -> Result<S::Ok, S::Error> {
+    if value.is_empty() {
+        serializer.serialize_none()
+    } else {
+        serializer.serialize_some(value)
+    }
+}
+
+#[derive(Serialize)]
+struct LifecycleClaimSummary {
+    id: String,
+    path: String,
+    status: String,
+    title: String,
+    verified_digest: String,
+    transitions: Vec<TransitionSummary>,
+}
+
+#[derive(Serialize)]
+struct LifecycleManifest {
+    workspace: String,
+    generation: String,
+    claims: Vec<LifecycleClaimSummary>,
+    findings: Vec<String>,
+    tree: Vec<TreeDigestEntry>,
+}
+
 fn main() {
     let mut home = String::new();
     let mut workspace = String::from("research");
@@ -105,6 +150,8 @@ fn main() {
         "setup" => run_setup(Path::new(&home)),
         "claims" => run_claims(Path::new(&home), &workspace),
         "claims-verify" => run_claims_verify(Path::new(&home), &workspace),
+        "lifecycle" => run_lifecycle(Path::new(&home), &workspace),
+        "lifecycle-verify" => run_lifecycle_verify(Path::new(&home), &workspace),
         other => {
             eprintln!("zbrain-parity: unknown op {other:?}");
             std::process::exit(1);
@@ -255,6 +302,121 @@ fn run_claims(home: &Path, workspace: &str) -> Result<(), String> {
 fn run_claims_verify(home: &Path, workspace: &str) -> Result<(), String> {
     let paths = parity_paths(home)?;
     emit_claims_manifest(&paths, workspace, true)
+}
+
+fn lifecycle_store(paths: &Paths) -> zbrain::claims::ClaimStore {
+    zbrain::claims::ClaimStore::with_clock(paths.clone(), std::sync::Arc::new(FixedClock::new(parity_now())))
+}
+
+fn run_lifecycle(home: &Path, workspace: &str) -> Result<(), String> {
+    use zbrain::claims::{CLAIM_BASIS_OWNER, CLAIM_STATUS_DRAFT};
+
+    let paths = parity_paths(home)?;
+    let clock = FixedClock::new(parity_now());
+    create_workspace(&paths, workspace, &clock).map_err(|err| format!("create workspace: {err}"))?;
+    let store = lifecycle_store(&paths);
+    let created = rfc3339(parity_now());
+    store
+        .write_draft(
+            workspace,
+            Claim {
+                claim_type: OKF_CLAIM_TYPE.into(),
+                id: "clm_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".into(),
+                tier: "projects".into(),
+                status: CLAIM_STATUS_DRAFT.into(),
+                title: "Parity owner claim".into(),
+                basis: CLAIM_BASIS_OWNER.into(),
+                created_at: created.clone(),
+                created_by: "owner".into(),
+                body: "Parity body\n".into(),
+                ..Claim::default()
+            },
+        )
+        .map_err(|err| format!("write owner draft: {err}"))?;
+    store
+        .approve(workspace, "clm_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+        .map_err(|err| format!("approve owner claim: {err}"))?;
+    store
+        .write_superseding_draft(
+            workspace,
+            "clm_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            Claim {
+                claim_type: OKF_CLAIM_TYPE.into(),
+                id: "clm_cccccccccccccccccccccccccccccccc".into(),
+                tier: "projects".into(),
+                status: CLAIM_STATUS_DRAFT.into(),
+                title: "Parity replacement claim".into(),
+                basis: CLAIM_BASIS_OWNER.into(),
+                created_at: created,
+                created_by: "owner".into(),
+                body: "Parity replacement body\n".into(),
+                ..Claim::default()
+            },
+        )
+        .map_err(|err| format!("write superseding draft: {err}"))?;
+    store
+        .approve(workspace, "clm_cccccccccccccccccccccccccccccccc")
+        .map_err(|err| format!("approve replacement claim: {err}"))?;
+    store
+        .revoke(workspace, "clm_cccccccccccccccccccccccccccccccc", "wrong scope")
+        .map_err(|err| format!("revoke replacement claim: {err}"))?;
+    emit_lifecycle_manifest(&paths, workspace)
+}
+
+fn run_lifecycle_verify(home: &Path, workspace: &str) -> Result<(), String> {
+    let paths = parity_paths(home)?;
+    emit_lifecycle_manifest(&paths, workspace)
+}
+
+fn emit_lifecycle_manifest(paths: &Paths, workspace: &str) -> Result<(), String> {
+    zbrain::boundary::validate_workspace(paths, workspace)
+        .map_err(|err| format!("validate workspace: {err}"))?;
+    let scan = ClaimStore::new(paths.clone())
+        .scan_workspace(workspace)
+        .map_err(|err| format!("scan workspace: {err}"))?;
+    if !scan.invalid.is_empty() {
+        return Err(format!(
+            "workspace scan reported invalid claims: {:?}",
+            scan.invalid
+        ));
+    }
+    let claims = scan
+        .claims
+        .iter()
+        .map(|claim| LifecycleClaimSummary {
+            id: claim.id.clone(),
+            path: claim.path.clone(),
+            status: claim.status.clone(),
+            title: claim.title.clone(),
+            verified_digest: claim.verified_digest.clone(),
+            transitions: claim
+                .transitions
+                .iter()
+                .map(|transition| TransitionSummary {
+                    kind: transition.kind.clone(),
+                    at: transition.at.clone(),
+                    by: transition.by.clone(),
+                    reason: transition.reason.clone(),
+                    related_claim_ids: transition.related_claim_ids.clone(),
+                    prior_verification_digest: transition.prior_verification_digest.clone(),
+                })
+                .collect(),
+        })
+        .collect();
+    let findings = zbrain::lint::structural_findings(paths, workspace)
+        .map_err(|err| format!("structural findings: {err}"))?;
+    let root = zbrain::boundary::validate_workspace(paths, workspace)
+        .map_err(|err| format!("validate workspace: {err}"))?;
+    let generation = std::fs::read_to_string(root.join(".zbrain/generation.json"))
+        .map_err(|err| format!("read generation: {err}"))?;
+    let tree = walk_tree_digest(&paths.runtime_dir)?;
+    emit(&LifecycleManifest {
+        workspace: workspace.to_string(),
+        generation,
+        claims,
+        findings,
+        tree,
+    })
 }
 
 fn emit_claims_manifest(paths: &Paths, workspace: &str, verify: bool) -> Result<(), String> {

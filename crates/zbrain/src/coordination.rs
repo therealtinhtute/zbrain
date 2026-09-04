@@ -613,28 +613,6 @@ pub fn begin_canonical_mutation_unlocked(
     Ok(state)
 }
 
-/// m2 stub for recoverPendingTransitionForMutationUnlocked: mutations fail
-/// closed while a pending transition journal exists; full journal recovery is
-/// ported with the transition layer in m3.
-pub fn recover_pending_transition_check(paths: &Paths, workspace: &str) -> Result<(), MutationError> {
-    let root = validate_workspace(paths, workspace)?;
-    let journal = root
-        .join(WORKSPACE_CONTROL_DIRECTORY_NAME)
-        .join(PENDING_TRANSITION_FILE_NAME);
-    let contents = match std::fs::read(&journal) {
-        Ok(contents) => contents,
-        Err(source) if source.kind() == std::io::ErrorKind::NotFound => return Ok(()),
-        Err(source) => return Err(source.into()),
-    };
-    let operation_id = serde_json::from_slice::<serde_json::Value>(&contents)
-        .ok()
-        .and_then(|value| value.get("operation_id").and_then(|v| v.as_str()).map(str::to_string))
-        .unwrap_or_default();
-    Err(MutationError::Message(format!(
-        "workspace {workspace:?} has pending transition {operation_id:?}; run zbrain reindex"
-    )))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -14,8 +14,8 @@ use crate::boundary::{resolve_workspace_path, validate_workspace, BoundaryError}
 use crate::claims::{is_evidence_id, ClaimError, ClaimStore};
 use crate::clock::{parse_rfc3339, Clock};
 use crate::coordination::{
-    acquire_workspace_lock, begin_canonical_mutation_unlocked, recover_pending_transition_check,
-    run_workspace_generation_test_hook, LockError, MutationError,
+    acquire_workspace_lock, begin_canonical_mutation_unlocked, run_workspace_generation_test_hook,
+    LockError, MutationError,
 };
 use crate::paths::{
     ensure_directory_mode, ensure_file_mode, set_permissions, Paths, EVIDENCE_DIRECTORY_MODE,
@@ -173,7 +173,8 @@ impl EvidenceStore {
         clock: &impl Clock,
     ) -> Result<Evidence, EvidenceError> {
         let _lock = acquire_workspace_lock(&self.paths, workspace, true)?;
-        recover_pending_transition_check(&self.paths, workspace)?;
+        crate::transition::recover_pending_transition_for_mutation_unlocked(&self.paths, workspace)
+            .map_err(|err| EvidenceError::Message(err.to_string()))?;
         validate_workspace(&self.paths, workspace)?;
 
         if origin.trim().is_empty() {
@@ -415,8 +416,8 @@ pub fn evidence_to_yaml(evidence: &Evidence) -> Yaml {
 }
 
 pub struct EvidenceValidator {
-    paths: Paths,
-    workspace: String,
+    pub(crate) paths: Paths,
+    pub(crate) workspace: String,
     cache: HashMap<String, Option<EvidenceVerification>>,
     snapshot_digests: HashMap<String, String>,
     verify_counts: HashMap<String, u32>,
@@ -538,6 +539,184 @@ impl EvidenceValidator {
             .insert(id.to_string(), evidence_snapshot_digest(&contents, &evidence));
         Ok(())
     }
+}
+
+fn claim_message(err: impl std::fmt::Display) -> ClaimError {
+    ClaimError::Message(err.to_string())
+}
+
+pub fn evidence_span_digest(
+    snapshot_digest: &str,
+    start_line: i64,
+    end_line: i64,
+    raw_bytes: &[u8],
+) -> String {
+    let mut hash = Sha256::new();
+    hash.update(format!(
+        "zbrain.span/v1\nsnapshot:{snapshot_digest}\nrange:{start_line}-{end_line}\n"
+    ));
+    hash.update(raw_bytes);
+    format!("sha256:span-v1:{}", hex_lower(&hash.finalize()))
+}
+
+fn split_evidence_lines(raw: &[u8]) -> Vec<&[u8]> {
+    if raw.is_empty() {
+        return vec![&[]];
+    }
+    let mut lines = Vec::with_capacity(1);
+    let mut start = 0usize;
+    for (index, byte) in raw.iter().enumerate() {
+        if *byte == b'\n' {
+            lines.push(&raw[start..index + 1]);
+            start = index + 1;
+        }
+    }
+    if start < raw.len() {
+        lines.push(&raw[start..]);
+    }
+    lines
+}
+
+/// Port of validateClaimEvidence: the evidence-id set must verify against the
+/// snapshot digests, and approved claims must carry a source closure that
+/// matches the current metadata exactly.
+pub(crate) fn validate_claim_evidence(
+    validator: &mut EvidenceValidator,
+    claim: &crate::claims::Claim,
+) -> Result<(), ClaimError> {
+    let mut ids = claim.evidence_ids.clone();
+    ids.sort();
+    let mut seen_ids = std::collections::HashSet::new();
+    for id in &ids {
+        if !seen_ids.insert(id.clone()) {
+            return Err(ClaimError::Message(format!(
+                "claim {} has duplicate evidence id {id}",
+                claim.id
+            )));
+        }
+        validator.verify(id).map_err(|verification| {
+            ClaimError::Message(format!("evidence {id}: {verification}"))
+        })?;
+    }
+    if claim.status != crate::claims::CLAIM_STATUS_APPROVED {
+        return Ok(());
+    }
+
+    let mut approved_sources: HashMap<String, &crate::claims::ClaimSource> = HashMap::new();
+    for source in &claim.sources {
+        if approved_sources.contains_key(&source.id) {
+            return Err(ClaimError::Message(format!(
+                "claim {} has duplicate evidence source {}",
+                claim.id, source.id
+            )));
+        }
+        if !seen_ids.contains(&source.id) {
+            return Err(ClaimError::Message(format!(
+                "claim {} evidence source closure does not match approved evidence ids",
+                claim.id
+            )));
+        }
+        approved_sources.insert(source.id.clone(), source);
+    }
+    if approved_sources.len() != seen_ids.len() {
+        return Err(ClaimError::Message(format!(
+            "claim {} evidence source closure does not match approved evidence ids",
+            claim.id
+        )));
+    }
+    let store = EvidenceStore::new(validator.paths.clone());
+    for id in &ids {
+        let evidence = store.read(&validator.workspace, id).map_err(|err| {
+            ClaimError::Message(format!("evidence {id}: read current metadata: {err}"))
+        })?;
+        let source = approved_sources
+            .get(id)
+            .ok_or_else(|| {
+                ClaimError::Message(format!(
+                    "claim {} evidence source closure does not match approved evidence ids",
+                    claim.id
+                ))
+            })?;
+        let expected_resource = format!("evidence/sources/{id}/raw");
+        if source.resource != expected_resource || source.title != evidence.origin {
+            return Err(ClaimError::Message(format!(
+                "evidence {id} source reference does not match current metadata"
+            )));
+        }
+        let current_digest = validator
+            .snapshot_digest(id)
+            .cloned()
+            .unwrap_or_default();
+        if source.digest == current_digest {
+            validate_evidence_spans(
+                validator,
+                id,
+                source,
+                &current_digest,
+            )?;
+            continue;
+        }
+        if is_legacy_evidence_digest(&source.digest) {
+            return Err(ClaimError::Message(format!(
+                "evidence {id} uses legacy raw digest; supersede and reapprove claim {} to bind metadata and raw bytes",
+                claim.id
+            )));
+        }
+        return Err(ClaimError::Message(format!(
+            "evidence {id} digest mismatch: approved {}, current {current_digest}",
+            source.digest
+        )));
+    }
+    Ok(())
+}
+
+fn validate_evidence_spans(
+    validator: &EvidenceValidator,
+    evidence_id: &str,
+    source: &crate::claims::ClaimSource,
+    snapshot_digest: &str,
+) -> Result<(), ClaimError> {
+    if source.spans.is_empty() {
+        return Ok(());
+    }
+    let raw_path = EvidenceStore::new(validator.paths.clone())
+        .evidence_file_path(&validator.workspace, evidence_id, "raw")
+        .map_err(claim_message)?;
+    let raw = std::fs::read(&raw_path).map_err(|err| {
+        ClaimError::Message(format!("evidence {evidence_id}: read span bytes: {err}"))
+    })?;
+    if std::str::from_utf8(&raw).is_err() {
+        return Err(ClaimError::Message(format!(
+            "evidence {evidence_id} spans require valid UTF-8 raw evidence"
+        )));
+    }
+    let lines = split_evidence_lines(&raw);
+    for span in &source.spans {
+        if span.evidence_id != evidence_id {
+            return Err(ClaimError::Message(format!(
+                "evidence span id {} does not match source {evidence_id}",
+                span.evidence_id
+            )));
+        }
+        if span.start_line < 1
+            || span.end_line < span.start_line
+            || span.end_line > lines.len() as i64
+        {
+            return Err(ClaimError::Message(format!(
+                "evidence {evidence_id} span line range {}-{} is out of range",
+                span.start_line, span.end_line
+            )));
+        }
+        let joined: Vec<u8> = lines[(span.start_line - 1) as usize..span.end_line as usize]
+            .concat();
+        let want = evidence_span_digest(snapshot_digest, span.start_line, span.end_line, &joined);
+        if span.digest != want {
+            return Err(ClaimError::Message(format!(
+                "evidence {evidence_id} span digest mismatch"
+            )));
+        }
+    }
+    Ok(())
 }
 
 pub fn validate_evidence_metadata(id: &str, evidence: &Evidence) -> Result<(), String> {

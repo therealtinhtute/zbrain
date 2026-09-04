@@ -305,10 +305,159 @@ func walkTreeDigest(runtimeDir string) ([]treeDigestEntry, error) {
 	return tree, nil
 }
 
+// m3 lifecycle parity: deterministic draft → approve → supersede → revoke
+// chain compared byte-for-byte between the Go oracle and the Rust port.
+type transitionSummary struct {
+	Kind                    string   `json:"kind"`
+	At                      string   `json:"at"`
+	By                      string   `json:"by"`
+	Reason                  string   `json:"reason,omitempty"`
+	RelatedClaimIDs         []string `json:"related_claim_ids"`
+	PriorVerificationDigest string   `json:"prior_verification_digest,omitempty"`
+}
+
+type lifecycleClaimSummary struct {
+	ID             string              `json:"id"`
+	Path           string              `json:"path"`
+	Status         string              `json:"status"`
+	Title          string              `json:"title"`
+	VerifiedDigest string              `json:"verified_digest"`
+	Transitions    []transitionSummary `json:"transitions"`
+}
+
+type lifecycleManifest struct {
+	Workspace  string                  `json:"workspace"`
+	Generation string                  `json:"generation"`
+	Claims     []lifecycleClaimSummary `json:"claims"`
+	Findings   []string                `json:"findings"`
+	Tree       []treeDigestEntry       `json:"tree"`
+}
+
+func runLifecycle(home, workspace string) error {
+	paths, err := parityPaths(home)
+	if err != nil {
+		return err
+	}
+	if err := zruntime.CreateWorkspace(paths, workspace, parityNow()); err != nil {
+		return fmt.Errorf("create workspace: %w", err)
+	}
+	store := zruntime.ClaimStore{Paths: paths, Now: parityNow}
+	created := parityNow().UTC().Format(time.RFC3339)
+	owner := zruntime.Claim{
+		Type:      zruntime.OKFClaimType,
+		ID:        "clm_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+		Tier:      "projects",
+		Status:    zruntime.ClaimStatusDraft,
+		Title:     "Parity owner claim",
+		Basis:     zruntime.ClaimBasisOwner,
+		CreatedAt: created,
+		CreatedBy: "owner",
+		Body:      "Parity body\n",
+	}
+	if _, err := store.WriteDraft(workspace, owner); err != nil {
+		return fmt.Errorf("write owner draft: %w", err)
+	}
+	if _, err := store.Approve(workspace, "clm_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"); err != nil {
+		return fmt.Errorf("approve owner claim: %w", err)
+	}
+	replacement := zruntime.Claim{
+		Type:      zruntime.OKFClaimType,
+		ID:        "clm_cccccccccccccccccccccccccccccccc",
+		Tier:      "projects",
+		Status:    zruntime.ClaimStatusDraft,
+		Title:     "Parity replacement claim",
+		Basis:     zruntime.ClaimBasisOwner,
+		CreatedAt: created,
+		CreatedBy: "owner",
+		Body:      "Parity replacement body\n",
+	}
+	if _, err := store.WriteSupersedingDraft(workspace, "clm_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", replacement); err != nil {
+		return fmt.Errorf("write superseding draft: %w", err)
+	}
+	if _, err := store.Approve(workspace, "clm_cccccccccccccccccccccccccccccccc"); err != nil {
+		return fmt.Errorf("approve replacement claim: %w", err)
+	}
+	if _, err := store.Revoke(workspace, "clm_cccccccccccccccccccccccccccccccc", "wrong scope"); err != nil {
+		return fmt.Errorf("revoke replacement claim: %w", err)
+	}
+	return emitLifecycleManifest(paths, workspace)
+}
+
+func runLifecycleVerify(home, workspace string) error {
+	paths, err := parityPaths(home)
+	if err != nil {
+		return err
+	}
+	return emitLifecycleManifest(paths, workspace)
+}
+
+func emitLifecycleManifest(paths zruntime.Paths, workspace string) error {
+	if _, err := zruntime.ValidateWorkspace(paths, workspace); err != nil {
+		return fmt.Errorf("validate workspace: %w", err)
+	}
+	scan, err := (zruntime.ClaimStore{Paths: paths}).ScanWorkspace(workspace)
+	if err != nil {
+		return fmt.Errorf("scan workspace: %w", err)
+	}
+	if len(scan.Invalid) != 0 {
+		return fmt.Errorf("workspace scan reported invalid claims: %v", scan.Invalid)
+	}
+	claims := make([]lifecycleClaimSummary, 0, len(scan.Claims))
+	for _, claim := range scan.Claims {
+		transitions := make([]transitionSummary, 0, len(claim.Transitions))
+		for _, transition := range claim.Transitions {
+			transitions = append(transitions, transitionSummary{
+				Kind:                    string(transition.Kind),
+				At:                      transition.At,
+				By:                      transition.By,
+				Reason:                  transition.Reason,
+				RelatedClaimIDs:         append([]string(nil), transition.RelatedClaimIDs...),
+				PriorVerificationDigest: transition.PriorVerificationDigest,
+			})
+		}
+		claims = append(claims, lifecycleClaimSummary{
+			ID:             claim.ID,
+			Path:           claim.Path,
+			Status:         string(claim.Status),
+			Title:          claim.Title,
+			VerifiedDigest: claim.VerifiedDigest,
+			Transitions:    transitions,
+		})
+	}
+	findings, err := zruntime.StructuralFindings(paths, workspace)
+	if err != nil {
+		return fmt.Errorf("structural findings: %w", err)
+	}
+	root, err := zruntime.ValidateWorkspace(paths, workspace)
+	if err != nil {
+		return fmt.Errorf("validate workspace: %w", err)
+	}
+	generation, err := os.ReadFile(filepath.Join(root, ".zbrain", "generation.json"))
+	if err != nil {
+		return fmt.Errorf("read generation: %w", err)
+	}
+	tree, err := walkTreeDigest(paths.RuntimeDir)
+	if err != nil {
+		return err
+	}
+	out, err := json.MarshalIndent(lifecycleManifest{
+		Workspace:  workspace,
+		Generation: string(generation),
+		Claims:     claims,
+		Findings:   findings,
+		Tree:       tree,
+	}, "", "  ")
+	if err != nil {
+		return err
+	}
+	fmt.Println(string(out))
+	return nil
+}
+
 func main() {
 	home := flag.String("home", "", "runtime home directory (required)")
 	workspace := flag.String("workspace", "research", "workspace name to create")
-	op := flag.String("op", "workspace", "operation to exercise (workspace|setup|claims|claims-verify)")
+	op := flag.String("op", "workspace", "operation to exercise (workspace|setup|claims|claims-verify|lifecycle|lifecycle-verify)")
 	flag.Parse()
 	if *home == "" {
 		fail("home is required")
@@ -323,6 +472,10 @@ func main() {
 		err = runClaims(*home, *workspace)
 	case "claims-verify":
 		err = runClaimsVerify(*home, *workspace)
+	case "lifecycle":
+		err = runLifecycle(*home, *workspace)
+	case "lifecycle-verify":
+		err = runLifecycleVerify(*home, *workspace)
 	default:
 		fail("unknown op " + *op)
 	}
