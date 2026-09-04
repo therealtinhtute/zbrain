@@ -477,6 +477,164 @@ pub const WORKSPACE_GENERATION_HOOK_REBUILD_BEFORE_PUBLICATION: &str =
 pub const WORKSPACE_GENERATION_HOOK_TRUSTED_QUERY_AFTER_LOCKING: &str =
     "trusted-query-after-locking";
 
+
+// ---------------------------------------------------------------------------
+// Canonical mutation barrier (port of beginCanonicalMutationUnlocked and the
+// index dirty-marker it drives). The full IndexStore lands in m4; only the
+// boundary-validated dirty path is needed here.
+// ---------------------------------------------------------------------------
+
+#[derive(Debug)]
+pub enum MutationError {
+    Boundary(BoundaryError),
+    Io(std::io::Error),
+    Message(String),
+}
+
+impl std::fmt::Display for MutationError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Boundary(source) => write!(f, "{source}"),
+            Self::Io(source) => write!(f, "{source}"),
+            Self::Message(message) => write!(f, "{message}"),
+        }
+    }
+}
+
+impl std::error::Error for MutationError {}
+
+impl From<std::io::Error> for MutationError {
+    fn from(source: std::io::Error) -> Self {
+        Self::Io(source)
+    }
+}
+
+impl From<BoundaryError> for MutationError {
+    fn from(source: BoundaryError) -> Self {
+        Self::Boundary(source)
+    }
+}
+
+pub const PENDING_TRANSITION_FILE_NAME: &str = "pending-transition.json";
+
+fn validate_index_boundary_path(path: &Path, directory: bool) -> Result<(), std::io::Error> {
+    let clean = crate::paths::absolute(path)?;
+    let mut candidate = clean.clone();
+    loop {
+        match std::fs::symlink_metadata(&candidate) {
+            Ok(info) => {
+                if info.file_type().is_symlink() {
+                    return Err(std::io::Error::other(format!(
+                        "{:?} must not be a symlink",
+                        candidate.display()
+                    )));
+                }
+                let _resolved = std::fs::canonicalize(&candidate)?;
+                if candidate == clean && directory && !info.is_dir() {
+                    return Err(std::io::Error::other(format!(
+                        "{:?} is not a directory",
+                        path.display()
+                    )));
+                }
+                return Ok(());
+            }
+            Err(source) if source.kind() == std::io::ErrorKind::NotFound => {}
+            Err(source) => return Err(source),
+        }
+        let Some(parent) = candidate.parent() else {
+            return Err(std::io::Error::other(format!(
+                "{:?} has no existing ancestor",
+                path.display()
+            )));
+        };
+        if parent == candidate {
+            return Err(std::io::Error::other(format!(
+                "{:?} has no existing ancestor",
+                path.display()
+            )));
+        }
+        candidate = parent.to_path_buf();
+    }
+}
+
+fn validated_index_paths(paths: &Paths, workspace: &str) -> Result<(), GenerationError> {
+    validate_workspace(paths, workspace)?;
+    validate_index_boundary_path(&paths.indexes_dir, true).map_err(|err| {
+        GenerationError::Io(std::io::Error::other(format!("validate index directory: {err}")))
+    })?;
+    for name in [format!("{workspace}.sqlite"), format!("{workspace}.dirty")] {
+        validate_index_boundary_path(&paths.indexes_dir.join(&name), false).map_err(|err| {
+            GenerationError::Io(std::io::Error::other(format!("validate index path {:?}: {err}", name)))
+        })?;
+    }
+    Ok(())
+}
+
+fn mark_dirty_unlocked(paths: &Paths, workspace: &str) -> Result<(), MutationError> {
+    validated_index_paths(paths, workspace).map_err(|err| MutationError::Message(err.to_string()))?;
+    crate::paths::ensure_directory_mode(&paths.indexes_dir, crate::paths::RUNTIME_DIRECTORY_MODE)?;
+    let dirty_path = paths.indexes_dir.join(format!("{workspace}.dirty"));
+    std::fs::write(&dirty_path, b"dirty\n")?;
+    crate::paths::set_permissions(&dirty_path, crate::paths::DERIVED_INDEX_MODE)?;
+    Ok(())
+}
+
+/// Advance the workspace generation and mark the index dirty before any
+/// canonical write. Fails closed before touching the canonical tree when the
+/// index boundary is invalid (the dirty-barrier contract).
+pub fn begin_canonical_mutation_unlocked(
+    paths: &Paths,
+    workspace: &str,
+) -> Result<WorkspaceGeneration, MutationError> {
+    validated_index_paths(paths, workspace).map_err(|err| MutationError::Message(err.to_string()))?;
+    let state = match read_workspace_generation(paths, workspace) {
+        Ok(state) => state,
+        Err(GenerationError::Io(source)) if source.kind() == std::io::ErrorKind::NotFound => {
+            WorkspaceGeneration::default()
+        }
+        Err(GenerationError::Io(source)) => {
+            return Err(MutationError::Message(format!("read workspace generation: {source}")));
+        }
+        Err(err) => return Err(MutationError::Message(err.to_string())),
+    };
+    if state.current == u64::MAX {
+        return Err(MutationError::Message(format!(
+            "workspace {workspace:?} generation exhausted"
+        )));
+    }
+    mark_dirty_unlocked(paths, workspace)?;
+    let state = WorkspaceGeneration {
+        current: state.current + 1,
+        published: state.published,
+    };
+    write_workspace_generation(paths, workspace, state).map_err(|err| {
+        MutationError::Message(format!("advance workspace generation: {err}"))
+    })?;
+    Ok(state)
+}
+
+/// m2 stub for recoverPendingTransitionForMutationUnlocked: mutations fail
+/// closed while a pending transition journal exists; full journal recovery is
+/// ported with the transition layer in m3.
+pub fn recover_pending_transition_check(paths: &Paths, workspace: &str) -> Result<(), MutationError> {
+    let root = validate_workspace(paths, workspace)?;
+    let journal = root
+        .join(WORKSPACE_CONTROL_DIRECTORY_NAME)
+        .join(PENDING_TRANSITION_FILE_NAME);
+    let contents = match std::fs::read(&journal) {
+        Ok(contents) => contents,
+        Err(source) if source.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(source) => return Err(source.into()),
+    };
+    let operation_id = serde_json::from_slice::<serde_json::Value>(&contents)
+        .ok()
+        .and_then(|value| value.get("operation_id").and_then(|v| v.as_str()).map(str::to_string))
+        .unwrap_or_default();
+    Err(MutationError::Message(format!(
+        "workspace {workspace:?} has pending transition {operation_id:?}; run zbrain reindex"
+    )))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

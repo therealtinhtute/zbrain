@@ -1,0 +1,6 @@
+id: evd_0123456789abcdef0123456789abcdef
+origin: file://source.txt
+captured_at: "2026-07-30T10:00:00Z"
+media_type: text/plain
+byte_length: 17
+sha256: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
