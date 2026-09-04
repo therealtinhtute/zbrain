@@ -3,6 +3,7 @@ pub mod boundary;
 pub mod clock;
 pub mod config;
 pub mod coordination;
+pub mod mcp;
 pub mod paths;
 pub mod setup;
 pub mod workspace;
