@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"time"
 
 	zruntime "github.com/therealtinhtute/zbrain/internal/runtime"
@@ -31,19 +32,38 @@ type manifest struct {
 	GenerationRel string      `json:"generation_rel"`
 }
 
+type setupManifest struct {
+	SchemaVersion      int         `json:"schema_version"`
+	ConfigCreated      bool        `json:"config_created"`
+	AssetsCopied       int         `json:"assets_copied"`
+	AssetsSkipped      int         `json:"assets_skipped"`
+	Tree               []treeEntry `json:"tree"`
+	RuntimeVersionLine string      `json:"runtime_version_line"`
+}
+
 func main() {
 	home := flag.String("home", "", "runtime home directory (required)")
 	workspace := flag.String("workspace", "research", "workspace name to create")
+	op := flag.String("op", "workspace", "operation to exercise (workspace|setup)")
 	flag.Parse()
 	if *home == "" {
 		fail("home is required")
 	}
-	if err := run(*home, *workspace); err != nil {
+	var err error
+	switch *op {
+	case "workspace":
+		err = runWorkspace(*home, *workspace)
+	case "setup":
+		err = runSetup(*home)
+	default:
+		fail("unknown op " + *op)
+	}
+	if err != nil {
 		fail(err.Error())
 	}
 }
 
-func run(home, workspace string) error {
+func runWorkspace(home, workspace string) error {
 	paths, err := zruntime.ResolvePaths(zruntime.Options{
 		CWD:        home,
 		HomeDir:    home,
@@ -102,6 +122,57 @@ func run(home, workspace string) error {
 		Tree:          tree,
 		DefaultRead:   current.Workspace,
 		GenerationRel: controlRel,
+	}, "", "  ")
+	if err != nil {
+		return err
+	}
+	fmt.Println(string(out))
+	return nil
+}
+
+func runSetup(home string) error {
+	paths, err := zruntime.ResolvePaths(zruntime.Options{
+		CWD:        home,
+		HomeDir:    home,
+		RuntimeDir: filepath.Join(home, "runtime"),
+	})
+	if err != nil {
+		return fmt.Errorf("resolve paths: %w", err)
+	}
+	if err := os.MkdirAll(paths.RuntimeDir, 0o755); err != nil {
+		return fmt.Errorf("create runtime dir: %w", err)
+	}
+	created, err := zruntime.EnsureConfig(paths.ConfigFile)
+	if err != nil {
+		return fmt.Errorf("ensure config: %w", err)
+	}
+	extracted, err := zruntime.ExtractBundledAssets(paths)
+	if err != nil {
+		return fmt.Errorf("extract assets: %w", err)
+	}
+	tree, err := walkTree(paths.RuntimeDir)
+	if err != nil {
+		return err
+	}
+	config, err := os.ReadFile(paths.ConfigFile)
+	if err != nil {
+		return fmt.Errorf("read config: %w", err)
+	}
+	versionLine := ""
+	for _, line := range strings.Split(string(config), "\n") {
+		if strings.HasPrefix(line, "runtime_version:") {
+			versionLine = line
+			break
+		}
+	}
+
+	out, err := json.MarshalIndent(setupManifest{
+		SchemaVersion:      1,
+		ConfigCreated:      created,
+		AssetsCopied:       len(extracted.Copied),
+		AssetsSkipped:      len(extracted.Skipped),
+		Tree:               tree,
+		RuntimeVersionLine: versionLine,
 	}, "", "  ")
 	if err != nil {
 		return err

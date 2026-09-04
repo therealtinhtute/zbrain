@@ -1,4 +1,4 @@
-// zbrain-parity mirrors crates/tools/fixture-gen (Go oracle) for the m0
+// zbrain-parity mirrors crates/tools/fixture-gen (Go oracle) for the m0/m1
 // surface and emits an identical manifest schema for scripts/parity.sh.
 use std::collections::BTreeMap;
 use std::io::Write as _;
@@ -30,14 +30,26 @@ struct Manifest {
     generation_rel: String,
 }
 
+#[derive(Serialize)]
+struct SetupManifest {
+    schema_version: u32,
+    config_created: bool,
+    assets_copied: usize,
+    assets_skipped: usize,
+    tree: Vec<TreeEntry>,
+    runtime_version_line: String,
+}
+
 fn main() {
     let mut home = String::new();
     let mut workspace = String::from("research");
+    let mut op = String::from("workspace");
     let mut args = std::env::args().skip(1);
     while let Some(arg) = args.next() {
         match arg.as_str() {
             "--home" => home = args.next().expect("--home requires a value"),
             "--workspace" => workspace = args.next().expect("--workspace requires a value"),
+            "--op" => op = args.next().expect("--op requires a value"),
             other => {
                 eprintln!("zbrain-parity: unknown argument {other:?}");
                 std::process::exit(1);
@@ -48,19 +60,31 @@ fn main() {
         eprintln!("zbrain-parity: --home is required");
         std::process::exit(1);
     }
-    if let Err(err) = run(Path::new(&home), &workspace) {
+    let result = match op.as_str() {
+        "workspace" => run_workspace(Path::new(&home), &workspace),
+        "setup" => run_setup(Path::new(&home)),
+        other => {
+            eprintln!("zbrain-parity: unknown op {other:?}");
+            std::process::exit(1);
+        }
+    };
+    if let Err(err) = result {
         eprintln!("zbrain-parity: {err}");
         std::process::exit(1);
     }
 }
 
-fn run(home: &Path, workspace: &str) -> Result<(), String> {
-    let paths = Paths::resolve(Options {
+fn resolve_paths(home: &Path) -> Result<Paths, String> {
+    Paths::resolve(Options {
         cwd: Some(home.to_path_buf()),
         home_dir: Some(home.to_path_buf()),
         runtime_dir: Some(home.join("runtime")),
     })
-    .map_err(|err| format!("resolve paths: {err}"))?;
+    .map_err(|err| format!("resolve paths: {err}"))
+}
+
+fn run_workspace(home: &Path, workspace: &str) -> Result<(), String> {
+    let paths = resolve_paths(home)?;
     ensure_config(&paths.config_file).map_err(|err| format!("ensure config: {err}"))?;
     let clock = FixedClock::new(
         chrono::TimeZone::with_ymd_and_hms(&chrono::Utc, 2026, 7, 30, 10, 0, 0).unwrap(),
@@ -95,7 +119,34 @@ fn run(home: &Path, workspace: &str) -> Result<(), String> {
         default_read: current.workspace,
         generation_rel,
     };
-    let mut out = serde_json::to_string_pretty(&manifest)
+    emit(&manifest)
+}
+
+fn run_setup(home: &Path) -> Result<(), String> {
+    let paths = resolve_paths(home)?;
+    let summary =
+        zbrain::setup::run_setup(&paths).map_err(|err| format!("run setup: {err}"))?;
+    let tree = walk_tree(&paths.runtime_dir)?;
+    let config =
+        std::fs::read_to_string(&paths.config_file).map_err(|err| format!("read config: {err}"))?;
+    let runtime_version_line = config
+        .lines()
+        .find(|line| line.starts_with("runtime_version:"))
+        .unwrap_or_default()
+        .to_string();
+    let manifest = SetupManifest {
+        schema_version: summary.schema_version,
+        config_created: summary.config_created,
+        assets_copied: summary.assets_copied,
+        assets_skipped: summary.assets_skipped,
+        tree,
+        runtime_version_line,
+    };
+    emit(&manifest)
+}
+
+fn emit<T: serde::Serialize>(manifest: &T) -> Result<(), String> {
+    let mut out = serde_json::to_string_pretty(manifest)
         .map_err(|err| format!("marshal manifest: {err}"))?;
     out.push('\n');
     std::io::stdout()

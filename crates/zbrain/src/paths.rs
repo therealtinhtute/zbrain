@@ -1,3 +1,4 @@
+use std::os::unix::fs::DirBuilderExt as _;
 use std::path::{Component, Path, PathBuf};
 
 
@@ -143,6 +144,27 @@ pub fn ensure_file_mode(path: &Path, mode: u32) -> Result<(), std::io::Error> {
     set_permissions(path, mode)
 }
 
+/// os.MkdirAll semantics: create missing directories with `mode` (umask
+/// applies, and `mode` reaches every level created), never chmod paths that
+/// already exist.
+pub(crate) fn mkdir_all(path: &Path, mode: u32) -> Result<(), std::io::Error> {
+    match std::fs::metadata(path) {
+        Ok(meta) if meta.is_dir() => return Ok(()),
+        Ok(_) => {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::AlreadyExists,
+                format!("{} is not a directory", path.display()),
+            ))
+        }
+        Err(source) if source.kind() == std::io::ErrorKind::NotFound => {}
+        Err(source) => return Err(source),
+    }
+    if let Some(parent) = path.parent() {
+        mkdir_all(parent, mode)?;
+    }
+    std::fs::DirBuilder::new().mode(mode).create(path)
+}
+
 pub(crate) fn set_permissions(path: &Path, mode: u32) -> Result<(), std::io::Error> {
     use std::os::unix::fs::PermissionsExt;
     std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode))
@@ -182,7 +204,12 @@ mod tests {
     use super::*;
 
     fn temp_root() -> PathBuf {
-        let dir = std::env::temp_dir().join(format!("zbrain-paths-{}", std::process::id()));
+        static COUNTER: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+        let dir = std::env::temp_dir().join(format!(
+            "zbrain-paths-{}-{}",
+            std::process::id(),
+            COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+        ));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         dir
