@@ -178,6 +178,7 @@ zbrain setup
 zbrain workspace create <name>
 zbrain workspace current
 zbrain evidence add --file <path> --origin <uri-or-path> [--media-type <type>] [--workspace <name>]
+zbrain evidence check [--workspace <name>]
 zbrain claim draft --tier <tier> --title <title> --basis <owner|evidence|derived> [--evidence <id>]... [--support <id>]... [--conflicts-with <id>]... [--workspace <name>]
 zbrain claim approve <id> [--workspace <name>]
 zbrain claim supersede <id> --tier <tier> --title <title> --basis <owner|evidence|derived> [--evidence <id>]... [--support <id>]... [--conflicts-with <id>]... [--workspace <name>]
