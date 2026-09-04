@@ -155,7 +155,7 @@ updated: 2026-09-04
 
   - phase_slug: m2-claims-evidence
     story_id: rust-m2-claims-evidence-20260904
-    status: planned
+    status: checked
     goal: Claim store, evidence store (SHA-256 skip, digest, immutability), manifest ported with two-way tree readability
     depends_on: m0-foundation
     requirements: [R2, R3, R7]
@@ -438,6 +438,8 @@ updated: 2026-09-04
 - 2026-09-04T23:10Z | phase: m1-assets-setup | gate | task_status: DONE_WITH_CONCERNS | judge: same-session | notes: Go oracle recopies on every setup run (no skip-existing) — ported as-is, parity pinned to documentedEmbeddedAssetPaths (21 copied/1 skipped); setup CLI text output is m7 scope, JSON surface verified via parity manifest; subagent disclosed unrelated docs/proofs/*.json drift included by its git add -A (runtime-generated files, reverted at next touch)
 - 2026-09-04T23:12Z | phase: m5-mcp-gateway | wave: W1 | task: W1.T1,W1.T2 | task_status: DONE | run_id: rust-rewrite-r2-m5w1 (subagent) | verification: `cargo test -p zbrain --lib` ok 82 passed (54 mcp); clippy clean; wire semantics captured from real `go run ./cmd/zbrain mcp serve` (unknown method -32601, unknown tool -32602, future _meta -32022, framing strict) | surfaces: crates/zbrain/src/mcp/{mod,protocol,server,transport}.rs | commit 1632f3a on r2-m5w1, merged to rust-rewrite
 - 2026-09-04T23:14Z | merge | rust-rewrite post-merge re-verification | task_status: DONE | verification: `cargo test -p zbrain --lib` ok 90 passed (28 m0 + 8 m1 + 54 m5-W1); clippy clean; parity setup+workspace OK
+- 2026-09-04T23:55Z | phase: m2-claims-evidence | wave: W1-W3 | task: W1.T1,W2.T1,W3.T1 | task_status: DONE | run_id: rust-rewrite-r2-m2 (subagent) | verification: 145 tests (+55); 150-case Go-oracle YAML scalar corpus byte-identical; 3-way claims parity (Go-tree vs Rust-tree manifests byte-identical, Go-verifies-Rust-tree, Rust-verifies-Go-tree); `scripts/parity.sh research claims` OK; Go oracle `go test ./internal/runtime -run TestEvidence` still green | surfaces: crates/zbrain/src/{yaml,claims,evidence,manifest,coordination}.rs, tests/fixtures/*, parity harness --op claims | commit f55b550 on r2-m2, merged to rust-rewrite
+- 2026-09-04T23:56Z | phase: m2-claims-evidence | gate | task_status: DONE_WITH_CONCERNS | judge: same-session | verdict: APPROVED | notes: deferred tests enumerated for m3 (lifecycle/approve/supersede/revoke/migrate/transition ~20 tests) and m4 (evidence skip-does-not-dirty, nested claim boundary, runtime permissions, contradiction-through-approve — 4 tests); pending-transition recovery is a fail-closed stub until m3
 
 ## Decisions
 <!-- Append-only durable entries record timestamp, phase/task, decision, and rationale. -->
@@ -451,6 +453,9 @@ updated: 2026-09-04
 - 2026-09-04 (m0): Workspace crate version pinned 0.3.0; edition 2021; toolchain stable via rust-toolchain.toml.
 - 2026-09-04 (m5-W1): Go JSON parse-error message text is unportable (serde's own text); codes and fatal-session behavior match Go exactly. Go dispatch is async (responses can reorder); Rust is sequential — no W1 test depends on reordering; flag for W2/MCP conformance re-check.
 - 2026-09-04 (m1): include_dir embeds the full assets/ tree; extraction re-applies the go:embed pattern filter (view/ + embed.go excluded, dot/underscore exclusion, .go skip) — pinned by a layout-parity test against Go's documentedEmbeddedAssetPaths.
+- 2026-09-04 (m2): yaml.v3 output is NOT reproducible by any libyaml-based emitter (4-space root indent, yaml.v3-specific quoting rules); serde_yml is parse-only and `yaml.rs` hand-rolls the emitter for the closed frontmatter schemas, oracle-verified by a committed 150-case scalar corpus + byte-identical claim fixtures + 3-way parity manifests. Any drift fails tests loudly instead of silently diverging.
+- 2026-09-04 (m2): `sha2 = "0.10"` added beyond the ≤10-crate budget — SHA-256 is load-bearing everywhere; hand-rolling was rejected. Budget now 11 crates.
+- 2026-09-04 (m2): `recoverPendingTransitionForMutationUnlocked` ships as a fail-closed stub (mutation errors while a transition journal exists); full recovery ports with m3 transition.go. No m2 test covers the journal-present path.
 
 ## Validation
 <!-- Append-only durable entries record timestamp, phase, exact command/result/output, run_id, check_id, verdict, and proof_gaps. -->
@@ -469,12 +474,12 @@ updated: 2026-09-04
   - receipt: context_sources=plan m0-foundation waves W1-W2, internal/runtime/{paths,config,workspace,workspace_boundary,coordination}.go | policy=AGENTS.md CI gate equivalents | judge=same-session | judge_model=opencode-go/omen-alpha | retries=0 | rollback_point=branch rust-rewrite @ master f0bae10 | failure_ledger=absent | not_independently_verified=cross-process flock probe + self-diffed parity oracle
 
 ## Current State and Next Action
-- active_phase: m2-claims-evidence (in progress by orchestrator; m5 W2 gated on m4)
-- lifecycle_status: in-progress
-- latest_run_id: rust-rewrite-r1 / r2-m1 (subagent) / r2-m5w1 (subagent)
-- latest_trace_ids: [m0-foundation W1, m0-foundation W2, m1-assets-setup W1, m5-mcp-gateway W1]
-- latest_check_id: m0-foundation gate 2026-09-04T22:00Z; m1 gate recorded via parity + 36 tests
+- active_phase: none (m0/m1/m2 checked; m5 in-progress with W2 gated on m4)
+- lifecycle_status: checked
+- latest_run_id: rust-rewrite-r2-m2 (subagent)
+- latest_trace_ids: [m0-foundation, m1-assets-setup, m2-claims-evidence, m5-mcp-gateway W1]
+- latest_check_id: m2 gate 2026-09-04T23:56Z (145 tests, 3-way claims parity)
 - latest_handoff_id: none
 - blockers: none
-- open_items: ["m5 W2 gated on m4-index-query", "m2-claims-evidence in progress (R3 round continues)"]
-- exact_next_action: work m2-claims-evidence on worktree zbrain-r2m2 (branch r2-m2), then R4 round (m4 ∥ m6)
+- open_items: ["m5 W2.T2 gated on m4-index-query", "m3-lifecycle-trust next (R3/R4 round)"]
+- exact_next_action: work R3/R4 — m3-lifecycle-trust ∥ m5-W2.T1 (claim resource + evidence_capture, gated on m2 now done)
