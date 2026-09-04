@@ -289,13 +289,182 @@ pub struct ListResult<P> {
     pub payload: P,
 }
 
+/// Order-preserving JSON value. `serde_json::Map` sorts keys, but the Go
+/// oracle emits struct field order everywhere (tool schemas, tool output,
+/// resource envelopes), so gateway payloads are built as [`OrderedJson`] and
+/// rendered with Go-compatible escaping.
+#[derive(Debug, Clone, PartialEq)]
+pub enum OrderedJson {
+    Null,
+    Bool(bool),
+    Int(i64),
+    Str(String),
+    Array(Vec<OrderedJson>),
+    Object(Vec<(&'static str, OrderedJson)>),
+}
+
+impl OrderedJson {
+    pub fn string(value: impl Into<String>) -> Self {
+        Self::Str(value.into())
+    }
+
+    pub fn object(entries: Vec<(&'static str, OrderedJson)>) -> Self {
+        Self::Object(entries)
+    }
+
+    pub fn array(values: Vec<OrderedJson>) -> Self {
+        Self::Array(values)
+    }
+
+    /// String list or `null` for an empty list, matching Go's nil-slice
+    /// marshaling for canonical structs.
+    pub fn strings_or_null(values: &[String]) -> Self {
+        if values.is_empty() {
+            return Self::Null;
+        }
+        Self::Array(values.iter().map(|value| Self::Str(value.clone())).collect())
+    }
+
+    /// Renders with Go's `json.MarshalIndent(v, "", "  ")` byte shape,
+    /// including HTML escaping of `<`, `>`, and `&`.
+    pub fn pretty(&self) -> String {
+        let mut out = String::new();
+        self.render(&mut out, 0, true);
+        out
+    }
+
+    /// Renders compact, matching Go's `json.Marshal`.
+    pub fn compact(&self) -> String {
+        let mut out = String::new();
+        self.render(&mut out, 0, false);
+        out
+    }
+
+    fn render(&self, out: &mut String, depth: usize, pretty: bool) {        match self {
+            Self::Null => out.push_str("null"),
+            Self::Bool(true) => out.push_str("true"),
+            Self::Bool(false) => out.push_str("false"),
+            Self::Int(value) => out.push_str(&value.to_string()),
+            Self::Str(value) => push_escaped_json_string(out, value),
+            Self::Array(items) => {
+                if items.is_empty() {
+                    out.push_str("[]");
+                    return;
+                }
+                out.push('[');
+                for (index, item) in items.iter().enumerate() {
+                    if index > 0 {
+                        out.push(',');
+                    }
+                    if pretty {
+                        out.push('\n');
+                        push_indent(out, depth + 1);
+                    }
+                    item.render(out, depth + 1, pretty);
+                }
+                if pretty {
+                    out.push('\n');
+                    push_indent(out, depth);
+                }
+                out.push(']');
+            }
+            Self::Object(entries) => {
+                if entries.is_empty() {
+                    out.push_str("{}");
+                    return;
+                }
+                out.push('{');
+                for (index, (key, value)) in entries.iter().enumerate() {
+                    if index > 0 {
+                        out.push(',');
+                    }
+                    if pretty {
+                        out.push('\n');
+                        push_indent(out, depth + 1);
+                    }
+                    push_escaped_json_string(out, key);
+                    out.push(':');
+                    if pretty {
+                        out.push(' ');
+                    }
+                    value.render(out, depth + 1, pretty);
+                }
+                if pretty {
+                    out.push('\n');
+                    push_indent(out, depth);
+                }
+                out.push('}');
+            }
+        }
+    }
+}
+
+fn push_indent(out: &mut String, depth: usize) {
+    for _ in 0..depth {
+        out.push_str("  ");
+    }
+}impl serde::Serialize for OrderedJson {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        use serde::ser::SerializeMap as _;
+        use serde::ser::SerializeSeq as _;
+        match self {
+            Self::Null => serializer.serialize_unit(),
+            Self::Bool(value) => serializer.serialize_bool(*value),
+            Self::Int(value) => serializer.serialize_i64(*value),
+            Self::Str(value) => serializer.serialize_str(value),
+            Self::Array(items) => {
+                let mut seq = serializer.serialize_seq(Some(items.len()))?;
+                for item in items {
+                    seq.serialize_element(item)?;
+                }
+                seq.end()
+            }
+            Self::Object(entries) => {
+                let mut map = serializer.serialize_map(Some(entries.len()))?;
+                for (key, value) in entries {
+                    map.serialize_entry(key, value)?;
+                }
+                map.end()
+            }
+        }
+    }
+}
+
+/// JSON string escaping with Go `encoding/json` semantics: control
+/// characters use the short escapes or `\u00xx`, and HTML-sensitive
+/// characters (`<`, `>`, `&`) plus U+2028/U+2029 are `\u`-escaped.
+fn push_escaped_json_string(out: &mut String, value: &str) {
+    out.push('"');
+    for character in value.chars() {
+        match character {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            '\u{08}' => out.push_str("\\b"),
+            '\u{0c}' => out.push_str("\\f"),
+            '<' => out.push_str("\\u003c"),
+            '>' => out.push_str("\\u003e"),
+            '&' => out.push_str("\\u0026"),
+            '\u{2028}' => out.push_str("\\u2028"),
+            '\u{2029}' => out.push_str("\\u2029"),
+            character if (character as u32) < 0x20 => {
+                out.push_str(&format!("\\u{:04x}", character as u32));
+            }
+            character => out.push(character),
+        }
+    }
+    out.push('"');
+}
+
 /// Tool listing entry; the Go SDK emits tools with sorted keys.
 #[derive(Debug, Serialize)]
 pub struct ToolEntry {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
     #[serde(rename = "inputSchema")]
-    pub input_schema: Value,
+    pub input_schema: OrderedJson,
     pub name: String,
 }
 
@@ -336,11 +505,58 @@ pub struct CallToolResult {
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub content: Vec<ContentBlock>,
     #[serde(rename = "structuredContent", skip_serializing_if = "Option::is_none")]
-    pub structured_content: Option<Value>,
+    pub structured_content: Option<OrderedJson>,
     #[serde(rename = "isError", skip_serializing_if = "std::ops::Not::not")]
     pub is_error: bool,
     #[serde(rename = "resultType", skip_serializing_if = "Option::is_none")]
     pub result_type: Option<&'static str>,
+}
+
+/// One entry of a `resources/read` result; field order `uri, mimeType, text`
+/// per the go-sdk `ResourceContents` wire shape (mimeType omitted when not
+/// set, which is how the zbrain read handlers emit it).
+#[derive(Debug, Clone, Serialize)]
+pub struct ResourceContents {
+    pub uri: String,
+    #[serde(rename = "mimeType", skip_serializing_if = "Option::is_none")]
+    pub mime_type: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub text: Option<String>,
+}
+
+/// `resources/read` result; field order per the go-sdk `ReadResourceResult`
+/// custom marshaler: _meta, ttlMs, cacheScope, contents, resultType. ttlMs
+/// and cacheScope are non-omitempty struct fields and always appear.
+#[derive(Debug, Serialize)]
+pub struct ReadResourceResult {
+    #[serde(rename = "_meta", skip_serializing_if = "Option::is_none")]
+    pub meta: Option<ResultMeta>,
+    #[serde(rename = "ttlMs")]
+    pub ttl_ms: i64,
+    #[serde(rename = "cacheScope")]
+    pub cache_scope: &'static str,
+    pub contents: Vec<ResourceContents>,
+    #[serde(rename = "resultType", skip_serializing_if = "Option::is_none")]
+    pub result_type: Option<&'static str>,
+}
+
+impl ReadResourceResult {
+    /// Bare result as a read handler produces it, before the SDK applies
+    /// its resultType and `_meta` annotations. The template's MIME type is
+    /// stamped into the content (go-sdk `readResource` convenience pass).
+    pub fn text(uri: &str, mime_type: &str, text: String) -> Self {
+        Self {
+            meta: None,
+            ttl_ms: 0,
+            cache_scope: "public",
+            contents: vec![ResourceContents {
+                uri: uri.to_string(),
+                mime_type: Some(mime_type.to_string()),
+                text: Some(text),
+            }],
+            result_type: None,
+        }
+    }
 }
 
 /// Response frame; field order `jsonrpc, id, result, error`.
@@ -368,6 +584,33 @@ pub fn success_response(id: &Id, result: Value) -> String {
         result: Some(result),
         error: None,
     })
+}
+
+/// Success frame with a pre-serialized result payload. Tool-call and
+/// resource-read results must keep the go-sdk struct field order, which
+/// `serde_json::Value` (sorted-key maps) cannot represent, so those results
+/// are rendered by [`OrderedJson`] and spliced verbatim.
+pub fn success_response_raw(id: &Id, result_json: &str) -> String {
+    let id_json = match id {
+        Id::Number(number) => number.to_string(),
+        Id::Text(text) => serde_json::to_string(text).unwrap_or_else(|_| "null".to_string()),
+    };
+    format!("{{\"jsonrpc\":\"2.0\",\"id\":{id_json},\"result\":{result_json}}}")
+}
+
+/// A successful dispatch outcome: either an ordinary `serde_json::Value`
+/// (key order irrelevant) or a pre-rendered result that must keep the Go
+/// field order on the wire.
+#[derive(Debug)]
+pub enum SuccessPayload {
+    Json(Value),
+    Raw(String),
+}
+
+impl From<Value> for SuccessPayload {
+    fn from(value: Value) -> Self {
+        Self::Json(value)
+    }
 }
 
 pub fn error_response(id: &Id, wire_error: WireError) -> String {
@@ -815,7 +1058,9 @@ mod tests {
                 server_info: Some(Implementation { name: SERVER_NAME.into(), version: "0.0.0".into() }),
             }),
             content: vec![ContentBlock { r#type: "text", text: "ok".to_string() }],
-            structured_content: Some(json!({"schema_version": 1})),
+            structured_content: Some(OrderedJson::object(vec![
+                ("schema_version", OrderedJson::Int(1)),
+            ])),
             is_error: false,
             result_type: Some("complete"),
         };

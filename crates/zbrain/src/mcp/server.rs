@@ -7,10 +7,11 @@
 use serde_json::{json, Value};
 
 use crate::mcp::protocol::{
-    error_response, negotiated_version, success_response, validate_request_meta, CallToolResult,
-    DiscoverResult, InitializeParams, InitializeResult, Implementation, ListPromptsPayload,
-    ListResult, ListResourcesPayload, ListResourceTemplatesPayload, ListToolsPayload, McpError,
-    ResultMeta, RpcRequest, ServerCapabilities, ToolEntry, ValidatedMeta,
+    error_response, negotiated_version, success_response, success_response_raw,
+    validate_request_meta, CallToolResult, DiscoverResult, InitializeParams, InitializeResult,
+    Implementation, ListPromptsPayload, ListResult, ListResourcesPayload,
+    ListResourceTemplatesPayload, ListToolsPayload, McpError, OrderedJson, ReadResourceResult,
+    ResultMeta, RpcRequest, ServerCapabilities, SuccessPayload, ToolEntry, ValidatedMeta,
     PROTOCOL_VERSION_20260728, SERVER_NAME, SUPPORTED_PROTOCOL_VERSIONS,
 };
 use crate::mcp::transport::{SafeStderr, Transport};
@@ -87,7 +88,7 @@ pub trait ToolRegistry {
     }
 
     /// Reads a resource by URI; `None` maps to `Resource not found`.
-    fn read_resource(&self, _uri: &str) -> Option<Value> {
+    fn read_resource(&self, _uri: &str) -> Option<ReadResourceResult> {
         None
     }
 
@@ -108,7 +109,6 @@ pub struct StubRegistry;
 impl ToolRegistry for StubRegistry {}
 
 /// Runtime services the MCP layer reuses from the CLI/runtime boundary.
-/// Paths and clock injection arrive with W2's tools.
 #[derive(Default)]
 pub struct McpOptions {
     /// Server version reported in `serverInfo`.
@@ -116,6 +116,11 @@ pub struct McpOptions {
     /// Diagnostics sink (never protocol output); defaults to discard like
     /// Go's `io.Discard` fallback.
     pub stderr: SafeStderr,
+    /// Runtime paths backing the gateway registry; resolved from the
+    /// environment when absent.
+    pub paths: Option<crate::paths::Paths>,
+    /// Injected clock for the gateway stores; system clock when absent.
+    pub clock: Option<Box<dyn crate::clock::Clock>>,
 }
 
 /// Session state, mirroring go-sdk `ServerSessionState`.
@@ -199,10 +204,18 @@ impl<R: ToolRegistry> Server<R> {
         let method = request.method.as_str();
         let outcome = self.handle_inner(state, request);
         match outcome {
-            Ok(result) => {
+            Ok(SuccessPayload::Json(result)) => {
                 if is_call {
                     let id = request.id.as_ref().expect("is_call");
                     Some(success_response(id, result))
+                } else {
+                    None
+                }
+            }
+            Ok(SuccessPayload::Raw(result_json)) => {
+                if is_call {
+                    let id = request.id.as_ref().expect("is_call");
+                    Some(success_response_raw(id, &result_json))
                 } else {
                     None
                 }
@@ -226,7 +239,7 @@ impl<R: ToolRegistry> Server<R> {
         &mut self,
         state: &mut SessionState,
         request: &RpcRequest,
-    ) -> Result<Value, McpError> {
+    ) -> Result<SuccessPayload, McpError> {
         let method = request.method.as_str();
 
         // Per-request protocol detection (SEP-2575), then the -32022 gate.
@@ -294,15 +307,17 @@ impl<R: ToolRegistry> Server<R> {
         request: &RpcRequest,
         meta: &ValidatedMeta,
         method: &str,
-    ) -> Result<Value, McpError> {
+    ) -> Result<SuccessPayload, McpError> {
         match method {
-            "initialize" => self.handle_initialize(state, request),
-            "ping" => Ok(json!({})),
-            "logging/setLevel" => Ok(json!({})),
-            "notifications/initialized" => self.handle_initialized_notification(state),
+            "initialize" => self.handle_initialize(state, request).map(SuccessPayload::Json),
+            "ping" => Ok(json!({}).into()),
+            "logging/setLevel" => Ok(json!({}).into()),
+            "notifications/initialized" => {
+                self.handle_initialized_notification(state).map(SuccessPayload::Json)
+            }
             "notifications/cancelled" | "notifications/progress"
-            | "notifications/roots/list_changed" => Ok(json!({})),
-            "server/discover" => self.handle_discover(),
+            | "notifications/roots/list_changed" => Ok(json!({}).into()),
+            "server/discover" => self.handle_discover().map(SuccessPayload::Json),
             "tools/list" => Ok(serde_json::to_value(ListResult {
                 result_type: meta.uses_new_protocol.then_some(RESULT_TYPE_COMPLETE),
                 meta: meta
@@ -312,7 +327,8 @@ impl<R: ToolRegistry> Server<R> {
                 cache_scope: CACHE_SCOPE_PUBLIC,
                 payload: ListToolsPayload { tools: self.registry.tools() },
             })
-            .expect("list tools result")),
+            .expect("list tools result")
+            .into()),
             "tools/call" => self.handle_call_tool(state, request, meta),
             "resources/list" => Ok(serde_json::to_value(ListResult {
                 result_type: meta.uses_new_protocol.then_some(RESULT_TYPE_COMPLETE),
@@ -323,7 +339,8 @@ impl<R: ToolRegistry> Server<R> {
                 cache_scope: CACHE_SCOPE_PUBLIC,
                 payload: ListResourcesPayload { resources: self.registry.resources() },
             })
-            .expect("list resources result")),
+            .expect("list resources result")
+            .into()),
             "resources/templates/list" => Ok(serde_json::to_value(ListResult {
                 result_type: meta.uses_new_protocol.then_some(RESULT_TYPE_COMPLETE),
                 meta: meta
@@ -335,8 +352,9 @@ impl<R: ToolRegistry> Server<R> {
                     resource_templates: self.registry.resource_templates(),
                 },
             })
-            .expect("list resource templates result")),
-            "resources/read" => self.handle_read_resource(request),
+            .expect("list resource templates result")
+            .into()),
+            "resources/read" => self.handle_read_resource(state, request, meta),
             "prompts/list" => Ok(serde_json::to_value(ListResult {
                 result_type: meta.uses_new_protocol.then_some(RESULT_TYPE_COMPLETE),
                 meta: meta
@@ -346,7 +364,8 @@ impl<R: ToolRegistry> Server<R> {
                 cache_scope: CACHE_SCOPE_PUBLIC,
                 payload: ListPromptsPayload { prompts: self.registry.prompts() },
             })
-            .expect("list prompts result")),
+            .expect("list prompts result")
+            .into()),
             "prompts/get" => {
                 let name = request
                     .params
@@ -356,6 +375,7 @@ impl<R: ToolRegistry> Server<R> {
                     .unwrap_or_default();
                 self.registry
                     .get_prompt(name)
+                    .map(SuccessPayload::Json)
                     .ok_or_else(|| McpError::unknown_prompt(name))
             }
             "resources/subscribe" | "resources/unsubscribe" | "completion/complete" => {
@@ -440,7 +460,7 @@ impl<R: ToolRegistry> Server<R> {
         state: &SessionState,
         request: &RpcRequest,
         meta: &ValidatedMeta,
-    ) -> Result<Value, McpError> {
+    ) -> Result<SuccessPayload, McpError> {
         let params = request.params.as_ref().ok_or_else(|| {
             // JSON-null params fail closed as -32602 (go-sdk wraps
             // ErrInvalidParams when typed params decode to nil).
@@ -460,21 +480,106 @@ impl<R: ToolRegistry> Server<R> {
         if Self::client_supports_multi_round_trip(state) {
             result.result_type = Some(RESULT_TYPE_COMPLETE);
         }
+        let result_type = result.result_type;
+        // Rendered by hand (OrderedJson) so the go-sdk CallToolResult field
+        // order and Go's JSON string escaping survive the wire.
+        let mut entries: Vec<(&'static str, OrderedJson)> = Vec::new();
         if meta.uses_new_protocol {
-            result.meta = Some(ResultMeta { server_info: Some(self.server_info()) });
+            entries.push(("_meta", server_info_meta(&self.server_info())));
         }
-        Ok(serde_json::to_value(result).expect("call tool result"))
+        if !result.content.is_empty() {
+            entries.push((
+                "content",
+                OrderedJson::Array(
+                    result
+                        .content
+                        .iter()
+                        .map(|block| {
+                            OrderedJson::object(vec![
+                                ("type", OrderedJson::string(block.r#type)),
+                                ("text", OrderedJson::string(&block.text)),
+                            ])
+                        })
+                        .collect(),
+                ),
+            ));
+        }
+        if let Some(structured) = &result.structured_content {
+            entries.push(("structuredContent", structured.clone()));
+        }
+        if result.is_error {
+            entries.push(("isError", OrderedJson::Bool(true)));
+        }
+        if let Some(result_type) = result_type {
+            entries.push(("resultType", OrderedJson::string(result_type)));
+        }
+        Ok(SuccessPayload::Raw(OrderedJson::object(entries).compact()))
     }
 
-    fn handle_read_resource(&self, request: &RpcRequest) -> Result<Value, McpError> {
+    /// Wraps the registry's read result the way the go-sdk does for every
+    /// read: `resultType: "complete"` when the client supports
+    /// multi-round-trip, the SEP-2575 `_meta` server annotation on the
+    /// new-protocol path, and the go-sdk ReadResourceResult field order.
+    fn handle_read_resource(
+        &self,
+        state: &SessionState,
+        request: &RpcRequest,
+        meta: &ValidatedMeta,
+    ) -> Result<SuccessPayload, McpError> {
         let params = request.params.as_ref().ok_or_else(|| {
             McpError::invalid_params("missing required \"params\"")
         })?;
         let uri = params.get("uri").and_then(Value::as_str).unwrap_or_default();
-        self.registry
+        let result = self
+            .registry
             .read_resource(uri)
-            .ok_or_else(|| McpError::resource_not_found(uri))
+            .ok_or_else(|| McpError::resource_not_found(uri))?;
+        let result_type = if Self::client_supports_multi_round_trip(state) {
+            Some(RESULT_TYPE_COMPLETE)
+        } else {
+            None
+        };
+        let mut entries: Vec<(&'static str, OrderedJson)> = Vec::new();
+        if meta.uses_new_protocol {
+            entries.push(("_meta", server_info_meta(&self.server_info())));
+        }
+        entries.push(("ttlMs", OrderedJson::Int(result.ttl_ms)));
+        entries.push(("cacheScope", OrderedJson::string(result.cache_scope)));
+        entries.push((
+            "contents",
+            OrderedJson::Array(
+                result
+                    .contents
+                    .iter()
+                    .map(|content| {
+                        let mut content_entries = vec![("uri", OrderedJson::string(&content.uri))];
+                        if let Some(mime_type) = &content.mime_type {
+                            content_entries.push(("mimeType", OrderedJson::string(mime_type)));
+                        }
+                        if let Some(text) = &content.text {
+                            content_entries.push(("text", OrderedJson::string(text)));
+                        }
+                        OrderedJson::object(content_entries)
+                    })
+                    .collect(),
+            ),
+        ));
+        if let Some(result_type) = result_type {
+            entries.push(("resultType", OrderedJson::string(result_type)));
+        }
+        Ok(SuccessPayload::Raw(OrderedJson::object(entries).compact()))
     }
+}
+
+/// SEP-2575 `_meta` server annotation rendered in go-sdk key order.
+fn server_info_meta(server_info: &Implementation) -> OrderedJson {
+    OrderedJson::object(vec![(
+        "io.modelcontextprotocol/serverInfo",
+        OrderedJson::object(vec![
+            ("name", OrderedJson::string(&server_info.name)),
+            ("version", OrderedJson::string(&server_info.version)),
+        ]),
+    )])
 }
 
 #[cfg(test)]
