@@ -34,4 +34,4 @@
   (127.0.0.1 only)
 
 ## What are we working on right now?
-- plan: docs/plans/active/agentic-authoring-refresh.md (active)
+- plan: none active (trusted-memory-hygiene completed 2026-09-04; PR #28 merged)
