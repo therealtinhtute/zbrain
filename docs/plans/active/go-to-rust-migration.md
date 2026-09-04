@@ -55,6 +55,15 @@ updated: 2026-09-04
   - `master` untouched except Go-side critical fixes; all work on `rust-rewrite` (R9).
   - Fixture generation is Go-oracle-owned; Rust tests must not hand-maintain parallel expectations.
   - Story/phase definitions below are immutable once written.
+- execution_map_parallel_rounds:
+  - "R1 (1 agent): m0-foundation — serial by design; everything below reads its paths/flock/fixtures."
+  - "R2 (3 agents): m1-assets-setup ∥ m2-claims-evidence ∥ m5-mcp-gateway W1 (transport/framing/revisions only)."
+  - "R3 (2 agents): m3-lifecycle-trust ∥ m5-mcp-gateway W2.T1 (claim resource + evidence_capture, gated on m2 from R2)."
+  - "R4 (2 agents): m4-index-query ∥ m6-approval-campaign (both gated on m3 from R3)."
+  - "R5 (3 agents): m5 W2.T2+W2.T3 (remaining tools + real-client smoke) ∥ m7 W2.T1 view (gated on m2) ∥ m7 W1.T1 CLI framework (gated on m0)."
+  - "R6 (1 agent): m7 full wiring — CLI surface completion + eval suite + smoke + parity all (gated on m4/m5/m6)."
+  - "R7 (1 agent): m8-cutover — serial, single PR, owner sign-off."
+  - "Max concurrency 3; core data track (m0→m2→m3→m4) is inherently serial. Subagents coordinate via the `rust-rewrite` branch with one merge per phase (work stage runs per-phase; check gates between rounds)."
 - risks:
   - FTS5 not enabled in libsqlite3-sys `bundled` build. Mitigation: first M4 task is a compile+run assertion; fallback path is enabling `SQLITE_ENABLE_FTS5` via the bundled feature's compile opts or vendored build config. If neither works, phase stops (premise collapse — index behavior is the product).
   - Hand-rolled MCP drifts from real clients. Mitigation: port the full MCP conformance test set (mcp_test.go, campaign_test.go transports) and run a real Claude/Codex stdio smoke before M6 sign-off.
@@ -148,7 +157,7 @@ updated: 2026-09-04
     story_id: rust-m2-claims-evidence-20260904
     status: planned
     goal: Claim store, evidence store (SHA-256 skip, digest, immutability), manifest ported with two-way tree readability
-    depends_on: m1-assets-setup
+    depends_on: m0-foundation
     requirements: [R2, R3, R7]
     allowed_surfaces: [crates/zbrain/src/claims.rs, crates/zbrain/src/evidence.rs, crates/zbrain/src/manifest.rs, crates/zbrain/src/yaml.rs, crates/zbrain/tests/fixtures/]
     avoided_surfaces: [internal/runtime/claim*.go, internal/runtime/evidence.go (read-only oracle)]
@@ -269,7 +278,8 @@ updated: 2026-09-04
     story_id: rust-m5-mcp-gateway-20260904
     status: planned
     goal: Hand-rolled stdio MCP gateway with current protocol revisions and conformance suite
-    depends_on: m4-index-query
+    depends_on: m0-foundation
+    notes: Wave-level gating — W1 (transport/framing/revisions) is parallel-eligible after m0; W2a (claim resource + evidence_capture) needs m2; W2b (ask/status/doctor/campaign tools) needs m4 and m6; W3 real-client smoke needs W2b. A subagent may pick up W1 in an early round and W2b in a later round.
     requirements: [R6, R7]
     allowed_surfaces: [crates/zbrain/src/mcp/ (mod, jsonrpc, tools, resources, transport traits), crates/zbrain/tests/mcp/]
     avoided_surfaces: [internal/mcp/ (read-only oracle), assets/engine (no wording changes)]
@@ -289,12 +299,16 @@ updated: 2026-09-04
         goal: Tools and resources
         tasks:
           - id: W2.T1
-            task: Port the 10 tools (memory_ask, memory_status, evidence_capture, evidence_check, claim_lifecycle prepare/apply, campaign_begin/next/submit_draft, doctor-equivalent) and 2 resources (claim read, fenced untrusted_evidence envelope with nested raw bytes).
-            depends_on: W1.T2
-            expected_output: Tool/response fixtures match Go; resource fence shape byte-identical.
+            task: Port claim read resource and evidence_capture tool (gated only by m2 claims/evidence stores).
+            depends_on: m2-claims-evidence
+            expected_output: Resource fence shape byte-identical to Go; evidence_capture response fixtures match.
           - id: W2.T2
+            task: Port the remaining tools (memory_ask, memory_status, evidence_check, claim_lifecycle prepare/apply, campaign_begin/next/submit_draft, doctor-equivalent).
+            depends_on: m4-index-query
+            expected_output: Tool/response fixtures match Go on the full surface.
+          - id: W2.T3
             task: Real-client smoke: run the gateway against Claude Code and Codex MCP configs in isolated ZBRAIN_HOME; capture transcript proofs.
-            depends_on: W2.T1
+            depends_on: W2.T2
             expected_output: Both clients list tools, read resources, call memory_ask successfully.
     checks:
       - command: cargo test -p zbrain --lib mcp
@@ -308,7 +322,7 @@ updated: 2026-09-04
     story_id: rust-m6-approval-campaign-20260904
     status: planned
     goal: Owner-pinned approval ceremony, batch approval, and authoring campaign ported 1:1
-    depends_on: m5-mcp-gateway
+    depends_on: m3-lifecycle-trust
     requirements: [R3, R7]
     allowed_surfaces: [crates/zbrain/src/approval.rs, crates/zbrain/src/campaign.rs, crates/zbrain/src/term.rs]
     avoided_surfaces: [internal/runtime/challenge.go (read-only oracle)]
@@ -344,6 +358,7 @@ updated: 2026-09-04
     status: planned
     goal: Full CLI surface, loopback viewer, eval suite, and smoke script ported; differential harness covers every command
     depends_on: m6-approval-campaign
+    notes: Parallel-eligible slices — W1.T1 (arg parsing/dispatch framework + help text) can start after m0; W2.T1 (view server) can start after m2 (claims read). The phase as a whole (full wiring + eval + smoke) completes after m4/m5/m6.
     requirements: [R3, R4, R7]
     allowed_surfaces: [crates/zbrain/src/cli.rs, crates/zbrain/src/view.rs, crates/eval/ (or tests/eval), scripts/smoke.sh, Makefile.smoke]
     avoided_surfaces: [internal/cli/, internal/view/, internal/eval/ (read-only oracle)]
