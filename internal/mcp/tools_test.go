@@ -127,7 +127,7 @@ func TestToolSurface(t *testing.T) {
 		}
 		toolNames[tool.Name] = true
 	}
-	want := []string{"workspace_current", "memory_ask", "memory_status", "memory_reindex", "evidence_capture", "claim_draft", "claim_lifecycle"}
+	want := []string{"workspace_current", "memory_ask", "memory_status", "memory_reindex", "evidence_capture", "claim_draft", "claim_lifecycle", "campaign_begin", "campaign_next", "campaign_submit_draft"}
 	for _, name := range want {
 		if !toolNames[name] {
 			t.Errorf("tools/list missing %s; got %v", name, toolNames)
