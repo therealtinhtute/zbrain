@@ -127,7 +127,7 @@ updated: 2026-09-04
 
   - phase_slug: m1-assets-setup
     story_id: rust-m1-assets-setup-20260904
-    status: planned
+    status: checked
     goal: Embedded assets and `zbrain setup` ported byte-identical
     depends_on: m0-foundation
     requirements: [R2, R8]
@@ -276,7 +276,7 @@ updated: 2026-09-04
 
   - phase_slug: m5-mcp-gateway
     story_id: rust-m5-mcp-gateway-20260904
-    status: planned
+    status: in-progress
     goal: Hand-rolled stdio MCP gateway with current protocol revisions and conformance suite
     depends_on: m0-foundation
     notes: Wave-level gating — W1 (transport/framing/revisions) is parallel-eligible after m0; W2a (claim resource + evidence_capture) needs m2; W2b (ask/status/doctor/campaign tools) needs m4 and m6; W3 real-client smoke needs W2b. A subagent may pick up W1 in an early round and W2b in a later round.
@@ -434,6 +434,10 @@ updated: 2026-09-04
 - 2026-09-04T21:41Z | phase: m0-foundation | wave: W1 | task_status: DONE | summary: W1 complete — 28 unit tests pass, clippy clean; flock cross-process proven
 - 2026-09-04T21:58Z | phase: m0-foundation | wave: W2 | task: W2.T1 | task_status: DONE | run_id: rust-rewrite-r1 | verification: `scripts/parity.sh` → "parity: OK (workspace=research)" — Go oracle (crates/tools/fixture-gen) vs Rust (crates/zbrain/src/bin/parity.rs) manifests byte-identical (config, workspace.md, evidence index, full tree with mode bits, default workspace, control rel path); `go vet ./crates/tools/fixture-gen` clean; `CGO_ENABLED=0 go build ./cmd/zbrain` still green | surfaces: crates/tools/fixture-gen/main.go, crates/zbrain/src/bin/parity.rs, scripts/parity.sh
 - 2026-09-04T21:59Z | phase: m0-foundation | wave: W2 | task_status: DONE | summary: W2 complete — differential parity harness live; Go oracle still authoritative
+- 2026-09-04T23:10Z | phase: m1-assets-setup | wave: W1 | task: W1.T1,W1.T2 | task_status: DONE | run_id: rust-rewrite-r2-m1 (subagent) | verification: `cargo test -p zbrain --lib` ok 36 passed; `scripts/parity.sh research setup` parity OK; `scripts/parity.sh research workspace` parity OK; `go vet` clean; `CGO_ENABLED=0 go build ./cmd/zbrain` green | surfaces: crates/zbrain/src/assets.rs, setup.rs, bin/parity.rs, crates/tools/fixture-gen/main.go (--op setup), scripts/parity.sh, include_dir dep | commit 6fad00b on r2-m1, merged to rust-rewrite
+- 2026-09-04T23:10Z | phase: m1-assets-setup | gate | task_status: DONE_WITH_CONCERNS | judge: same-session | notes: Go oracle recopies on every setup run (no skip-existing) — ported as-is, parity pinned to documentedEmbeddedAssetPaths (21 copied/1 skipped); setup CLI text output is m7 scope, JSON surface verified via parity manifest; subagent disclosed unrelated docs/proofs/*.json drift included by its git add -A (runtime-generated files, reverted at next touch)
+- 2026-09-04T23:12Z | phase: m5-mcp-gateway | wave: W1 | task: W1.T1,W1.T2 | task_status: DONE | run_id: rust-rewrite-r2-m5w1 (subagent) | verification: `cargo test -p zbrain --lib` ok 82 passed (54 mcp); clippy clean; wire semantics captured from real `go run ./cmd/zbrain mcp serve` (unknown method -32601, unknown tool -32602, future _meta -32022, framing strict) | surfaces: crates/zbrain/src/mcp/{mod,protocol,server,transport}.rs | commit 1632f3a on r2-m5w1, merged to rust-rewrite
+- 2026-09-04T23:14Z | merge | rust-rewrite post-merge re-verification | task_status: DONE | verification: `cargo test -p zbrain --lib` ok 90 passed (28 m0 + 8 m1 + 54 m5-W1); clippy clean; parity setup+workspace OK
 
 ## Decisions
 <!-- Append-only durable entries record timestamp, phase/task, decision, and rationale. -->
@@ -445,6 +449,8 @@ updated: 2026-09-04
 - 2026-09-04 (m0): Parity manifest reports the coordination control path workspace-relative (`control_rel`); Go `GenerationPath` returns a canonicalized root while `RuntimeDir` is uncanonicalized, so a runtime-dir-relative field was ambiguous under /tmp symlinks.
 - 2026-09-04 (m0): Generation-state parity via the exported Go API is deferred to m4 (read/write generation helpers are unexported and index-coupled); m0 covers generation semantics through Rust unit tests (round-trip, extra-fields, null, published-newer).
 - 2026-09-04 (m0): Workspace crate version pinned 0.3.0; edition 2021; toolchain stable via rust-toolchain.toml.
+- 2026-09-04 (m5-W1): Go JSON parse-error message text is unportable (serde's own text); codes and fatal-session behavior match Go exactly. Go dispatch is async (responses can reorder); Rust is sequential — no W1 test depends on reordering; flag for W2/MCP conformance re-check.
+- 2026-09-04 (m1): include_dir embeds the full assets/ tree; extraction re-applies the go:embed pattern filter (view/ + embed.go excluded, dot/underscore exclusion, .go skip) — pinned by a layout-parity test against Go's documentedEmbeddedAssetPaths.
 
 ## Validation
 <!-- Append-only durable entries record timestamp, phase, exact command/result/output, run_id, check_id, verdict, and proof_gaps. -->
@@ -463,12 +469,12 @@ updated: 2026-09-04
   - receipt: context_sources=plan m0-foundation waves W1-W2, internal/runtime/{paths,config,workspace,workspace_boundary,coordination}.go | policy=AGENTS.md CI gate equivalents | judge=same-session | judge_model=opencode-go/omen-alpha | retries=0 | rollback_point=branch rust-rewrite @ master f0bae10 | failure_ledger=absent | not_independently_verified=cross-process flock probe + self-diffed parity oracle
 
 ## Current State and Next Action
-- active_phase: none (m0-foundation checked; R2 parallel round next)
-- lifecycle_status: checked
-- latest_run_id: rust-rewrite-r1
-- latest_trace_ids: [m0-foundation W1, m0-foundation W2]
-- latest_check_id: m0-foundation gate 2026-09-04T22:00Z
+- active_phase: m2-claims-evidence (in progress by orchestrator; m5 W2 gated on m4)
+- lifecycle_status: in-progress
+- latest_run_id: rust-rewrite-r1 / r2-m1 (subagent) / r2-m5w1 (subagent)
+- latest_trace_ids: [m0-foundation W1, m0-foundation W2, m1-assets-setup W1, m5-mcp-gateway W1]
+- latest_check_id: m0-foundation gate 2026-09-04T22:00Z; m1 gate recorded via parity + 36 tests
 - latest_handoff_id: none
 - blockers: none
-- open_items: []
-- exact_next_action: work R2 parallel round — m1-assets-setup ∥ m2-claims-evidence ∥ m5-mcp-gateway W1 (subagent round; one merge per phase onto rust-rewrite)
+- open_items: ["m5 W2 gated on m4-index-query", "m2-claims-evidence in progress (R3 round continues)"]
+- exact_next_action: work m2-claims-evidence on worktree zbrain-r2m2 (branch r2-m2), then R4 round (m4 ∥ m6)
