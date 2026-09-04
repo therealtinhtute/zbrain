@@ -1,0 +1,126 @@
+{
+  "case_count": 9,
+  "cases": [
+    {
+      "case": "draft_alongside_approved",
+      "layer": "cli:zbrain ask",
+      "observed": "ready",
+      "promotion_candidate_ids": [
+        "clm_a0000000000000000000000000000002"
+      ],
+      "trusted_claim_ids": [
+        "clm_a0000000000000000000000000000001"
+      ]
+    },
+    {
+      "case": "draft_alongside_approved",
+      "layer": "mcp:memory_ask",
+      "observed": "ready",
+      "promotion_candidate_ids": [
+        "clm_a0000000000000000000000000000002"
+      ],
+      "trusted_claim_ids": [
+        "clm_a0000000000000000000000000000001"
+      ]
+    },
+    {
+      "case": "revoked_claim",
+      "layer": "cli:zbrain ask",
+      "observed": "gap"
+    },
+    {
+      "case": "revoked_claim",
+      "layer": "mcp:memory_ask",
+      "observed": "gap"
+    },
+    {
+      "case": "superseded_claim",
+      "layer": "cli:zbrain ask",
+      "observed": "ready",
+      "trusted_claim_ids": [
+        "clm_c0000000000000000000000000000002"
+      ]
+    },
+    {
+      "case": "superseded_claim",
+      "layer": "mcp:memory_ask",
+      "observed": "ready",
+      "trusted_claim_ids": [
+        "clm_c0000000000000000000000000000002"
+      ]
+    },
+    {
+      "case": "conflicting_approved",
+      "layer": "cli:zbrain ask",
+      "observed": "blocked",
+      "trusted_claim_ids": [
+        "clm_d0000000000000000000000000000001",
+        "clm_d0000000000000000000000000000002"
+      ]
+    },
+    {
+      "case": "conflicting_approved",
+      "layer": "mcp:memory_ask",
+      "observed": "blocked",
+      "trusted_claim_ids": [
+        "clm_d0000000000000000000000000000001",
+        "clm_d0000000000000000000000000000002"
+      ]
+    },
+    {
+      "case": "digest_tampered_approved",
+      "layer": "cli:zbrain ask",
+      "observed": "error:rejected"
+    },
+    {
+      "case": "digest_tampered_approved",
+      "layer": "mcp:memory_ask",
+      "observed": "error:rejected"
+    },
+    {
+      "case": "stale_index",
+      "layer": "cli:zbrain ask",
+      "observed": "error:stale"
+    },
+    {
+      "case": "stale_index",
+      "layer": "mcp:memory_ask",
+      "observed": "error:stale"
+    },
+    {
+      "case": "dirty_index",
+      "layer": "cli:zbrain ask",
+      "observed": "error:dirty"
+    },
+    {
+      "case": "dirty_index",
+      "layer": "mcp:memory_ask",
+      "observed": "error:dirty"
+    },
+    {
+      "case": "missing_index",
+      "layer": "cli:zbrain ask",
+      "observed": "error:index"
+    },
+    {
+      "case": "missing_index",
+      "layer": "mcp:memory_ask",
+      "observed": "error:index"
+    },
+    {
+      "case": "unindexed_legacy_doc",
+      "layer": "cli:zbrain ask",
+      "observed": "error:dirty"
+    },
+    {
+      "case": "unindexed_legacy_doc",
+      "layer": "mcp:memory_ask",
+      "observed": "error:dirty"
+    }
+  ],
+  "layers": [
+    "cli:zbrain ask",
+    "mcp:memory_ask"
+  ],
+  "schema": "zbrain.eval.trust-integrity/v1"
+}

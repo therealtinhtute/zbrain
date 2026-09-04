@@ -1,0 +1,346 @@
+{
+  "corpus_size": 90,
+  "k": 10,
+  "modes": {
+    "hybrid": {
+      "mrr": 1,
+      "per_query": [
+        {
+          "hits": 10,
+          "id": "m01",
+          "mrr": 1,
+          "recall_at_k": 0.5556,
+          "relevant": 18,
+          "text": "local trusted memory"
+        },
+        {
+          "hits": 10,
+          "id": "m02",
+          "mrr": 1,
+          "recall_at_k": 0.5556,
+          "relevant": 18,
+          "text": "evidence snapshot"
+        },
+        {
+          "hits": 10,
+          "id": "m03",
+          "mrr": 1,
+          "recall_at_k": 0.5556,
+          "relevant": 18,
+          "text": "workspace isolation"
+        },
+        {
+          "hits": 10,
+          "id": "m04",
+          "mrr": 1,
+          "recall_at_k": 0.5556,
+          "relevant": 18,
+          "text": "claim draft approved"
+        },
+        {
+          "hits": 10,
+          "id": "m05",
+          "mrr": 1,
+          "recall_at_k": 0.5556,
+          "relevant": 18,
+          "text": "reindex disposable"
+        },
+        {
+          "hits": 10,
+          "id": "m06",
+          "mrr": 1,
+          "recall_at_k": 0.5556,
+          "relevant": 18,
+          "text": "verified digest"
+        },
+        {
+          "hits": 10,
+          "id": "m07",
+          "mrr": 1,
+          "recall_at_k": 0.5556,
+          "relevant": 18,
+          "text": "trust validation"
+        },
+        {
+          "hits": 10,
+          "id": "m08",
+          "mrr": 1,
+          "recall_at_k": 0.5556,
+          "relevant": 18,
+          "text": "index fts5 sqlite"
+        },
+        {
+          "hits": 10,
+          "id": "m09",
+          "mrr": 1,
+          "recall_at_k": 0.5556,
+          "relevant": 18,
+          "text": "hybrid retrieval"
+        },
+        {
+          "hits": 10,
+          "id": "m10",
+          "mrr": 1,
+          "recall_at_k": 0.5556,
+          "relevant": 18,
+          "text": "promotion candidates"
+        },
+        {
+          "hits": 10,
+          "id": "m11",
+          "mrr": 1,
+          "recall_at_k": 0.5556,
+          "relevant": 18,
+          "text": "trust input manifest"
+        },
+        {
+          "hits": 10,
+          "id": "m12",
+          "mrr": 1,
+          "recall_at_k": 0.5556,
+          "relevant": 18,
+          "text": "canonical markdown"
+        },
+        {
+          "hits": 10,
+          "id": "m13",
+          "mrr": 1,
+          "recall_at_k": 0.5556,
+          "relevant": 18,
+          "text": "derived evidence"
+        },
+        {
+          "hits": 10,
+          "id": "m14",
+          "mrr": 1,
+          "recall_at_k": 0.5556,
+          "relevant": 18,
+          "text": "supporting claim"
+        },
+        {
+          "hits": 10,
+          "id": "m15",
+          "mrr": 1,
+          "recall_at_k": 0.5556,
+          "relevant": 18,
+          "text": "stale blocked gap"
+        },
+        {
+          "hits": 6,
+          "id": "m16",
+          "mrr": 1,
+          "recall_at_k": 1,
+          "relevant": 6,
+          "text": "local trusted memory claim draft approved"
+        },
+        {
+          "hits": 6,
+          "id": "m17",
+          "mrr": 1,
+          "recall_at_k": 1,
+          "relevant": 6,
+          "text": "evidence snapshot hybrid retrieval"
+        },
+        {
+          "hits": 6,
+          "id": "m18",
+          "mrr": 1,
+          "recall_at_k": 1,
+          "relevant": 6,
+          "text": "workspace isolation verified digest"
+        },
+        {
+          "hits": 6,
+          "id": "m19",
+          "mrr": 1,
+          "recall_at_k": 1,
+          "relevant": 6,
+          "text": "claim draft approved trust input manifest"
+        },
+        {
+          "hits": 6,
+          "id": "m20",
+          "mrr": 1,
+          "recall_at_k": 1,
+          "relevant": 6,
+          "text": "reindex disposable canonical markdown"
+        }
+      ],
+      "recall_at_k": 0.6667
+    },
+    "lexical": {
+      "mrr": 1,
+      "per_query": [
+        {
+          "hits": 10,
+          "id": "m01",
+          "mrr": 1,
+          "recall_at_k": 0.5556,
+          "relevant": 18,
+          "text": "local trusted memory"
+        },
+        {
+          "hits": 10,
+          "id": "m02",
+          "mrr": 1,
+          "recall_at_k": 0.5556,
+          "relevant": 18,
+          "text": "evidence snapshot"
+        },
+        {
+          "hits": 10,
+          "id": "m03",
+          "mrr": 1,
+          "recall_at_k": 0.5556,
+          "relevant": 18,
+          "text": "workspace isolation"
+        },
+        {
+          "hits": 10,
+          "id": "m04",
+          "mrr": 1,
+          "recall_at_k": 0.5556,
+          "relevant": 18,
+          "text": "claim draft approved"
+        },
+        {
+          "hits": 10,
+          "id": "m05",
+          "mrr": 1,
+          "recall_at_k": 0.5556,
+          "relevant": 18,
+          "text": "reindex disposable"
+        },
+        {
+          "hits": 10,
+          "id": "m06",
+          "mrr": 1,
+          "recall_at_k": 0.5556,
+          "relevant": 18,
+          "text": "verified digest"
+        },
+        {
+          "hits": 10,
+          "id": "m07",
+          "mrr": 1,
+          "recall_at_k": 0.5556,
+          "relevant": 18,
+          "text": "trust validation"
+        },
+        {
+          "hits": 10,
+          "id": "m08",
+          "mrr": 1,
+          "recall_at_k": 0.5556,
+          "relevant": 18,
+          "text": "index fts5 sqlite"
+        },
+        {
+          "hits": 10,
+          "id": "m09",
+          "mrr": 1,
+          "recall_at_k": 0.5556,
+          "relevant": 18,
+          "text": "hybrid retrieval"
+        },
+        {
+          "hits": 10,
+          "id": "m10",
+          "mrr": 1,
+          "recall_at_k": 0.5556,
+          "relevant": 18,
+          "text": "promotion candidates"
+        },
+        {
+          "hits": 10,
+          "id": "m11",
+          "mrr": 1,
+          "recall_at_k": 0.5556,
+          "relevant": 18,
+          "text": "trust input manifest"
+        },
+        {
+          "hits": 10,
+          "id": "m12",
+          "mrr": 1,
+          "recall_at_k": 0.5556,
+          "relevant": 18,
+          "text": "canonical markdown"
+        },
+        {
+          "hits": 10,
+          "id": "m13",
+          "mrr": 1,
+          "recall_at_k": 0.5556,
+          "relevant": 18,
+          "text": "derived evidence"
+        },
+        {
+          "hits": 10,
+          "id": "m14",
+          "mrr": 1,
+          "recall_at_k": 0.5556,
+          "relevant": 18,
+          "text": "supporting claim"
+        },
+        {
+          "hits": 10,
+          "id": "m15",
+          "mrr": 1,
+          "recall_at_k": 0.5556,
+          "relevant": 18,
+          "text": "stale blocked gap"
+        },
+        {
+          "hits": 6,
+          "id": "m16",
+          "mrr": 1,
+          "recall_at_k": 1,
+          "relevant": 6,
+          "text": "local trusted memory claim draft approved"
+        },
+        {
+          "hits": 6,
+          "id": "m17",
+          "mrr": 1,
+          "recall_at_k": 1,
+          "relevant": 6,
+          "text": "evidence snapshot hybrid retrieval"
+        },
+        {
+          "hits": 6,
+          "id": "m18",
+          "mrr": 1,
+          "recall_at_k": 1,
+          "relevant": 6,
+          "text": "workspace isolation verified digest"
+        },
+        {
+          "hits": 6,
+          "id": "m19",
+          "mrr": 1,
+          "recall_at_k": 1,
+          "relevant": 6,
+          "text": "claim draft approved trust input manifest"
+        },
+        {
+          "hits": 6,
+          "id": "m20",
+          "mrr": 1,
+          "recall_at_k": 1,
+          "relevant": 6,
+          "text": "reindex disposable canonical markdown"
+        }
+      ],
+      "recall_at_k": 0.6667
+    }
+  },
+  "queries_file": {
+    "baseline_comparable": true,
+    "note": "relevant_total added without changing query texts; internal/eval computes ground truth brute-force, so docs/proofs/eval-baseline.json stays comparable",
+    "path": "docs/eval/queries.json",
+    "queries": 50,
+    "with_expected_hits": 50
+  },
+  "schema": "zbrain.eval.retrieval-metrics/v1"
+}

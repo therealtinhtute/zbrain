@@ -25,6 +25,9 @@ eval: build ## Run retrieval eval (P@K/R@K/MRR/NDCG) on 1k syn corpus
 	go run ./internal/eval --corpus=1000 --limit=10 --json docs/proofs/eval-baseline.json
 	@cat docs/proofs/eval-baseline.json | python3 -m json.tool | head -40
 
+eval-suite: ## Run eval-suite runners (trust integrity, lifecycle, draft precision, retrieval + drift metrics)
+	go test ./internal/eval ./internal/runtime -run 'TestEval' -count=1
+
 test: ## Run the Go test suite
 	go test ./...
 
