@@ -57,6 +57,20 @@ The first release exposes exactly these tools:
 5. `evidence_capture`
 6. `claim_draft`
 7. `claim_lifecycle` with `prepare|apply`
+8. `campaign_begin`
+9. `campaign_next` (also serves as the campaign status read)
+10. `campaign_submit_draft`
+
+Campaign tools let a host agent author claim drafts at scale through a
+resumable run file (`workspaces/<workspace>/campaigns/<run-id>.json`). Every
+campaign-submitted draft is `status: draft` and visible only as a
+`promotion_candidate`; no campaign path can approve, and a malformed run file
+is a hard error, never a silent reset. A `prepare` may bind one challenge to
+an ordered list of draft digests; the owner confirms or explicitly skips each
+item in a single `approval grant` TTY session, one token is issued when at
+least one item is granted, and `apply` reports a per-item
+applied/skipped/failed result with whole-batch fail-closed token and expiry
+semantics.
 
 Resources are read-only:
 

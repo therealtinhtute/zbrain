@@ -71,6 +71,7 @@ func TestCLIHelpParity(t *testing.T) {
 		{name: "workspace create", args: []string{"workspace", "create", "--help"}, want: []string{"Usage: zbrain workspace create <name>"}},
 		{name: "workspace current", args: []string{"workspace", "current", "--help"}, want: []string{"Usage: zbrain workspace current"}},
 		{name: "evidence", args: []string{"evidence", "add", "--help"}, want: []string{"--file <path>", "--origin <uri-or-path>", "--media-type <type>", "--workspace <name>"}},
+		{name: "evidence check", args: []string{"evidence", "check", "--help"}, want: []string{"Usage: zbrain evidence check [--workspace <name>]"}},
 		{name: "claim draft", args: []string{"claim", "draft", "--help"}, want: []string{"--tier <tier>", "--title <title>", "--basis <basis>", "--evidence <id>", "--support <id>", "--conflicts-with <id>", "--workspace <name>"}},
 		{name: "claim approve", args: []string{"claim", "approve", "--help"}, want: []string{"Usage: zbrain claim approve <id> [--workspace <name>]"}},
 		{name: "claim supersede", args: []string{"claim", "supersede", "--help"}, want: []string{"--tier <tier>", "--title <title>", "--basis <basis>"}},
@@ -1445,6 +1446,168 @@ func TestApprovalGrantRequiresTTY(t *testing.T) {
 	}
 }
 
+func TestApprovalBatchCeremony(t *testing.T) {
+	app, _ := testApp(t)
+	setupResearchApp(t, &app)
+	claimStore := zruntime.ClaimStore{Paths: app.Paths, Now: app.Now}
+	challengeStore := zruntime.ChallengeStore{Paths: app.Paths, Now: app.Now}
+	makeBatchDrafts := func(t *testing.T) []string {
+		t.Helper()
+		ids := []string{}
+		for _, title := range []string{"Batch One", "Batch Two", "Batch Three"} {
+			app.Stdout = &bytes.Buffer{}
+			app.Stdin = strings.NewReader(title + " body\n")
+			if err := app.Run([]string{"claim", "draft", "--tier", "projects", "--title", title, "--basis", "owner"}); err != nil {
+				t.Fatalf("Run(claim draft %s) error = %v", title, err)
+			}
+			var draft struct {
+				ID string `json:"id"`
+			}
+			decodeJSON(t, stdout(app), &draft)
+			ids = append(ids, draft.ID)
+		}
+		return ids
+	}
+	itemsOf := func(ids []string) []zruntime.ChallengeItem {
+		items := make([]zruntime.ChallengeItem, 0, len(ids))
+		for _, id := range ids {
+			items = append(items, zruntime.ChallengeItem{ClaimID: id})
+		}
+		return items
+	}
+	suffixOf := func(t *testing.T, claimID string) string {
+		t.Helper()
+		digest, err := claimStore.CanonicalDraftDigest("research", claimID)
+		if err != nil {
+			t.Fatalf("CanonicalDraftDigest(%s) error = %v", claimID, err)
+		}
+		return actionDigestSuffix(digest)
+	}
+	prepareBatch := func(t *testing.T, ids []string) zruntime.PreparedChallenge {
+		t.Helper()
+		prepared, err := claimStore.PrepareBatchChallenge("research", itemsOf(ids))
+		if err != nil {
+			t.Fatalf("PrepareBatchChallenge() error = %v", err)
+		}
+		return prepared
+	}
+
+	ids := makeBatchDrafts(t)
+	prepared := prepareBatch(t, ids)
+
+	// Show lets the owner inspect every bound item.
+	app.Stdout = &bytes.Buffer{}
+	if err := app.Run([]string{"approval", "show", prepared.Challenge.ID}); err != nil {
+		t.Fatalf("Run(approval show) error = %v", err)
+	}
+	var shown struct {
+		ChallengeID string `json:"challenge_id"`
+		Operation   string `json:"operation"`
+		Items       []struct {
+			ClaimID              string `json:"claim_id"`
+			CanonicalDraftDigest string `json:"canonical_draft_digest"`
+			DigestSuffix         string `json:"digest_suffix"`
+		} `json:"items"`
+	}
+	decodeJSON(t, stdout(app), &shown)
+	if shown.ChallengeID != prepared.Challenge.ID || shown.Operation != "approve" || len(shown.Items) != len(ids) {
+		t.Fatalf("show output = %#v", shown)
+	}
+	for i, item := range shown.Items {
+		if item.ClaimID != ids[i] || item.DigestSuffix != suffixOf(t, ids[i]) || item.DigestSuffix != actionDigestSuffix(item.CanonicalDraftDigest) {
+			t.Fatalf("shown item %d = %#v", i, item)
+		}
+	}
+
+	// The scripted grant walk confirms item one, skips item two, confirms item
+	// three, and issues exactly one token for the whole batch.
+	app.Stdout = &bytes.Buffer{}
+	app.Stdin = strings.NewReader(strings.Join([]string{suffixOf(t, ids[0]), "skip", suffixOf(t, ids[2])}, "\n") + "\n")
+	if err := app.Run([]string{"approval", "grant", prepared.Challenge.ID}); err != nil {
+		t.Fatalf("Run(approval grant batch) error = %v", err)
+	}
+	var granted struct {
+		SchemaVersion int      `json:"schema_version"`
+		ChallengeID   string   `json:"challenge_id"`
+		Token         string   `json:"token"`
+		GrantedItems  []string `json:"granted_items"`
+		SkippedItems  []string `json:"skipped_items"`
+	}
+	decodeJSON(t, stdout(app), &granted)
+	if granted.SchemaVersion != 1 || granted.ChallengeID != prepared.Challenge.ID || granted.Token == "" {
+		t.Fatalf("grant output = %#v", granted)
+	}
+	if strings.Contains(app.Stderr.(*bytes.Buffer).String(), granted.Token) {
+		t.Fatalf("grant logged plaintext token: %q", granted.Token)
+	}
+	if len(granted.GrantedItems) != 2 || granted.GrantedItems[0] != ids[0] || granted.GrantedItems[1] != ids[2] || len(granted.SkippedItems) != 1 || granted.SkippedItems[0] != ids[1] {
+		t.Fatalf("grant decisions = %#v", granted)
+	}
+	if _, err := challengeStore.Verify("research", prepared.Challenge.ID, granted.Token); err != nil {
+		t.Fatalf("Verify(after grant) error = %v", err)
+	}
+	result, err := claimStore.ApplyChallengeBatch("research", prepared.Challenge.ID, granted.Token, zruntime.ClaimMutationOptions{})
+	if err != nil {
+		t.Fatalf("ApplyChallengeBatch() error = %v", err)
+	}
+	if len(result.Items) != 3 || result.Items[0].Status != zruntime.BatchApplyItemApplied || result.Items[1].Status != zruntime.BatchApplyItemSkipped || result.Items[2].Status != zruntime.BatchApplyItemApplied {
+		t.Fatalf("apply result = %#v", result)
+	}
+	if _, err := claimStore.ApplyChallengeBatch("research", prepared.Challenge.ID, granted.Token, zruntime.ClaimMutationOptions{}); err == nil || !strings.Contains(err.Error(), "already consumed") {
+		t.Fatalf("ApplyChallengeBatch(replay) error = %v, want already consumed", err)
+	}
+
+	// A fully skipped walk issues no token and leaves the challenge ungranted.
+	skipAllIDs := makeBatchDrafts(t)
+	skipAll := prepareBatch(t, skipAllIDs)
+	app.Stdout = &bytes.Buffer{}
+	app.Stdin = strings.NewReader("skip\nskip\nskip\n")
+	if err := app.Run([]string{"approval", "grant", skipAll.Challenge.ID}); err != nil {
+		t.Fatalf("Run(approval grant skip all) error = %v", err)
+	}
+	var skipped struct {
+		Token        string   `json:"token"`
+		GrantedItems []string `json:"granted_items"`
+		SkippedItems []string `json:"skipped_items"`
+	}
+	decodeJSON(t, stdout(app), &skipped)
+	if skipped.Token != "" || len(skipped.GrantedItems) != 0 || len(skipped.SkippedItems) != len(ids) {
+		t.Fatalf("skip-all output = %#v", skipped)
+	}
+	if ungranted, err := challengeStore.Read("research", skipAll.Challenge.ID); err != nil {
+		t.Fatalf("Read(after skip all) error = %v", err)
+	} else if ungranted.Granted || ungranted.TokenSHA256 != "" {
+		t.Fatalf("skip-all granted the challenge: %#v", ungranted)
+	}
+
+	// A mismatched item suffix aborts the walk before anything is recorded.
+	mismatchIDs := makeBatchDrafts(t)
+	mismatch := prepareBatch(t, mismatchIDs)
+	wrong := strings.Repeat("0", 16)
+	if wrong == suffixOf(t, mismatchIDs[0]) {
+		wrong = strings.Repeat("f", 16)
+	}
+	app.Stdout = &bytes.Buffer{}
+	app.Stdin = strings.NewReader(suffixOf(t, mismatchIDs[0]) + "\n" + wrong + "\n")
+	if err := app.Run([]string{"approval", "grant", mismatch.Challenge.ID}); err == nil || !strings.Contains(err.Error(), "item 2 digest suffix mismatch") {
+		t.Fatalf("Run(approval grant mismatch) error = %v, want item 2 mismatch", err)
+	}
+	if ungranted, err := challengeStore.Read("research", mismatch.Challenge.ID); err != nil {
+		t.Fatalf("Read(after mismatch) error = %v", err)
+	} else if ungranted.Granted || ungranted.TokenSHA256 != "" {
+		t.Fatalf("mismatched walk mutated the challenge: %#v", ungranted)
+	}
+	for _, id := range mismatchIDs {
+		claim, err := claimStore.Read("research", id)
+		if err != nil {
+			t.Fatalf("Read(%s) error = %v", id, err)
+		}
+		if claim.Status != zruntime.ClaimStatusDraft {
+			t.Fatalf("claim %s status = %q, want draft", id, claim.Status)
+		}
+	}
+}
+
 func TestExitCodes(t *testing.T) {
 	exitCode := func(err error) int {
 		if err == nil {
@@ -1899,5 +2062,198 @@ func TestRunAskTemporalFlags(t *testing.T) {
 	app.Stdout = &bytes.Buffer{}
 	if err := app.Run([]string{"ask", "--after", "bad-date", "temporal"}); err == nil {
 		t.Fatalf("Run(ask invalid timestamp) error = nil, want error")
+	}
+}
+
+type evidenceCheckFinding struct {
+	ID                   string   `json:"id"`
+	Origin               string   `json:"origin"`
+	Status               string   `json:"status"`
+	RecordedSHA256       string   `json:"recorded_sha256"`
+	RecomputedSHA256     string   `json:"recomputed_sha256"`
+	RecordedByteLength   int64    `json:"recorded_byte_length"`
+	RecomputedByteLength int64    `json:"recomputed_byte_length"`
+	AffectedClaimIDs     []string `json:"affected_claim_ids"`
+	RecoveryAction       string   `json:"recovery_action"`
+}
+
+type evidenceCheckResponse struct {
+	SchemaVersion int                    `json:"schema_version"`
+	Workspace     string                 `json:"workspace"`
+	Findings      []evidenceCheckFinding `json:"findings"`
+}
+
+func TestEvidenceCheckReportsDriftJSON(t *testing.T) {
+	app, tmp := testApp(t)
+	setupResearchApp(t, &app)
+	origin := filepath.Join(tmp, "origin.txt")
+	if err := os.WriteFile(origin, []byte("origin contents"), 0o644); err != nil {
+		t.Fatalf("WriteFile(origin) error = %v", err)
+	}
+	app.Stdout = &bytes.Buffer{}
+	if err := app.Run([]string{"evidence", "add", "--file", origin, "--origin", origin, "--media-type", "text/plain"}); err != nil {
+		t.Fatalf("Run(evidence add) error = %v", err)
+	}
+	var added struct {
+		ID string `json:"id"`
+	}
+	decodeJSON(t, stdout(app), &added)
+
+	app.Stdout = &bytes.Buffer{}
+	if err := app.Run([]string{"evidence", "check"}); err != nil {
+		t.Fatalf("Run(evidence check) error = %v", err)
+	}
+	var response evidenceCheckResponse
+	decodeJSON(t, stdout(app), &response)
+	if response.SchemaVersion != 1 || response.Workspace != "research" || len(response.Findings) != 1 {
+		t.Fatalf("evidence check response = %#v", response)
+	}
+	finding := response.Findings[0]
+	if finding.ID != added.ID || finding.Status != "unchanged" || finding.RecoveryAction != "no action required" {
+		t.Fatalf("unchanged finding = %#v", finding)
+	}
+	if finding.RecordedSHA256 == "" || finding.RecomputedSHA256 != finding.RecordedSHA256 {
+		t.Fatalf("unchanged digests = %#v", finding)
+	}
+	if finding.AffectedClaimIDs == nil || len(finding.AffectedClaimIDs) != 0 {
+		t.Fatalf("unchanged affected claims = %#v", finding.AffectedClaimIDs)
+	}
+
+	app.Stdout = &bytes.Buffer{}
+	app.Stdin = strings.NewReader("Evidence backed body\n")
+	if err := app.Run([]string{"claim", "draft", "--tier", "projects", "--title", "Evidence Claim", "--basis", "evidence", "--evidence", added.ID}); err != nil {
+		t.Fatalf("Run(claim draft) error = %v", err)
+	}
+	var draft struct {
+		ID string `json:"id"`
+	}
+	decodeJSON(t, stdout(app), &draft)
+
+	if err := os.WriteFile(origin, []byte("mutated contents"), 0o644); err != nil {
+		t.Fatalf("WriteFile(mutated origin) error = %v", err)
+	}
+	app.Stdout = &bytes.Buffer{}
+	if err := app.Run([]string{"evidence", "check"}); err != nil {
+		t.Fatalf("Run(evidence check drift) error = %v", err)
+	}
+	decodeJSON(t, stdout(app), &response)
+	if len(response.Findings) != 1 {
+		t.Fatalf("drift response = %#v", response)
+	}
+	finding = response.Findings[0]
+	if finding.Status != "changed" || finding.RecomputedSHA256 == finding.RecordedSHA256 {
+		t.Fatalf("drift finding = %#v", finding)
+	}
+	if finding.RecomputedByteLength != int64(len("mutated contents")) || finding.RecordedByteLength != int64(len("origin contents")) {
+		t.Fatalf("drift byte lengths = %#v", finding)
+	}
+	if len(finding.AffectedClaimIDs) != 1 || finding.AffectedClaimIDs[0] != draft.ID {
+		t.Fatalf("drift affected claims = %#v, want [%s]", finding.AffectedClaimIDs, draft.ID)
+	}
+	if !strings.Contains(finding.RecoveryAction, "supersede") || !strings.Contains(finding.RecoveryAction, "fresh evidence snapshot") {
+		t.Fatalf("drift recovery action = %q", finding.RecoveryAction)
+	}
+}
+
+func TestEvidenceCheckExitCodes(t *testing.T) {
+	app, _ := testApp(t)
+	setupResearchApp(t, &app)
+	if err := app.Run([]string{"evidence", "check"}); err != nil {
+		t.Fatalf("Run(evidence check empty) error = %v", err)
+	}
+	if err := app.Run([]string{"evidence", "check", "extra"}); !isUsageError(err) {
+		t.Fatalf("Run(evidence check extra) error = %v, want usage", err)
+	}
+	if err := app.Run([]string{"evidence", "check", "--bogus", "value"}); !isUsageError(err) {
+		t.Fatalf("Run(evidence check unknown flag) error = %v, want usage", err)
+	}
+	if err := app.Run([]string{"evidence", "bogus"}); !isUsageError(err) {
+		t.Fatalf("Run(evidence bogus) error = %v, want usage", err)
+	}
+}
+
+func isUsageError(err error) bool {
+	code := exitCodeOf(err)
+	return code == 2
+}
+
+func exitCodeOf(err error) int {
+	if err == nil {
+		return 0
+	}
+	if coded, ok := err.(interface{ ExitCode() int }); ok {
+		return coded.ExitCode()
+	}
+	return 1
+}
+
+func TestDoctorReportsEvidenceDriftFinding(t *testing.T) {
+	build := func(t *testing.T, mutate bool) (App, error) {
+		t.Helper()
+		app, tmp := testApp(t)
+		setupResearchApp(t, &app)
+		origin := filepath.Join(tmp, "origin.txt")
+		if err := os.WriteFile(origin, []byte("origin contents"), 0o644); err != nil {
+			t.Fatalf("WriteFile(origin) error = %v", err)
+		}
+		app.Stdout = &bytes.Buffer{}
+		if err := app.Run([]string{"evidence", "add", "--file", origin, "--origin", origin, "--media-type", "text/plain"}); err != nil {
+			t.Fatalf("Run(evidence add) error = %v", err)
+		}
+		var added struct {
+			ID string `json:"id"`
+		}
+		decodeJSON(t, stdout(app), &added)
+		app.Stdout = &bytes.Buffer{}
+		app.Stdin = strings.NewReader("Drift claim body\n")
+		if err := app.Run([]string{"claim", "draft", "--tier", "projects", "--title", "Drift Claim", "--basis", "evidence", "--evidence", added.ID}); err != nil {
+			t.Fatalf("Run(claim draft) error = %v", err)
+		}
+		if err := app.Run([]string{"reindex"}); err != nil {
+			t.Fatalf("Run(reindex) error = %v", err)
+		}
+		if mutate {
+			if err := os.WriteFile(origin, []byte("mutated contents"), 0o644); err != nil {
+				t.Fatalf("WriteFile(mutated origin) error = %v", err)
+			}
+		}
+		app.Stdout = &bytes.Buffer{}
+		err := app.Run([]string{"doctor"})
+		return app, err
+	}
+
+	healthyApp, healthyErr := build(t, false)
+	if healthyErr != nil {
+		t.Fatalf("Run(doctor healthy) error = %v", healthyErr)
+	}
+	var healthy struct {
+		Status   string   `json:"status"`
+		Findings []string `json:"findings"`
+	}
+	decodeJSON(t, stdout(healthyApp), &healthy)
+	if healthy.Status != "healthy" || len(healthy.Findings) != 0 {
+		t.Fatalf("healthy doctor = %#v", healthy)
+	}
+
+	driftApp, driftErr := build(t, true)
+	if exitCodeOf(driftErr) != 2 {
+		t.Fatalf("Run(doctor drift) error = %v, want exit 2", driftErr)
+	}
+	var degraded struct {
+		Status   string   `json:"status"`
+		Findings []string `json:"findings"`
+	}
+	decodeJSON(t, stdout(driftApp), &degraded)
+	if degraded.Status != "degraded" {
+		t.Fatalf("drift doctor status = %q", degraded.Status)
+	}
+	found := false
+	for _, finding := range degraded.Findings {
+		if strings.Contains(finding, "drift: changed") && strings.Contains(finding, "supersede") {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("drift findings = %#v, want evidence drift finding", degraded.Findings)
 	}
 }

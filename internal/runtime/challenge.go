@@ -38,8 +38,16 @@ const (
 	ChallengeOperationRevoke    ChallengeOperation = "revoke"
 )
 
+// ChallengeItem is one ordered approve action bound by a batch challenge.
+type ChallengeItem struct {
+	ClaimID              string `json:"claim_id"`
+	CanonicalDraftDigest string `json:"canonical_draft_digest"`
+}
+
 // ChallengePrepare carries every input bound by the challenge action digest.
-// All fields are always bound, even when empty for a given operation.
+// All fields are always bound, even when empty for a given operation. A
+// non-empty Items list binds an ordered batch of approve items instead of the
+// single-claim fields.
 type ChallengePrepare struct {
 	Workspace               string
 	Operation               ChallengeOperation
@@ -48,6 +56,7 @@ type ChallengePrepare struct {
 	SupersededIDs           []string
 	PriorVerificationDigest string
 	RevokeReason            string
+	Items                   []ChallengeItem
 }
 
 // Challenge is the persisted owner-pinned challenge record. Only the token
@@ -63,6 +72,9 @@ type Challenge struct {
 	SupersededIDs           []string           `json:"superseded_ids,omitempty"`
 	PriorVerificationDigest string             `json:"prior_verification_digest,omitempty"`
 	RevokeReason            string             `json:"revoke_reason,omitempty"`
+	Items                   []ChallengeItem    `json:"items,omitempty"`
+	GrantedItems            []string           `json:"granted_items,omitempty"`
+	SkippedItems            []string           `json:"skipped_items,omitempty"`
 	ActionDigest            string             `json:"action_digest"`
 	TokenSHA256             string             `json:"token_sha256"`
 	ExpiresAt               string             `json:"expires_at"`
@@ -105,7 +117,8 @@ func NewChallengeID() (string, error) {
 // ComputeChallengeActionDigest binds workspace, operation, claim ID, canonical
 // draft digest, superseded IDs, prior verification digest, and revoke reason
 // into a deterministic SHA-256 digest. Superseded IDs are sorted so the digest
-// is canonical regardless of caller ordering.
+// is canonical regardless of caller ordering. A non-empty Items list binds an
+// ordered batch of approve items instead; item order is significant.
 func ComputeChallengeActionDigest(prepare ChallengePrepare) string {
 	superseded := append([]string(nil), prepare.SupersededIDs...)
 	sort.Strings(superseded)
@@ -118,6 +131,16 @@ func ComputeChallengeActionDigest(prepare ChallengePrepare) string {
 	}
 	write(prepare.Workspace)
 	write(string(prepare.Operation))
+	if len(prepare.Items) > 0 {
+		var count [8]byte
+		binary.BigEndian.PutUint64(count[:], uint64(len(prepare.Items)))
+		hasher.Write(count[:])
+		for _, item := range prepare.Items {
+			write(item.ClaimID)
+			write(item.CanonicalDraftDigest)
+		}
+		return "sha256:challenge-v1:" + hex.EncodeToString(hasher.Sum(nil))
+	}
 	write(prepare.ClaimID)
 	write(prepare.CanonicalDraftDigest)
 	write(strings.Join(superseded, "\x00"))
@@ -166,6 +189,71 @@ func (store ChallengeStore) prepareUnlocked(workspace string, prepare ChallengeP
 		return PreparedChallenge{}, err
 	}
 	return PreparedChallenge{Challenge: challenge}, nil
+}
+
+// PrepareBatch creates a new owner-pinned batch challenge binding an ordered
+// list of approve items. It persists no token until GrantItems records the
+// owner's per-item decisions at the end of the grant walk.
+func (store ChallengeStore) PrepareBatch(workspace string, items []ChallengeItem) (PreparedChallenge, error) {
+	lock, err := acquireWorkspaceLock(store.Paths, workspace, true)
+	if err != nil {
+		return PreparedChallenge{}, err
+	}
+	defer func() { _ = lock.Close() }()
+	return store.prepareBatchUnlocked(workspace, items)
+}
+
+func (store ChallengeStore) prepareBatchUnlocked(workspace string, items []ChallengeItem) (PreparedChallenge, error) {
+	normalized, err := normalizeChallengeItems(items)
+	if err != nil {
+		return PreparedChallenge{}, err
+	}
+	prepare := ChallengePrepare{
+		Workspace: workspace,
+		Operation: ChallengeOperationApprove,
+		Items:     normalized,
+	}
+	if err := store.validatePrepare(workspace, prepare); err != nil {
+		return PreparedChallenge{}, err
+	}
+	id, err := NewChallengeID()
+	if err != nil {
+		return PreparedChallenge{}, err
+	}
+	challenge := Challenge{
+		Schema:       ChallengeSchemaVersion,
+		ID:           id,
+		Workspace:    workspace,
+		Operation:    ChallengeOperationApprove,
+		Items:        normalized,
+		ActionDigest: ComputeChallengeActionDigest(prepare),
+		ExpiresAt:    store.now().UTC().Add(challengeLifetime).Format(time.RFC3339),
+	}
+	if err := store.writeChallenge(workspace, challenge); err != nil {
+		return PreparedChallenge{}, err
+	}
+	return PreparedChallenge{Challenge: challenge}, nil
+}
+
+func normalizeChallengeItems(items []ChallengeItem) ([]ChallengeItem, error) {
+	if len(items) == 0 {
+		return nil, fmt.Errorf("batch challenge requires at least one item")
+	}
+	normalized := append([]ChallengeItem(nil), items...)
+	seen := make(map[string]struct{}, len(normalized))
+	for _, item := range normalized {
+		if !claimIDPattern.MatchString(item.ClaimID) {
+			return nil, fmt.Errorf("batch challenge claim id %q must match clm_<32 lowercase hex chars>", item.ClaimID)
+		}
+		if !strings.HasPrefix(item.CanonicalDraftDigest, "sha256:") {
+			return nil, fmt.Errorf("batch challenge canonical draft digest for %q must use sha256:<hex>", item.ClaimID)
+		}
+		if _, ok := seen[item.ClaimID]; ok {
+			return nil, fmt.Errorf("batch challenge binds claim %s more than once", item.ClaimID)
+		}
+		seen[item.ClaimID] = struct{}{}
+	}
+	return normalized, nil
 }
 
 // Read returns a persisted challenge by ID without consuming it.
@@ -269,6 +357,89 @@ func (store ChallengeStore) Grant(workspace string, challengeID string) (Granted
 	return GrantedChallenge{Challenge: challenge, Token: token}, nil
 }
 
+// GrantItems records the owner's per-item decisions for a batch challenge and
+// releases one plaintext token for the whole batch. The granted claim IDs
+// together with the skipped claim IDs must partition the bound items exactly.
+// A walk with no granted items is rejected so a fully skipped challenge stays
+// ungranted and can never yield a token. The token hash and its grant-time
+// expiry are persisted; the plaintext is returned only to the owner ceremony.
+func (store ChallengeStore) GrantItems(workspace string, challengeID string, granted []string, skipped []string) (GrantedChallenge, error) {
+	lock, err := acquireWorkspaceLock(store.Paths, workspace, true)
+	if err != nil {
+		return GrantedChallenge{}, err
+	}
+	defer func() { _ = lock.Close() }()
+	challenge, err := store.readChallengeUnlocked(workspace, challengeID)
+	if err != nil {
+		return GrantedChallenge{}, err
+	}
+	if len(challenge.Items) == 0 {
+		return GrantedChallenge{}, fmt.Errorf("challenge %s is not a batch challenge", challenge.ID)
+	}
+	if challenge.Granted {
+		return GrantedChallenge{}, fmt.Errorf("challenge %s has already been owner-granted", challenge.ID)
+	}
+	itemIndex := make(map[string]struct{}, len(challenge.Items))
+	for _, item := range challenge.Items {
+		itemIndex[item.ClaimID] = struct{}{}
+	}
+	grantedSeen := make(map[string]struct{}, len(granted))
+	for _, id := range granted {
+		if _, ok := itemIndex[id]; !ok {
+			return GrantedChallenge{}, fmt.Errorf("challenge %s granted item %q is not bound", challenge.ID, id)
+		}
+		if _, ok := grantedSeen[id]; ok {
+			return GrantedChallenge{}, fmt.Errorf("challenge %s grants claim %s more than once", challenge.ID, id)
+		}
+		grantedSeen[id] = struct{}{}
+	}
+	skippedSeen := make(map[string]struct{}, len(skipped))
+	for _, id := range skipped {
+		if _, ok := itemIndex[id]; !ok {
+			return GrantedChallenge{}, fmt.Errorf("challenge %s skipped item %q is not bound", challenge.ID, id)
+		}
+		if _, ok := grantedSeen[id]; ok {
+			return GrantedChallenge{}, fmt.Errorf("challenge %s claim %s cannot be both granted and skipped", challenge.ID, id)
+		}
+		if _, ok := skippedSeen[id]; ok {
+			return GrantedChallenge{}, fmt.Errorf("challenge %s skips claim %s more than once", challenge.ID, id)
+		}
+		skippedSeen[id] = struct{}{}
+	}
+	if len(granted)+len(skipped) != len(challenge.Items) {
+		return GrantedChallenge{}, fmt.Errorf("challenge %s grant decisions do not cover every bound item", challenge.ID)
+	}
+	if len(granted) == 0 {
+		return GrantedChallenge{}, fmt.Errorf("challenge %s granted no items; nothing to record", challenge.ID)
+	}
+	now := store.now().UTC()
+	challengeExpiresAt, err := time.Parse(time.RFC3339, challenge.ExpiresAt)
+	if err != nil {
+		return GrantedChallenge{}, fmt.Errorf("challenge %s has invalid challenge expiry: %w", challenge.ID, err)
+	}
+	if now.After(challengeExpiresAt) {
+		return GrantedChallenge{}, fmt.Errorf("challenge %s expired", challenge.ID)
+	}
+	token, tokenHash, err := newChallengeToken()
+	if err != nil {
+		return GrantedChallenge{}, err
+	}
+	tokenExpiresAt := now.Add(challengeTokenLifetime)
+	if tokenExpiresAt.After(challengeExpiresAt) {
+		tokenExpiresAt = challengeExpiresAt
+	}
+	challenge.GrantedItems = append([]string(nil), granted...)
+	challenge.SkippedItems = append([]string(nil), skipped...)
+	challenge.TokenSHA256 = tokenHash
+	challenge.TokenExpiresAt = tokenExpiresAt.Format(time.RFC3339)
+	challenge.Granted = true
+	challenge.GrantedAt = now.Format(time.RFC3339)
+	if err := store.writeChallenge(workspace, challenge); err != nil {
+		return GrantedChallenge{}, err
+	}
+	return GrantedChallenge{Challenge: challenge, Token: token}, nil
+}
+
 // Consume atomically validates a plaintext token, enforces expiry, and marks
 // the owner-granted challenge consumed under the workspace lock so the token
 // is one-time.
@@ -339,6 +510,15 @@ func (store ChallengeStore) validatePrepare(workspace string, prepare ChallengeP
 	if prepare.Workspace != workspace {
 		return fmt.Errorf("challenge workspace %q does not match %q", prepare.Workspace, workspace)
 	}
+	if len(prepare.Items) > 0 {
+		if prepare.Operation != ChallengeOperationApprove {
+			return fmt.Errorf("challenge operation %q is not supported for a batch", prepare.Operation)
+		}
+		if _, err := normalizeChallengeItems(prepare.Items); err != nil {
+			return err
+		}
+		return nil
+	}
 	switch prepare.Operation {
 	case ChallengeOperationApprove, ChallengeOperationSupersede, ChallengeOperationRevoke:
 	default:
@@ -401,7 +581,22 @@ func (store ChallengeStore) validateChallengeRecord(workspace string, challenge 
 	default:
 		return fmt.Errorf("challenge %s operation %q is not supported", challenge.ID, challenge.Operation)
 	}
-	if !claimIDPattern.MatchString(challenge.ClaimID) {
+	if len(challenge.Items) > 0 {
+		if challenge.Operation != ChallengeOperationApprove {
+			return fmt.Errorf("challenge %s operation %q is not supported for a batch", challenge.ID, challenge.Operation)
+		}
+		if challenge.ClaimID != "" || challenge.CanonicalDraftDigest != "" || len(challenge.SupersededIDs) != 0 || challenge.PriorVerificationDigest != "" || challenge.RevokeReason != "" {
+			return fmt.Errorf("challenge %s batch items exclude single-claim fields", challenge.ID)
+		}
+		if _, err := normalizeChallengeItems(challenge.Items); err != nil {
+			return fmt.Errorf("challenge %s batch items are invalid: %w", challenge.ID, err)
+		}
+	} else {
+		if len(challenge.GrantedItems) != 0 || len(challenge.SkippedItems) != 0 {
+			return fmt.Errorf("challenge %s item decisions require bound batch items", challenge.ID)
+		}
+	}
+	if len(challenge.Items) == 0 && !claimIDPattern.MatchString(challenge.ClaimID) {
 		return fmt.Errorf("challenge %s claim id must match clm_<32 lowercase hex chars>", challenge.ID)
 	}
 	if challenge.CanonicalDraftDigest != "" && !strings.HasPrefix(challenge.CanonicalDraftDigest, "sha256:") {
@@ -450,6 +645,11 @@ func (store ChallengeStore) validateChallengeRecord(workspace string, challenge 
 			return fmt.Errorf("challenge %s granted_at requires granted state", challenge.ID)
 		}
 	}
+	if len(challenge.Items) > 0 {
+		if err := validateChallengeItemDecisions(challenge); err != nil {
+			return err
+		}
+	}
 	expected := ComputeChallengeActionDigest(ChallengePrepare{
 		Workspace:               challenge.Workspace,
 		Operation:               challenge.Operation,
@@ -458,9 +658,39 @@ func (store ChallengeStore) validateChallengeRecord(workspace string, challenge 
 		SupersededIDs:           challenge.SupersededIDs,
 		PriorVerificationDigest: challenge.PriorVerificationDigest,
 		RevokeReason:            challenge.RevokeReason,
+		Items:                   challenge.Items,
 	})
 	if expected != challenge.ActionDigest {
 		return fmt.Errorf("challenge %s action digest mismatch", challenge.ID)
+	}
+	return nil
+}
+
+// validateChallengeItemDecisions enforces that a granted batch challenge
+// records granted and skipped claim IDs that partition the bound items exactly.
+func validateChallengeItemDecisions(challenge Challenge) error {
+	if !challenge.Granted {
+		if len(challenge.GrantedItems) != 0 || len(challenge.SkippedItems) != 0 {
+			return fmt.Errorf("challenge %s item decisions require owner grant", challenge.ID)
+		}
+		return nil
+	}
+	itemIndex := make(map[string]struct{}, len(challenge.Items))
+	for _, item := range challenge.Items {
+		itemIndex[item.ClaimID] = struct{}{}
+	}
+	seen := make(map[string]struct{}, len(challenge.Items))
+	for _, id := range append(append([]string(nil), challenge.GrantedItems...), challenge.SkippedItems...) {
+		if _, ok := itemIndex[id]; !ok {
+			return fmt.Errorf("challenge %s item decision %q is not bound", challenge.ID, id)
+		}
+		if _, ok := seen[id]; ok {
+			return fmt.Errorf("challenge %s records claim %s more than once", challenge.ID, id)
+		}
+		seen[id] = struct{}{}
+	}
+	if len(challenge.GrantedItems)+len(challenge.SkippedItems) != len(challenge.Items) {
+		return fmt.Errorf("challenge %s item decisions do not cover every bound item", challenge.ID)
 	}
 	return nil
 }

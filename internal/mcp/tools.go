@@ -108,14 +108,15 @@ type lifecycleResult struct {
 	Claim          *zruntime.Claim        `json:"claim,omitempty"`
 }
 
-// registerTools registers the seven typed gateway tools.
+// registerTools registers the typed gateway tools.
 //
 // Domain failures return a regular error, which the SDK embeds in a
 // CallToolResult with IsError set; structurally invalid parameters fail
 // closed as tool-level isError results via generated JSON schema
 // validation; oversized inputs and unknown tools map to -32602; genuine
 // server failures surface as -32603. No tool exposes grant/approval UI or
-// mutation HTTP behavior.
+// mutation HTTP behavior. Campaign tools author claim drafts only: they
+// never expose approval, supersede, revoke, or reindex behavior.
 func registerTools(server *mcp.Server, opts Options) error {
 	type currentIn struct{}
 
@@ -343,6 +344,134 @@ func registerTools(server *mcp.Server, opts Options) error {
 			default:
 				return nil, nil, invalidLifecycleParams("operation must be prepare or apply")
 			}
+		})
+	})
+
+	type campaignSpecIn struct {
+		Tier          string   `json:"tier" jsonschema:"claim tier"`
+		Title         string   `json:"title" jsonschema:"claim title"`
+		Basis         string   `json:"basis" jsonschema:"owner, evidence, or derived"`
+		Evidence      []string `json:"evidence,omitempty" jsonschema:"evidence IDs to bind"`
+		Support       []string `json:"support,omitempty" jsonschema:"supporting claim IDs"`
+		ConflictsWith []string `json:"conflicts_with,omitempty" jsonschema:"conflicting claim IDs"`
+	}
+
+	type campaignBeginIn struct {
+		Workspace string           `json:"workspace,omitempty" jsonschema:"target workspace; defaults to the current workspace"`
+		Specs     []campaignSpecIn `json:"specs" jsonschema:"ordered claim draft specs to author"`
+	}
+
+	mcp.AddTool(server, &mcp.Tool{
+		Name:        "campaign_begin",
+		Description: "Start a resumable authoring campaign that will produce claim drafts only; no claim is created until each draft is submitted.",
+	}, func(ctx context.Context, req *mcp.CallToolRequest, in campaignBeginIn) (*mcp.CallToolResult, any, error) {
+		return runMCPTool(ctx, opts, "campaign_begin", in, in.Workspace, func(tctx context.Context) (*mcp.CallToolResult, any, error) {
+			workspace, err := resolveWorkspace(opts, in.Workspace)
+			if err != nil {
+				return nil, nil, err
+			}
+			specs := make([]zruntime.CampaignSpec, 0, len(in.Specs))
+			for _, spec := range in.Specs {
+				specs = append(specs, zruntime.CampaignSpec{
+					Tier:               spec.Tier,
+					Title:              spec.Title,
+					Basis:              spec.Basis,
+					EvidenceIDs:        spec.Evidence,
+					SupportingClaimIDs: spec.Support,
+					ConflictsWith:      spec.ConflictsWith,
+				})
+			}
+			run, err := (zruntime.CampaignStore{Paths: opts.Paths, Now: opts.Now}).BeginCampaign(workspace, specs)
+			if err != nil {
+				return nil, nil, err
+			}
+			out := struct {
+				SchemaVersion int    `json:"schema_version"`
+				Workspace     string `json:"workspace"`
+				RunID         string `json:"run_id"`
+				Phase         string `json:"phase"`
+				TotalDrafts   int    `json:"total_drafts"`
+			}{1, workspace, run.RunID, string(run.Phase), len(run.Drafts)}
+			return jsonResult(out)
+		})
+	})
+
+	type campaignNextIn struct {
+		Workspace string `json:"workspace,omitempty" jsonschema:"target workspace; defaults to the current workspace"`
+		RunID     string `json:"run_id" jsonschema:"campaign run ID"`
+	}
+
+	mcp.AddTool(server, &mcp.Tool{
+		Name:        "campaign_next",
+		Description: "Resume an authoring campaign read-only: report its state, counts, and the next pending draft spec without mutating anything.",
+	}, func(ctx context.Context, req *mcp.CallToolRequest, in campaignNextIn) (*mcp.CallToolResult, any, error) {
+		return runMCPTool(ctx, opts, "campaign_next", in, in.Workspace, func(tctx context.Context) (*mcp.CallToolResult, any, error) {
+			workspace, err := resolveWorkspace(opts, in.Workspace)
+			if err != nil {
+				return nil, nil, err
+			}
+			state, err := (zruntime.CampaignStore{Paths: opts.Paths, Now: opts.Now}).ResumeCampaign(workspace, strings.TrimSpace(in.RunID))
+			if err != nil {
+				return nil, nil, err
+			}
+			var next *campaignSpecIn
+			if state.NextIndex >= 0 {
+				spec := state.Run.Drafts[state.NextIndex].Spec
+				next = &campaignSpecIn{
+					Tier:          spec.Tier,
+					Title:         spec.Title,
+					Basis:         spec.Basis,
+					Evidence:      spec.EvidenceIDs,
+					Support:       spec.SupportingClaimIDs,
+					ConflictsWith: spec.ConflictsWith,
+				}
+			}
+			out := struct {
+				SchemaVersion     int             `json:"schema_version"`
+				Workspace         string          `json:"workspace"`
+				RunID             string          `json:"run_id"`
+				Phase             string          `json:"phase"`
+				Pending           int             `json:"pending"`
+				Submitted         int             `json:"submitted"`
+				SupersededByOwner int             `json:"superseded_by_owner"`
+				NextIndex         int             `json:"next_index"`
+				NextSpec          *campaignSpecIn `json:"next_spec"`
+			}{1, workspace, state.Run.RunID, string(state.Run.Phase), state.Pending, state.Submitted, state.SupersededByOwner, state.NextIndex, next}
+			return jsonResult(out)
+		})
+	})
+
+	type campaignSubmitIn struct {
+		Workspace string `json:"workspace,omitempty" jsonschema:"target workspace; defaults to the current workspace"`
+		RunID     string `json:"run_id" jsonschema:"campaign run ID"`
+		Index     int    `json:"index" jsonschema:"zero-based draft index within the run"`
+		Body      string `json:"body" jsonschema:"claim body for this draft"`
+	}
+
+	mcp.AddTool(server, &mcp.Tool{
+		Name:        "campaign_submit_draft",
+		Description: "Submit one campaign draft as a claim draft through the existing draft path (drafts are never trusted answer material).",
+	}, func(ctx context.Context, req *mcp.CallToolRequest, in campaignSubmitIn) (*mcp.CallToolResult, any, error) {
+		return runMCPTool(ctx, opts, "campaign_submit_draft", in, in.Workspace, func(tctx context.Context) (*mcp.CallToolResult, any, error) {
+			workspace, err := resolveWorkspace(opts, in.Workspace)
+			if err != nil {
+				return nil, nil, err
+			}
+			submission, err := (zruntime.CampaignStore{Paths: opts.Paths, Now: opts.Now}).SubmitCampaignDraft(workspace, strings.TrimSpace(in.RunID), in.Index, in.Body)
+			if err != nil {
+				return nil, nil, err
+			}
+			out := struct {
+				SchemaVersion int                  `json:"schema_version"`
+				Workspace     string               `json:"workspace"`
+				RunID         string               `json:"run_id"`
+				Index         int                  `json:"index"`
+				ID            string               `json:"id"`
+				Status        zruntime.ClaimStatus `json:"status"`
+				Path          string               `json:"path"`
+				Pending       int                  `json:"pending"`
+			}{1, workspace, submission.RunID, submission.Index, submission.ClaimID, submission.ClaimStatus, submission.ClaimPath, submission.State.Pending}
+			return jsonResult(out)
 		})
 	})
 

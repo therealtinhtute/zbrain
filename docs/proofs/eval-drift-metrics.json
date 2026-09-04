@@ -1,0 +1,50 @@
+{
+  "findings": [
+    {
+      "affected_claim_ids": [
+        "clm_2067f7b890f717d6d607bde3ce33be4c"
+      ],
+      "expected": "missing",
+      "item": "missing",
+      "observed": "missing"
+    },
+    {
+      "affected_claim_ids": [
+        "clm_35504efbdb202094561b08a7a40424d0"
+      ],
+      "expected": "changed",
+      "item": "mutated",
+      "observed": "changed"
+    },
+    {
+      "affected_claim_ids": [
+        "clm_8cb1047454692326c169653232ffa095"
+      ],
+      "expected": "unchanged",
+      "item": "unchanged",
+      "observed": "unchanged"
+    },
+    {
+      "affected_claim_ids": [
+        "clm_9a9469a1fa3213774a1d0e9e4fe9fe09"
+      ],
+      "expected": "uncheckable",
+      "item": "uncheckable",
+      "observed": "uncheckable"
+    }
+  ],
+  "fixture_size": 4,
+  "metrics": {
+    "false_negatives": 0,
+    "false_positives": 0,
+    "note": "uncheckable origins are excluded from the drift prediction set; unchanged is a true negative",
+    "precision": 1,
+    "recall": 1,
+    "true_positives": 2
+  },
+  "read_only_proof": {
+    "bytes_and_mtime_unchanged": true,
+    "files_inspected": 9
+  },
+  "schema": "zbrain.eval.drift-metrics/v1"
+}

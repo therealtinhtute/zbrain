@@ -1,0 +1,77 @@
+{
+  "scenarios": [
+    {
+      "scenario": "approve_supersede_revoke_cli",
+      "steps": [
+        {
+          "observed": "approved;digest_valid:b283bea169cb2702",
+          "step": "approve"
+        },
+        {
+          "observed": "old:superseded;new:approved;digest_valid:d63aac849988014a",
+          "step": "supersede"
+        },
+        {
+          "observed": "revoked;digest_stable:d63aac849988014a",
+          "step": "revoke"
+        }
+      ]
+    },
+    {
+      "scenario": "approve_supersede_revoke_mcp",
+      "steps": [
+        {
+          "observed": "approved;digest_valid:7cc0ec7e71b59401",
+          "step": "approve"
+        },
+        {
+          "observed": "old:superseded;new:approved;digest_valid:19309e008451aeaf",
+          "step": "supersede"
+        },
+        {
+          "observed": "revoked;digest_stable:19309e008451aeaf",
+          "step": "revoke"
+        },
+        {
+          "observed": "error",
+          "step": "replay_after_consume"
+        }
+      ]
+    },
+    {
+      "scenario": "batch_ceremony_edges_cli",
+      "steps": [
+        {
+          "observed": "granted=2;skipped=1;statuses=applied,skipped,applied,",
+          "step": "partial_grant"
+        },
+        {
+          "observed": "error:already consumed",
+          "step": "replay_after_consume"
+        },
+        {
+          "observed": "no_token;challenge ungranted",
+          "step": "skip_all"
+        }
+      ]
+    },
+    {
+      "scenario": "batch_ceremony_edges_stores",
+      "steps": [
+        {
+          "observed": "error:expired",
+          "step": "challenge_expiry"
+        },
+        {
+          "observed": "error:token expired",
+          "step": "token_expiry"
+        },
+        {
+          "observed": "item0:failed(stale);item1:applied",
+          "step": "digest_mismatch"
+        }
+      ]
+    }
+  ],
+  "schema": "zbrain.eval.lifecycle/v1"
+}

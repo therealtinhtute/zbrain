@@ -235,6 +235,42 @@ func (store ClaimStore) PrepareChallenge(workspace string, prepare ChallengePrep
 	return (ChallengeStore(store)).prepareUnlocked(workspace, prepare)
 }
 
+// PrepareBatchChallenge atomically validates every bound draft claim against
+// its current canonical state and persists one batch challenge under the
+// workspace lock. An item digest left empty is bound from the current
+// canonical digest; a non-empty digest must match the canonical state.
+func (store ClaimStore) PrepareBatchChallenge(workspace string, items []ChallengeItem) (PreparedChallenge, error) {
+	lock, err := acquireWorkspaceLock(store.Paths, workspace, true)
+	if err != nil {
+		return PreparedChallenge{}, err
+	}
+	defer func() { _ = lock.Close() }()
+	if err := recoverPendingTransitionForMutationUnlocked(store.Paths, workspace); err != nil {
+		return PreparedChallenge{}, err
+	}
+	bound := make([]ChallengeItem, len(items))
+	copy(bound, items)
+	for i, item := range bound {
+		claim, digest, err := store.canonicalDigestUnlocked(workspace, item.ClaimID)
+		if err != nil {
+			return PreparedChallenge{}, err
+		}
+		if strings.TrimSpace(item.CanonicalDraftDigest) == "" {
+			bound[i].CanonicalDraftDigest = digest
+		}
+		if err := store.validateChallengeAgainstClaim(Challenge{
+			ID:                   "batch",
+			Workspace:            workspace,
+			Operation:            ChallengeOperationApprove,
+			ClaimID:              claim.ID,
+			CanonicalDraftDigest: bound[i].CanonicalDraftDigest,
+		}, claim, digest); err != nil {
+			return PreparedChallenge{}, err
+		}
+	}
+	return (ChallengeStore(store)).prepareBatchUnlocked(workspace, bound)
+}
+
 // ApplyChallenge validates and consumes a challenge token, then commits the
 // corresponding claim transition while retaining the same exclusive workspace
 // lock for the entire operation. Semantic validation completes before token
@@ -291,6 +327,112 @@ func (store ClaimStore) ApplyChallenge(workspace string, challengeID string, tok
 		return store.commitRevokeUnlocked(workspace, plan)
 	}
 	return store.commitApproveUnlocked(workspace, plan)
+}
+
+// Per-item outcome statuses reported by ApplyChallengeBatch.
+const (
+	BatchApplyItemApplied string = "applied"
+	BatchApplyItemSkipped string = "skipped"
+	BatchApplyItemFailed  string = "failed"
+)
+
+// BatchApplyItemResult reports the outcome of one bound item.
+type BatchApplyItemResult struct {
+	ClaimID string `json:"claim_id"`
+	Status  string `json:"status"`
+	Path    string `json:"path,omitempty"`
+	Error   string `json:"error,omitempty"`
+}
+
+// BatchApplyResult reports the per-item outcome of applying a batch challenge.
+type BatchApplyResult struct {
+	ChallengeID string                 `json:"challenge_id"`
+	Items       []BatchApplyItemResult `json:"items"`
+}
+
+// ApplyChallengeBatch validates and consumes a batch challenge token exactly
+// once, then applies only the owner-granted items while retaining the same
+// exclusive workspace lock. Every granted item is independently revalidated
+// against its current canonical state; a failed item never aborts the batch
+// silently and is reported as failed without being applied. Skipped items are
+// reported without any mutation. Invalid tokens, expired challenges, or a
+// mismatched workspace fail closed before any item is applied.
+func (store ClaimStore) ApplyChallengeBatch(workspace string, challengeID string, token string, options ClaimMutationOptions) (BatchApplyResult, error) {
+	lock, err := acquireWorkspaceLock(store.Paths, workspace, true)
+	if err != nil {
+		return BatchApplyResult{}, err
+	}
+	defer func() { _ = lock.Close() }()
+	if err := recoverPendingTransitionForMutationUnlocked(store.Paths, workspace); err != nil {
+		return BatchApplyResult{}, err
+	}
+	challengeStore := ChallengeStore(store)
+	challenge, err := challengeStore.readChallengeUnlocked(workspace, challengeID)
+	if err != nil {
+		return BatchApplyResult{}, err
+	}
+	if len(challenge.Items) == 0 {
+		return BatchApplyResult{}, fmt.Errorf("challenge %s is not a batch challenge", challenge.ID)
+	}
+	if err := challengeStore.validateToken(challenge, token); err != nil {
+		return BatchApplyResult{}, err
+	}
+	if options.Authorization != nil && options.Authorization.ChallengeID != challenge.ID {
+		return BatchApplyResult{}, fmt.Errorf("claim transition authorization challenge id does not match challenge %s", challenge.ID)
+	}
+	skipped := make(map[string]struct{}, len(challenge.SkippedItems))
+	for _, id := range challenge.SkippedItems {
+		skipped[id] = struct{}{}
+	}
+	results := make([]BatchApplyItemResult, len(challenge.Items))
+	type validatedItem struct {
+		index int
+		item  ChallengeItem
+	}
+	validated := make([]validatedItem, 0, len(challenge.Items))
+	for i, item := range challenge.Items {
+		results[i] = BatchApplyItemResult{ClaimID: item.ClaimID}
+		if _, ok := skipped[item.ClaimID]; ok {
+			results[i].Status = BatchApplyItemSkipped
+			continue
+		}
+		claim, digest, err := store.canonicalDigestUnlocked(workspace, item.ClaimID)
+		if err == nil {
+			err = store.validateChallengeAgainstClaim(Challenge{
+				ID:                   challenge.ID,
+				Workspace:            workspace,
+				Operation:            ChallengeOperationApprove,
+				ClaimID:              item.ClaimID,
+				CanonicalDraftDigest: item.CanonicalDraftDigest,
+			}, claim, digest)
+		}
+		if err != nil {
+			results[i].Status = BatchApplyItemFailed
+			results[i].Error = err.Error()
+			continue
+		}
+		validated = append(validated, validatedItem{index: i, item: item})
+	}
+	if _, err := challengeStore.consumeUnlocked(workspace, challenge.ID, token); err != nil {
+		return BatchApplyResult{}, err
+	}
+	for _, entry := range validated {
+		plan, err := store.prepareApproveUnlocked(workspace, entry.item.ClaimID, options)
+		if err != nil {
+			results[entry.index].Status = BatchApplyItemFailed
+			results[entry.index].Error = err.Error()
+			continue
+		}
+		claim, err := store.commitApproveUnlocked(workspace, plan)
+		if err != nil {
+			results[entry.index].Status = BatchApplyItemFailed
+			results[entry.index].Error = err.Error()
+			continue
+		}
+		results[entry.index].Status = BatchApplyItemApplied
+		results[entry.index].Path = claim.Path
+	}
+	return BatchApplyResult{ChallengeID: challenge.ID, Items: results}, nil
 }
 
 func (store ClaimStore) validateChallengeAgainstClaim(challenge Challenge, claim Claim, digest string) error {

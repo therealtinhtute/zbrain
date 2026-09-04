@@ -227,6 +227,17 @@ func (app App) runDoctor(args []string) error {
 		return err
 	}
 	findings = append(findings, structural...)
+	report, err := (zruntime.EvidenceStore{Paths: app.Paths}).CheckDrift(workspace)
+	if err != nil {
+		findings = append(findings, fmt.Sprintf("evidence drift check error: %v", err))
+	} else {
+		for _, finding := range report.Findings {
+			if finding.Status == zruntime.EvidenceDriftUnchanged {
+				continue
+			}
+			findings = append(findings, fmt.Sprintf("evidence %s drift: %s; %s", finding.ID, finding.Status, finding.RecoveryAction))
+		}
+	}
 	if probe {
 		embStore := zruntime.EmbeddingStore{Paths: app.Paths}
 		count, err := embStore.Count(workspace)
@@ -333,6 +344,13 @@ func (app App) runApproval(args []string) error {
 	}
 }
 
+// approvalShowItem is one bound item of a batch challenge shown to the owner.
+type approvalShowItem struct {
+	ClaimID              string `json:"claim_id"`
+	CanonicalDraftDigest string `json:"canonical_draft_digest"`
+	DigestSuffix         string `json:"digest_suffix"`
+}
+
 func (app App) runApprovalShow(args []string) error {
 	if helpRequested(args) {
 		app.printApprovalShowHelp()
@@ -349,16 +367,28 @@ func (app App) runApprovalShow(args []string) error {
 	if err != nil {
 		return err
 	}
+	var items []approvalShowItem
+	if len(challenge.Items) > 0 {
+		items = make([]approvalShowItem, 0, len(challenge.Items))
+		for _, item := range challenge.Items {
+			items = append(items, approvalShowItem{
+				ClaimID:              item.ClaimID,
+				CanonicalDraftDigest: item.CanonicalDraftDigest,
+				DigestSuffix:         actionDigestSuffix(item.CanonicalDraftDigest),
+			})
+		}
+	}
 	return writeJSON(app.Stdout, struct {
-		SchemaVersion      int    `json:"schema_version"`
-		ChallengeID        string `json:"challenge_id"`
-		ActionDigestSuffix string `json:"action_digest_suffix"`
-		Operation          string `json:"operation"`
-		ClaimID            string `json:"claim_id"`
-		Workspace          string `json:"workspace"`
-		ExpiresAt          string `json:"expires_at"`
-		TokenExpiresAt     string `json:"token_expires_at"`
-	}{1, challenge.ID, actionDigestSuffix(challenge.ActionDigest), string(challenge.Operation), challenge.ClaimID, workspace, challenge.ExpiresAt, challenge.TokenExpiresAt})
+		SchemaVersion      int                `json:"schema_version"`
+		ChallengeID        string             `json:"challenge_id"`
+		ActionDigestSuffix string             `json:"action_digest_suffix"`
+		Operation          string             `json:"operation"`
+		ClaimID            string             `json:"claim_id"`
+		Workspace          string             `json:"workspace"`
+		ExpiresAt          string             `json:"expires_at"`
+		TokenExpiresAt     string             `json:"token_expires_at"`
+		Items              []approvalShowItem `json:"items,omitempty"`
+	}{1, challenge.ID, actionDigestSuffix(challenge.ActionDigest), string(challenge.Operation), challenge.ClaimID, workspace, challenge.ExpiresAt, challenge.TokenExpiresAt, items})
 }
 
 func (app App) runApprovalGrant(args []string) error {
@@ -381,6 +411,9 @@ func (app App) runApprovalGrant(args []string) error {
 	if err != nil {
 		return err
 	}
+	if len(challenge.Items) > 0 {
+		return app.runApprovalGrantBatch(challenge, workspace, reader)
+	}
 	_, _ = fmt.Fprintf(app.Stderr, "action digest: %s\n", challenge.ActionDigest)
 	_, _ = fmt.Fprintf(app.Stderr, "confirm the last 16 hex characters of the action digest: ")
 	confirm, err := reader.readLine()
@@ -402,6 +435,55 @@ func (app App) runApprovalGrant(args []string) error {
 		ChallengeID   string `json:"challenge_id"`
 		Token         string `json:"token"`
 	}{1, granted.ID, granted.Token})
+}
+
+// runApprovalGrantBatch walks every bound item in order. Each item must be
+// confirmed by its canonical draft digest suffix or explicitly skipped with
+// the literal input "skip". A mismatched suffix aborts the whole walk before
+// anything is recorded. At the end of the walk one token is issued when at
+// least one item was granted; a fully skipped walk issues no token.
+func (app App) runApprovalGrantBatch(challenge zruntime.Challenge, workspace string, reader *approvalLineReader) error {
+	granted := []string{}
+	skipped := []string{}
+	for i, item := range challenge.Items {
+		suffix := actionDigestSuffix(item.CanonicalDraftDigest)
+		_, _ = fmt.Fprintf(app.Stderr, "item %d/%d claim %s\n", i+1, len(challenge.Items), item.ClaimID)
+		_, _ = fmt.Fprintf(app.Stderr, "canonical draft digest: %s\n", item.CanonicalDraftDigest)
+		_, _ = fmt.Fprintf(app.Stderr, "confirm the last 16 hex characters of the item digest (or type skip): ")
+		confirm, err := reader.readLine()
+		if err != nil {
+			return err
+		}
+		_, _ = fmt.Fprintln(app.Stderr)
+		switch input := strings.TrimSpace(confirm); {
+		case strings.EqualFold(input, "skip"):
+			skipped = append(skipped, item.ClaimID)
+		case input == suffix:
+			granted = append(granted, item.ClaimID)
+		default:
+			return fmt.Errorf("approval grant denied: item %d digest suffix mismatch", i+1)
+		}
+	}
+	_, _ = fmt.Fprintln(app.Stderr)
+	if len(granted) == 0 {
+		return writeJSON(app.Stdout, struct {
+			SchemaVersion int      `json:"schema_version"`
+			ChallengeID   string   `json:"challenge_id"`
+			GrantedItems  []string `json:"granted_items"`
+			SkippedItems  []string `json:"skipped_items"`
+		}{1, challenge.ID, granted, skipped})
+	}
+	grantedChallenge, err := (zruntime.ChallengeStore{Paths: app.Paths, Now: app.Now}).GrantItems(workspace, challenge.ID, granted, skipped)
+	if err != nil {
+		return err
+	}
+	return writeJSON(app.Stdout, struct {
+		SchemaVersion int      `json:"schema_version"`
+		ChallengeID   string   `json:"challenge_id"`
+		Token         string   `json:"token"`
+		GrantedItems  []string `json:"granted_items"`
+		SkippedItems  []string `json:"skipped_items"`
+	}{1, grantedChallenge.ID, grantedChallenge.Token, granted, skipped})
 }
 
 // findChallenge resolves a challenge ID to its owning workspace, preferring the
@@ -559,7 +641,7 @@ func (app App) runReindex(args []string) error {
 
 func (app App) runEvidence(args []string) error {
 	if len(args) == 0 {
-		return exitCodeError(2, "evidence requires subcommand: add")
+		return exitCodeError(2, "evidence requires a subcommand: add or check")
 	}
 	if helpRequested(args) {
 		app.printEvidenceHelp()
@@ -568,14 +650,22 @@ func (app App) runEvidence(args []string) error {
 	if strings.HasPrefix(args[0], "-") {
 		return unknownFlag(args[0])
 	}
-	if args[0] != "add" {
-		return exitCodeError(2, "evidence requires subcommand: add")
+	switch args[0] {
+	case "add":
+		return app.runEvidenceAdd(args[1:])
+	case "check":
+		return app.runEvidenceCheck(args[1:])
+	default:
+		return exitCodeError(2, "evidence requires a subcommand: add or check")
 	}
-	if helpRequested(args[1:]) {
+}
+
+func (app App) runEvidenceAdd(args []string) error {
+	if helpRequested(args) {
 		app.printEvidenceAddHelp()
 		return nil
 	}
-	flags, rest, err := parseFlags(args[1:], evidenceAddFlags)
+	flags, rest, err := parseFlags(args, evidenceAddFlags)
 	if err != nil {
 		return err
 	}
@@ -600,6 +690,33 @@ func (app App) runEvidence(args []string) error {
 		Workspace     string `json:"workspace"`
 		zruntime.Evidence
 	}{SchemaVersion: 1, Workspace: workspace, Evidence: evidence})
+}
+
+func (app App) runEvidenceCheck(args []string) error {
+	if helpRequested(args) {
+		app.printEvidenceCheckHelp()
+		return nil
+	}
+	workspace, rest, err := parseWorkspaceFlag(args)
+	if err != nil {
+		return err
+	}
+	if len(rest) > 0 {
+		return exitCodeError(2, "usage: zbrain evidence check [--workspace <name>]")
+	}
+	workspace, err = app.resolveWorkspace(workspace)
+	if err != nil {
+		return err
+	}
+	report, err := (zruntime.EvidenceStore{Paths: app.Paths}).CheckDrift(workspace)
+	if err != nil {
+		return err
+	}
+	return writeJSON(app.Stdout, struct {
+		SchemaVersion int                             `json:"schema_version"`
+		Workspace     string                          `json:"workspace"`
+		Findings      []zruntime.EvidenceDriftFinding `json:"findings"`
+	}{SchemaVersion: 1, Workspace: workspace, Findings: report.Findings})
 }
 
 func (app App) runClaim(args []string) error {
@@ -973,6 +1090,7 @@ Commands:
   workspace create <name>
   workspace current
   evidence add --file <path> --origin <uri-or-path> [--media-type <type>] [--workspace <name>]
+  evidence check [--workspace <name>]
   claim draft --tier <tier> --title <title> --basis <owner|evidence|derived> [--evidence <id>]... [--support <id>]... [--conflicts-with <id>]... [--workspace <name>]
   claim approve <id> [--workspace <name>]
   claim supersede <id> --tier <tier> --title <title> --basis <owner|evidence|derived> [--evidence <id>]... [--support <id>]... [--conflicts-with <id>]... [--workspace <name>]
@@ -1030,7 +1148,22 @@ Print the active workspace as JSON.
 }
 
 func (app App) printEvidenceHelp() {
-	app.printEvidenceAddHelp()
+	_, _ = fmt.Fprint(app.Stdout, `Usage:
+  zbrain evidence add --file <path> --origin <uri-or-path> [--media-type <type>] [--workspace <name>]
+  zbrain evidence check [--workspace <name>]
+
+Snapshot local files as immutable evidence and check origin drift.
+`)
+}
+
+func (app App) printEvidenceCheckHelp() {
+	_, _ = fmt.Fprint(app.Stdout, `Usage: zbrain evidence check [--workspace <name>]
+
+Re-hash each evidence snapshot origin and report drift as JSON.
+
+Options:
+  --workspace <name>       Target workspace; defaults to the current workspace
+`)
 }
 
 func (app App) printEvidenceAddHelp() {
@@ -1144,7 +1277,8 @@ Run the local owner-pinned approval ceremony for a lifecycle challenge.
 func (app App) printApprovalShowHelp() {
 	_, _ = fmt.Fprint(app.Stdout, `Usage: zbrain approval show <challenge-id>
 
-Print the challenge action summary as JSON.
+Print the challenge action summary as JSON. A batch challenge lists every
+bound item with its canonical draft digest.
 `)
 }
 
@@ -1153,6 +1287,10 @@ func (app App) printApprovalGrantHelp() {
 
 Confirm the last 16 hex characters of the action digest in an interactive
 TTY, then verify and print the one-time token as JSON for later apply.
+A batch challenge walks every bound item in order; each item must be
+confirmed by its digest suffix or skipped with the literal input "skip",
+and one token is issued for the whole batch when at least one item is
+granted.
 `)
 }
 

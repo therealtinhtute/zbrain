@@ -1,0 +1,48 @@
+{
+  "judge": {
+    "model": "none (imported verdicts)",
+    "name": "mock-judge-fixture",
+    "rubric_version": 1,
+    "threshold": 0.7
+  },
+  "metrics": {
+    "total": 3,
+    "supported": 2,
+    "draft_precision": 0.6666666666666666
+  },
+  "run": {
+    "created_at": "2026-09-01T09:00:00Z",
+    "run_label": "golden",
+    "workspace": "research"
+  },
+  "schema": "zbrain.eval.draft-precision/v1",
+  "verdicts": [
+    {
+      "body_sha256": "60c92d1d7622a5678aca77fe1ef10ab2092d16f97938df8254348657a688f0f6",
+      "bound_evidence_count": 1,
+      "draft_index": 0,
+      "rationale": "body restates the evidence snapshot verbatim",
+      "title": "Ingestion Flush Cadence",
+      "trace_score": 1,
+      "verdict": "supported"
+    },
+    {
+      "body_sha256": "973709bc8ee39c399c2b879fe6678f44bd187dbe5137dc4ddb5d77e1034d07eb",
+      "bound_evidence_count": 1,
+      "draft_index": 1,
+      "rationale": "body paraphrases the evidence flush cadence",
+      "title": "Flush Cadence Detail",
+      "trace_score": 0.9,
+      "verdict": "supported"
+    },
+    {
+      "body_sha256": "c98c542ebb4295b612ecf7014b4aca44cf20da8641571c113a81d2226cf2e283",
+      "bound_evidence_count": 1,
+      "draft_index": 2,
+      "rationale": "five-minute cadence and reordering claim is not in the evidence",
+      "title": "Flush Cadence Speculation",
+      "trace_score": 0.4,
+      "verdict": "supported"
+    }
+  ]
+}

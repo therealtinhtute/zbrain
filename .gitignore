@@ -37,3 +37,5 @@ harness.db-shm
 .kit/cache/
 .kit/conflicts/
 .opencode
+# zharness v0.15 managed set
+/.zharness/

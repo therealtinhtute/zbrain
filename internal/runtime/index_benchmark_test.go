@@ -1,8 +1,10 @@
 package runtime
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
 	"sort"
 	"testing"
 	"time"
@@ -43,9 +45,31 @@ func TestAskP95At100K(t *testing.T) {
 	}
 	sort.Slice(durations, func(i, j int) bool { return durations[i] < durations[j] })
 	p95 := durations[int(float64(len(durations))*0.95)-1]
+	p50 := durations[len(durations)/2]
 	t.Logf("100k trusted ask p95=%s samples=%d", p95, len(durations))
 	if p95 > 2*time.Second {
 		t.Fatalf("100k trusted ask p95=%s, want <=2s", p95)
+	}
+	// Eval-suite proof artifact (M3): record the measured percentiles under
+	// docs/proofs/ so runs are diffable across commits.
+	proof := map[string]any{
+		"schema":       "zbrain.eval.perf-100k/v1",
+		"corpus_size":  100000,
+		"samples":      len(durations),
+		"p50_ms":       float64(p50.Microseconds()) / 1000,
+		"p95_ms":       float64(p95.Microseconds()) / 1000,
+		"p99_ms":       float64(durations[len(durations)-1].Microseconds()) / 1000,
+		"target_p95_s": 2,
+		"pass":         p95 <= 2*time.Second,
+	}
+	data, err := json.MarshalIndent(proof, "", "  ")
+	if err != nil {
+		t.Fatalf("marshal perf proof: %v", err)
+	}
+	data = append(data, '\n')
+	proofPath := filepath.Join("..", "..", "docs", "proofs", "eval-perf-100k.json")
+	if err := os.WriteFile(proofPath, data, 0o644); err != nil {
+		t.Fatalf("WriteFile(%s) error = %v", proofPath, err)
 	}
 }
 

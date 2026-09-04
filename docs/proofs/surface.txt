@@ -10,6 +10,7 @@ Commands:
   workspace create <name>
   workspace current
   evidence add --file <path> --origin <uri-or-path> [--media-type <type>] [--workspace <name>]
+  evidence check [--workspace <name>]
   claim draft --tier <tier> --title <title> --basis <owner|evidence|derived> [--evidence <id>]... [--support <id>]... [--conflicts-with <id>]... [--workspace <name>]
   claim approve <id> [--workspace <name>]
   claim supersede <id> --tier <tier> --title <title> --basis <owner|evidence|derived> [--evidence <id>]... [--support <id>]... [--conflicts-with <id>]... [--workspace <name>]
@@ -40,13 +41,11 @@ Usage:
 Manage the active workspace.
 
 === zbrain evidence --help ===
-Usage: zbrain evidence add --file <path> --origin <uri-or-path> [--media-type <type>] [--workspace <name>]
+Usage:
+  zbrain evidence add --file <path> --origin <uri-or-path> [--media-type <type>] [--workspace <name>]
+  zbrain evidence check [--workspace <name>]
 
-Options:
-  --file <path>             Local source file to snapshot
-  --origin <uri-or-path>    Origin recorded in evidence metadata
-  --media-type <type>      Optional media type
-  --workspace <name>       Target workspace; defaults to the current workspace
+Snapshot local files as immutable evidence and check origin drift.
 
 === zbrain claim --help ===
 Usage:

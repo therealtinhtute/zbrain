@@ -36,6 +36,13 @@ func Serve(ctx context.Context, opts Options) error {
 	return server.Run(ctx, &mcp.StdioTransport{})
 }
 
+// NewServerForEval exposes the tool server for the cross-package eval
+// runners (internal/eval), which drive both the CLI ask path and the MCP
+// memory_ask path over the same fixture set. It is identical to newServer.
+func NewServerForEval(opts Options) (*mcp.Server, error) {
+	return newServer(opts)
+}
+
 // newServer builds the MCP server with the seven tools and two resources
 // registered. Tests drive it in-process over in-memory transports.
 func newServer(opts Options) (*mcp.Server, error) {
