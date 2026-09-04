@@ -86,7 +86,7 @@ updated: 2026-09-04
 - phases:
   - phase_slug: m0-foundation
     story_id: rust-m0-foundation-20260904
-    status: planned
+    status: checked
     goal: Rust workspace scaffold with paths, file modes, config, workspace, and flock ported
     depends_on: none
     requirements: [R2, R8, R9]
@@ -427,7 +427,13 @@ updated: 2026-09-04
 
 ## Progress
 <!-- Append-only durable entries record timestamp, phase, wave, task, task_status, run_id, trace_id, exact verification/result, and changed surfaces or blocker. -->
-- none
+- 2026-09-04T20:55Z | phase: m0-foundation | wave: W1 | task: run-start | task_status: in-progress | run_id: rust-rewrite-r1 | verification: pending | surfaces: branch rust-rewrite created from master; allowed surfaces only (Cargo.toml, crates/, .gitignore, scripts/)
+- 2026-09-04T21:40Z | phase: m0-foundation | wave: W1 | task: W1.T1 | task_status: DONE | run_id: rust-rewrite-r1 | verification: `cargo build` green, `cargo clippy --workspace --all-targets -- -D warnings` clean | surfaces: Cargo.toml (workspace), rust-toolchain.toml, .gitignore (target/), crates/zbrain/Cargo.toml, src/main.rs, src/lib.rs
+- 2026-09-04T21:40Z | phase: m0-foundation | wave: W1 | task: W1.T2 | task_status: DONE | run_id: rust-rewrite-r1 | verification: unit tests paths/config/workspace pass; mode bits 0700/0600 asserted | surfaces: crates/zbrain/src/paths.rs, config.rs, workspace.rs
+- 2026-09-04T21:40Z | phase: m0-foundation | wave: W1 | task: W1.T3 | task_status: DONE | run_id: rust-rewrite-r1 | verification: flock exclusive blocks child process (python probe, exit 3 while held, 0 after release); shared locks coexist; generation round-trip + extra-field/null rejection pass; Clock trait with FixedClock | surfaces: crates/zbrain/src/coordination.rs, clock.rs
+- 2026-09-04T21:41Z | phase: m0-foundation | wave: W1 | task_status: DONE | summary: W1 complete — 28 unit tests pass, clippy clean; flock cross-process proven
+- 2026-09-04T21:58Z | phase: m0-foundation | wave: W2 | task: W2.T1 | task_status: DONE | run_id: rust-rewrite-r1 | verification: `scripts/parity.sh` → "parity: OK (workspace=research)" — Go oracle (crates/tools/fixture-gen) vs Rust (crates/zbrain/src/bin/parity.rs) manifests byte-identical (config, workspace.md, evidence index, full tree with mode bits, default workspace, control rel path); `go vet ./crates/tools/fixture-gen` clean; `CGO_ENABLED=0 go build ./cmd/zbrain` still green | surfaces: crates/tools/fixture-gen/main.go, crates/zbrain/src/bin/parity.rs, scripts/parity.sh
+- 2026-09-04T21:59Z | phase: m0-foundation | wave: W2 | task_status: DONE | summary: W2 complete — differential parity harness live; Go oracle still authoritative
 
 ## Decisions
 <!-- Append-only durable entries record timestamp, phase/task, decision, and rationale. -->
@@ -435,18 +441,34 @@ updated: 2026-09-04
 - 2026-09-04: rusqlite bundled over Turso/Limbo (unproven FTS5); hand-rolled MCP JSON-RPC over rmcp (custom protocol revisions).
 - 2026-09-04: Workspace lives in-repo under `crates/` on branch `rust-rewrite` (history/asset adjacency; single-repo single-identity).
 - 2026-09-04: No async runtime; concurrency surface (3 files) ports with std threads.
+- 2026-09-04 (m0): Rust `create_dir_all` does not apply modes to intermediate directories (Go `MkdirAll` does); ported `ensure_directory_mode` as a walk-create-chmod over missing ancestors to preserve Go semantics — caught by the parity harness (wiki/ dir 0755 vs 0700).
+- 2026-09-04 (m0): Parity manifest reports the coordination control path workspace-relative (`control_rel`); Go `GenerationPath` returns a canonicalized root while `RuntimeDir` is uncanonicalized, so a runtime-dir-relative field was ambiguous under /tmp symlinks.
+- 2026-09-04 (m0): Generation-state parity via the exported Go API is deferred to m4 (read/write generation helpers are unexported and index-coupled); m0 covers generation semantics through Rust unit tests (round-trip, extra-fields, null, published-newer).
+- 2026-09-04 (m0): Workspace crate version pinned 0.3.0; edition 2021; toolchain stable via rust-toolchain.toml.
 
 ## Validation
 <!-- Append-only durable entries record timestamp, phase, exact command/result/output, run_id, check_id, verdict, and proof_gaps. -->
-- none
+- 2026-09-04T22:00Z | phase: m0-foundation | mode: gate | verdict: APPROVED | judge: same-session | judge_model: opencode-go/omen-alpha | run_id: rust-rewrite-r1
+  - `cargo test -p zbrain --lib` -> ok. 28 passed; 0 failed (rc=0)
+  - `cargo clippy --workspace --all-targets -- -D warnings` -> Finished, clean (rc=0)
+  - `cargo build -p zbrain --bins` -> Finished (rc=0)
+  - `scripts/parity.sh` -> parity: OK (workspace=research) (rc=0)
+  - `go vet ./crates/tools/fixture-gen` -> clean (rc=0)
+  - `CGO_ENABLED=0 go build ./cmd/zbrain` -> rc=0 (Go oracle intact)
+  - `git diff --check` -> clean (rc=0)
+  - scope: on-target (Cargo.toml, crates/, .gitignore, scripts/ only; internal/ untouched)
+  - manual review (gate, high-risk lane): flock fd ownership audited (O_NOFOLLOW blocks symlink lock takeover; fstat S_IFREG before wrapping fd; close-on-error paths checked); boundary rejects unsafe relative paths + symlink escapes (tests); no unsafe code beyond libc flock/open wrappers; no network, no panics on untrusted paths except documented unwrap()s in parity tooling (owner-controlled args).
+  - not_independently_verified: cross-process flock blocking probed by a same-authored python child process; parity harness is self-diffed (oracle trust anchors on the Go tree being correct).
+  - proof_gaps: none
+  - receipt: context_sources=plan m0-foundation waves W1-W2, internal/runtime/{paths,config,workspace,workspace_boundary,coordination}.go | policy=AGENTS.md CI gate equivalents | judge=same-session | judge_model=opencode-go/omen-alpha | retries=0 | rollback_point=branch rust-rewrite @ master f0bae10 | failure_ledger=absent | not_independently_verified=cross-process flock probe + self-diffed parity oracle
 
 ## Current State and Next Action
-- active_phase: none (all phases planned; none started)
-- lifecycle_status: planned
-- latest_run_id: none
-- latest_trace_ids: []
-- latest_check_id: none
+- active_phase: none (m0-foundation checked; R2 parallel round next)
+- lifecycle_status: checked
+- latest_run_id: rust-rewrite-r1
+- latest_trace_ids: [m0-foundation W1, m0-foundation W2]
+- latest_check_id: m0-foundation gate 2026-09-04T22:00Z
 - latest_handoff_id: none
 - blockers: none
 - open_items: []
-- exact_next_action: work full — start with m0-foundation
+- exact_next_action: work R2 parallel round — m1-assets-setup ∥ m2-claims-evidence ∥ m5-mcp-gateway W1 (subagent round; one merge per phase onto rust-rewrite)
