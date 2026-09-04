@@ -2196,8 +2196,18 @@ func TestDoctorReportsEvidenceDriftFinding(t *testing.T) {
 		if err := os.WriteFile(origin, []byte("origin contents"), 0o644); err != nil {
 			t.Fatalf("WriteFile(origin) error = %v", err)
 		}
+		app.Stdout = &bytes.Buffer{}
 		if err := app.Run([]string{"evidence", "add", "--file", origin, "--origin", origin, "--media-type", "text/plain"}); err != nil {
 			t.Fatalf("Run(evidence add) error = %v", err)
+		}
+		var added struct {
+			ID string `json:"id"`
+		}
+		decodeJSON(t, stdout(app), &added)
+		app.Stdout = &bytes.Buffer{}
+		app.Stdin = strings.NewReader("Drift claim body\n")
+		if err := app.Run([]string{"claim", "draft", "--tier", "projects", "--title", "Drift Claim", "--basis", "evidence", "--evidence", added.ID}); err != nil {
+			t.Fatalf("Run(claim draft) error = %v", err)
 		}
 		if err := app.Run([]string{"reindex"}); err != nil {
 			t.Fatalf("Run(reindex) error = %v", err)

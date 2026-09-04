@@ -335,6 +335,7 @@ func TestEvidenceCheckClassifiesOriginDrift(t *testing.T) {
 		return path
 	}
 	unchangedPath := writeOrigin("unchanged.txt", "unchanged origin")
+	schemePath := writeOrigin("scheme.txt", "scheme origin")
 	changedPath := writeOrigin("changed.txt", "changed origin")
 	missingPath := writeOrigin("missing.txt", "missing origin")
 	remotePath := writeOrigin("remote.txt", "remote origin")
@@ -344,7 +345,7 @@ func TestEvidenceCheckClassifiesOriginDrift(t *testing.T) {
 	if err != nil {
 		t.Fatalf("AddFile(unchanged) error = %v", err)
 	}
-	scheme, err := store.AddFile("research", unchangedPath, "file://"+unchangedPath, "text/plain")
+	scheme, err := store.AddFile("research", schemePath, "file://"+schemePath, "text/plain")
 	if err != nil {
 		t.Fatalf("AddFile(scheme) error = %v", err)
 	}
