@@ -1,5 +1,7 @@
+pub mod approval;
 pub mod assets;
 pub mod boundary;
+pub mod campaign;
 pub mod clock;
 pub mod config;
 pub mod coordination;
@@ -17,6 +19,7 @@ pub mod paths;
 pub mod query;
 pub mod search;
 pub mod setup;
+pub mod term;
 pub mod transition;
 pub mod trust;
 pub mod workspace;

@@ -263,6 +263,21 @@ func emitClaimsManifest(paths zruntime.Paths, workspace string, verify bool) err
 	return nil
 }
 
+var chgPattern = regexp.MustCompile(`chg_[0-9a-f]{32}`)
+var cmpPattern = regexp.MustCompile(`cmp_[0-9a-f]{32}`)
+var tokenHashPattern = regexp.MustCompile(`"token_sha256": "sha256:[0-9a-f]{64}"`)
+
+// normalizeRuntimeIDs extends normalizeEvidenceIDs with the control-plane IDs
+// minted at runtime (challenge, campaign run) and the random one-time token
+// hash persisted inside challenge records.
+func normalizeRuntimeIDs(value string) string {
+	value = normalizeEvidenceIDs(value)
+	value = chgPattern.ReplaceAllString(value, "chg_NORMALIZED")
+	value = cmpPattern.ReplaceAllString(value, "cmp_NORMALIZED")
+	value = tokenHashPattern.ReplaceAllString(value, `"token_sha256": "sha256:NORMALIZED"`)
+	return value
+}
+
 func walkTreeDigest(runtimeDir string) ([]treeDigestEntry, error) {
 	var tree []treeDigestEntry
 	err := filepath.WalkDir(runtimeDir, func(path string, entry fs.DirEntry, err error) error {
@@ -289,11 +304,11 @@ func walkTreeDigest(runtimeDir string) ([]treeDigestEntry, error) {
 			if err != nil {
 				return fmt.Errorf("read %q: %w", rel, err)
 			}
-			digest := sha256.Sum256([]byte(normalizeEvidenceIDs(string(contents))))
+			digest := sha256.Sum256([]byte(normalizeRuntimeIDs(string(contents))))
 			sum = hex.EncodeToString(digest[:])
 		}
 		tree = append(tree, treeDigestEntry{
-			Path:   normalizeEvidenceIDs(rel),
+			Path:   normalizeRuntimeIDs(rel),
 			Kind:   kind,
 			Mode:   fmt.Sprintf("%04o", info.Mode().Perm()),
 			SHA256: sum,
@@ -303,7 +318,12 @@ func walkTreeDigest(runtimeDir string) ([]treeDigestEntry, error) {
 	if err != nil {
 		return nil, fmt.Errorf("walk tree: %w", err)
 	}
-	sort.Slice(tree, func(i, j int) bool { return tree[i].Path < tree[j].Path })
+	sort.Slice(tree, func(i, j int) bool {
+		if tree[i].Path != tree[j].Path {
+			return tree[i].Path < tree[j].Path
+		}
+		return tree[i].SHA256 < tree[j].SHA256
+	})
 	return tree, nil
 }
 
@@ -482,14 +502,14 @@ type claimStatusRow struct {
 }
 
 type indexManifest struct {
-	Workspace  string              `json:"workspace"`
+	Workspace  string                `json:"workspace"`
 	Summary    zruntime.IndexSummary `json:"summary"`
-	Search     []indexSearchGroup  `json:"search"`
-	Claims     []claimStatusRow    `json:"claims"`
-	State      indexStateSummary   `json:"state"`
-	Generation string              `json:"generation"`
-	CheckFresh string              `json:"check_fresh"`
-	Tree       []treeDigestEntry   `json:"tree"`
+	Search     []indexSearchGroup    `json:"search"`
+	Claims     []claimStatusRow      `json:"claims"`
+	State      indexStateSummary     `json:"state"`
+	Generation string                `json:"generation"`
+	CheckFresh string                `json:"check_fresh"`
+	Tree       []treeDigestEntry     `json:"tree"`
 }
 
 func roundScore(score float64) float64 {
@@ -529,11 +549,11 @@ func walkTreeDerived(runtimeDir string) ([]treeDigestEntry, error) {
 			if err != nil {
 				return fmt.Errorf("read %q: %w", rel, err)
 			}
-			digest := sha256.Sum256([]byte(normalizeEvidenceIDs(string(contents))))
+			digest := sha256.Sum256([]byte(normalizeRuntimeIDs(string(contents))))
 			sum = hex.EncodeToString(digest[:])
 		}
 		tree = append(tree, treeDigestEntry{
-			Path:   normalizeEvidenceIDs(rel),
+			Path:   normalizeRuntimeIDs(rel),
 			Kind:   kind,
 			Mode:   fmt.Sprintf("%04o", info.Mode().Perm()),
 			SHA256: sum,
@@ -543,7 +563,12 @@ func walkTreeDerived(runtimeDir string) ([]treeDigestEntry, error) {
 	if err != nil {
 		return nil, fmt.Errorf("walk tree: %w", err)
 	}
-	sort.Slice(tree, func(i, j int) bool { return tree[i].Path < tree[j].Path })
+	sort.Slice(tree, func(i, j int) bool {
+		if tree[i].Path != tree[j].Path {
+			return tree[i].Path < tree[j].Path
+		}
+		return tree[i].SHA256 < tree[j].SHA256
+	})
 	return tree, nil
 }
 
@@ -753,9 +778,9 @@ func runIndexVerify(home, workspace string) error {
 // m4 ask parity: trusted-query responses (including fail-closed fixtures)
 // compared byte-for-byte on deterministic fields.
 type askCase struct {
-	Name     string                          `json:"name"`
-	Error    string                          `json:"error"`
-	Response *zruntime.TrustedQueryResponse  `json:"response"`
+	Name     string                         `json:"name"`
+	Error    string                         `json:"error"`
+	Response *zruntime.TrustedQueryResponse `json:"response"`
 }
 
 type askManifest struct {
@@ -1007,10 +1032,364 @@ func runAskVerify(home, workspace string) error {
 	return nil
 }
 
+// m6 approval parity: the owner-pinned challenge ceremony (single, expired,
+// batch) driven through the Go oracle's runtime entry points, with the
+// mutating apply path proven via the resulting claim files and digests.
+type approvalChallengeItem struct {
+	ClaimID              string `json:"claim_id"`
+	CanonicalDraftDigest string `json:"canonical_draft_digest"`
+}
+
+type approvalChallengeSummary struct {
+	Schema                  string                  `json:"schema"`
+	ID                      string                  `json:"id"`
+	Workspace               string                  `json:"workspace"`
+	Operation               string                  `json:"operation"`
+	ClaimID                 string                  `json:"claim_id"`
+	CanonicalDraftDigest    string                  `json:"canonical_draft_digest,omitempty"`
+	SupersededIDs           []string                `json:"superseded_ids,omitempty"`
+	PriorVerificationDigest string                  `json:"prior_verification_digest,omitempty"`
+	RevokeReason            string                  `json:"revoke_reason,omitempty"`
+	Items                   []approvalChallengeItem `json:"items,omitempty"`
+	GrantedItems            []string                `json:"granted_items,omitempty"`
+	SkippedItems            []string                `json:"skipped_items,omitempty"`
+	ActionDigest            string                  `json:"action_digest"`
+	TokenSHA256             string                  `json:"token_sha256"`
+	ExpiresAt               string                  `json:"expires_at"`
+	TokenExpiresAt          string                  `json:"token_expires_at"`
+	Granted                 bool                    `json:"granted"`
+	GrantedAt               string                  `json:"granted_at,omitempty"`
+	Consumed                bool                    `json:"consumed"`
+}
+
+func approvalChallengeSummaryOf(challenge zruntime.Challenge) approvalChallengeSummary {
+	summary := approvalChallengeSummary{
+		Schema:                  challenge.Schema,
+		ID:                      challenge.ID,
+		Workspace:               challenge.Workspace,
+		Operation:               string(challenge.Operation),
+		ClaimID:                 challenge.ClaimID,
+		CanonicalDraftDigest:    challenge.CanonicalDraftDigest,
+		SupersededIDs:           challenge.SupersededIDs,
+		PriorVerificationDigest: challenge.PriorVerificationDigest,
+		RevokeReason:            challenge.RevokeReason,
+		GrantedItems:            challenge.GrantedItems,
+		SkippedItems:            challenge.SkippedItems,
+		ActionDigest:            challenge.ActionDigest,
+		TokenSHA256:             challenge.TokenSHA256,
+		ExpiresAt:               challenge.ExpiresAt,
+		TokenExpiresAt:          challenge.TokenExpiresAt,
+		Granted:                 challenge.Granted,
+		GrantedAt:               challenge.GrantedAt,
+		Consumed:                challenge.Consumed,
+	}
+	if len(challenge.Items) > 0 {
+		summary.Items = make([]approvalChallengeItem, 0, len(challenge.Items))
+		for _, item := range challenge.Items {
+			summary.Items = append(summary.Items, approvalChallengeItem{
+				ClaimID:              item.ClaimID,
+				CanonicalDraftDigest: item.CanonicalDraftDigest,
+			})
+		}
+	}
+	if summary.Granted {
+		// The one-time token hash is random per grant; normalize it.
+		summary.TokenSHA256 = "sha256:NORMALIZED"
+	}
+	return summary
+}
+
+// Mirrors internal/cli runApprovalShow output (the owner-facing challenge
+// summary read by `approval show`).
+type approvalShowItem struct {
+	ClaimID              string `json:"claim_id"`
+	CanonicalDraftDigest string `json:"canonical_draft_digest"`
+	DigestSuffix         string `json:"digest_suffix"`
+}
+
+type approvalShowJSON struct {
+	SchemaVersion      int                `json:"schema_version"`
+	ChallengeID        string             `json:"challenge_id"`
+	ActionDigestSuffix string             `json:"action_digest_suffix"`
+	Operation          string             `json:"operation"`
+	ClaimID            string             `json:"claim_id"`
+	Workspace          string             `json:"workspace"`
+	ExpiresAt          string             `json:"expires_at"`
+	TokenExpiresAt     string             `json:"token_expires_at"`
+	Items              []approvalShowItem `json:"items,omitempty"`
+}
+
+func approvalShowJSONOf(challenge zruntime.Challenge, workspace string) approvalShowJSON {
+	out := approvalShowJSON{
+		SchemaVersion:      1,
+		ChallengeID:        challenge.ID,
+		ActionDigestSuffix: actionDigestSuffix(challenge.ActionDigest),
+		Operation:          string(challenge.Operation),
+		ClaimID:            challenge.ClaimID,
+		Workspace:          workspace,
+		ExpiresAt:          challenge.ExpiresAt,
+		TokenExpiresAt:     challenge.TokenExpiresAt,
+	}
+	if len(challenge.Items) > 0 {
+		out.Items = make([]approvalShowItem, 0, len(challenge.Items))
+		for _, item := range challenge.Items {
+			out.Items = append(out.Items, approvalShowItem{
+				ClaimID:              item.ClaimID,
+				CanonicalDraftDigest: item.CanonicalDraftDigest,
+				DigestSuffix:         actionDigestSuffix(item.CanonicalDraftDigest),
+			})
+		}
+	}
+	return out
+}
+
+func actionDigestSuffix(digest string) string {
+	if len(digest) < 16 {
+		return digest
+	}
+	return digest[len(digest)-16:]
+}
+
+type approvalClaimSummary struct {
+	ID             string `json:"id"`
+	Path           string `json:"path"`
+	Status         string `json:"status"`
+	VerifiedDigest string `json:"verified_digest"`
+}
+
+func approvalClaimSummaryOf(claim zruntime.Claim) approvalClaimSummary {
+	return approvalClaimSummary{
+		ID:             claim.ID,
+		Path:           claim.Path,
+		Status:         string(claim.Status),
+		VerifiedDigest: claim.VerifiedDigest,
+	}
+}
+
+type approvalBatchItem struct {
+	ClaimID string `json:"claim_id"`
+	Status  string `json:"status"`
+	Path    string `json:"path,omitempty"`
+	Error   string `json:"error,omitempty"`
+}
+
+type approvalManifest struct {
+	Workspace  string                 `json:"workspace"`
+	Generation string                 `json:"generation"`
+	ShowSingle approvalShowJSON       `json:"show_single"`
+	ShowBatch  approvalShowJSON       `json:"show_batch"`
+	Single     approvalSingleSection  `json:"single"`
+	Expired    approvalExpiredSection `json:"expired"`
+	Batch      approvalBatchSection   `json:"batch"`
+	Tree       []treeDigestEntry      `json:"tree"`
+}
+
+type approvalSingleSection struct {
+	Challenge         approvalChallengeSummary `json:"challenge"`
+	GrantTokenPresent bool                     `json:"grant_token_present"`
+	WrongTokenError   string                   `json:"wrong_token_error"`
+	Approved          approvalClaimSummary     `json:"approved"`
+	ReplayError       string                   `json:"replay_error"`
+}
+
+type approvalExpiredSection struct {
+	Challenge  approvalChallengeSummary `json:"challenge"`
+	ApplyError string                   `json:"apply_error"`
+}
+
+type approvalBatchSection struct {
+	Challenge    approvalChallengeSummary `json:"challenge"`
+	GrantedItems []string                 `json:"granted_items"`
+	SkippedItems []string                 `json:"skipped_items"`
+	Items        []approvalBatchItem      `json:"items"`
+	ReplayError  string                   `json:"replay_error"`
+	Claims       []approvalClaimSummary   `json:"claims"`
+}
+
+func runApproval(home, workspace string) error {
+	paths, err := parityPaths(home)
+	if err != nil {
+		return err
+	}
+	if err := zruntime.CreateWorkspace(paths, workspace, parityNow()); err != nil {
+		return fmt.Errorf("create workspace: %w", err)
+	}
+	store := zruntime.ClaimStore{Paths: paths, Now: parityNow}
+	challengeStore := zruntime.ChallengeStore{Paths: paths, Now: parityNow}
+	created := parityNow().UTC().Format(time.RFC3339)
+	claims := map[string]string{
+		"clm_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa": "Parity approval one",
+		"clm_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb": "Parity approval two",
+		"clm_cccccccccccccccccccccccccccccccc": "Parity approval three",
+		"clm_dddddddddddddddddddddddddddddddd": "Parity approval four",
+	}
+	ids := []string{
+		"clm_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+		"clm_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+		"clm_cccccccccccccccccccccccccccccccc",
+		"clm_dddddddddddddddddddddddddddddddd",
+	}
+	for _, id := range ids {
+		if _, err := store.WriteDraft(workspace, zruntime.Claim{
+			Type:      zruntime.OKFClaimType,
+			ID:        id,
+			Tier:      "projects",
+			Status:    zruntime.ClaimStatusDraft,
+			Title:     claims[id],
+			Basis:     zruntime.ClaimBasisOwner,
+			CreatedAt: created,
+			CreatedBy: "owner",
+			Body:      "Parity body\n",
+		}); err != nil {
+			return fmt.Errorf("write draft %s: %w", id, err)
+		}
+	}
+
+	// Single challenge ceremony: prepare -> show -> grant -> wrong token ->
+	// apply -> replay.
+	prepared, err := store.PrepareChallenge(workspace, zruntime.ChallengePrepare{
+		Workspace: workspace,
+		Operation: zruntime.ChallengeOperationApprove,
+		ClaimID:   ids[0],
+	})
+	if err != nil {
+		return fmt.Errorf("prepare challenge: %w", err)
+	}
+	showSingle := approvalShowJSONOf(prepared.Challenge, workspace)
+	granted, err := challengeStore.Grant(workspace, prepared.Challenge.ID)
+	if err != nil {
+		return fmt.Errorf("grant challenge: %w", err)
+	}
+	wrongTokenError := ""
+	if _, err := store.ApplyChallenge(workspace, prepared.Challenge.ID, "not-the-token", zruntime.ClaimMutationOptions{}); err != nil {
+		wrongTokenError = err.Error()
+	} else {
+		return fmt.Errorf("apply with wrong token unexpectedly succeeded")
+	}
+	approvedClaim, err := store.ApplyChallenge(workspace, prepared.Challenge.ID, granted.Token, zruntime.ClaimMutationOptions{})
+	if err != nil {
+		return fmt.Errorf("apply challenge: %w", err)
+	}
+	replayError := ""
+	if _, err := store.ApplyChallenge(workspace, prepared.Challenge.ID, granted.Token, zruntime.ClaimMutationOptions{}); err != nil {
+		replayError = err.Error()
+	} else {
+		return fmt.Errorf("replayed apply unexpectedly succeeded")
+	}
+
+	// Expired challenge fails closed before any mutation.
+	expiredPrepared, err := store.PrepareChallenge(workspace, zruntime.ChallengePrepare{
+		Workspace: workspace,
+		Operation: zruntime.ChallengeOperationApprove,
+		ClaimID:   ids[3],
+	})
+	if err != nil {
+		return fmt.Errorf("prepare expired challenge: %w", err)
+	}
+	expiredGrant, err := challengeStore.Grant(workspace, expiredPrepared.Challenge.ID)
+	if err != nil {
+		return fmt.Errorf("grant expired challenge: %w", err)
+	}
+	expiredStore := zruntime.ClaimStore{Paths: paths, Now: func() time.Time {
+		return parityNow().Add(time.Hour)
+	}}
+	expiredError := ""
+	if _, err := expiredStore.ApplyChallenge(workspace, expiredPrepared.Challenge.ID, expiredGrant.Token, zruntime.ClaimMutationOptions{}); err != nil {
+		expiredError = err.Error()
+	} else {
+		return fmt.Errorf("expired apply unexpectedly succeeded")
+	}
+
+	// Batch challenge: one challenge binds N draft digests; per-item
+	// grant/skip decisions; the skipped claim stays a draft.
+	items := []zruntime.ChallengeItem{{ClaimID: ids[1]}, {ClaimID: ids[2]}}
+	batch, err := store.PrepareBatchChallenge(workspace, items)
+	if err != nil {
+		return fmt.Errorf("prepare batch challenge: %w", err)
+	}
+	showBatch := approvalShowJSONOf(batch.Challenge, workspace)
+	batchGranted, err := challengeStore.GrantItems(workspace, batch.Challenge.ID, []string{ids[2]}, []string{ids[1]})
+	if err != nil {
+		return fmt.Errorf("grant batch challenge: %w", err)
+	}
+	batchResult, err := store.ApplyChallengeBatch(workspace, batch.Challenge.ID, batchGranted.Token, zruntime.ClaimMutationOptions{})
+	if err != nil {
+		return fmt.Errorf("apply batch challenge: %w", err)
+	}
+	batchReplayError := ""
+	if _, err := store.ApplyChallengeBatch(workspace, batch.Challenge.ID, batchGranted.Token, zruntime.ClaimMutationOptions{}); err != nil {
+		batchReplayError = err.Error()
+	} else {
+		return fmt.Errorf("replayed batch apply unexpectedly succeeded")
+	}
+	batchItems := make([]approvalBatchItem, 0, len(batchResult.Items))
+	for _, item := range batchResult.Items {
+		batchItems = append(batchItems, approvalBatchItem{
+			ClaimID: item.ClaimID,
+			Status:  item.Status,
+			Path:    item.Path,
+			Error:   item.Error,
+		})
+	}
+
+	skippedClaim, err := store.Read(workspace, ids[1])
+	if err != nil {
+		return fmt.Errorf("read skipped claim: %w", err)
+	}
+	batchApprovedClaim, err := store.Read(workspace, ids[2])
+	if err != nil {
+		return fmt.Errorf("read batch-approved claim: %w", err)
+	}
+
+	root, err := zruntime.ValidateWorkspace(paths, workspace)
+	if err != nil {
+		return fmt.Errorf("validate workspace: %w", err)
+	}
+	generation, err := os.ReadFile(filepath.Join(root, ".zbrain", "generation.json"))
+	if err != nil {
+		return fmt.Errorf("read generation: %w", err)
+	}
+	tree, err := walkTreeDigest(paths.RuntimeDir)
+	if err != nil {
+		return err
+	}
+	out, err := json.MarshalIndent(approvalManifest{
+		Workspace:  workspace,
+		Generation: string(generation),
+		ShowSingle: showSingle,
+		ShowBatch:  showBatch,
+		Single: approvalSingleSection{
+			Challenge:         approvalChallengeSummaryOf(granted.Challenge),
+			GrantTokenPresent: granted.Token != "",
+			WrongTokenError:   wrongTokenError,
+			Approved:          approvalClaimSummaryOf(approvedClaim),
+			ReplayError:       replayError,
+		},
+		Expired: approvalExpiredSection{
+			Challenge:  approvalChallengeSummaryOf(expiredGrant.Challenge),
+			ApplyError: expiredError,
+		},
+		Batch: approvalBatchSection{
+			Challenge:    approvalChallengeSummaryOf(batchGranted.Challenge),
+			GrantedItems: []string{ids[2]},
+			SkippedItems: []string{ids[1]},
+			Items:        batchItems,
+			ReplayError:  batchReplayError,
+			Claims:       []approvalClaimSummary{approvalClaimSummaryOf(skippedClaim), approvalClaimSummaryOf(batchApprovedClaim)},
+		},
+		Tree: tree,
+	}, "", "  ")
+	if err != nil {
+		return err
+	}
+	fmt.Println(normalizeRuntimeIDs(string(out)))
+	return nil
+}
+
 func main() {
 	home := flag.String("home", "", "runtime home directory (required)")
 	workspace := flag.String("workspace", "research", "workspace name to create")
-	op := flag.String("op", "workspace", "operation to exercise (workspace|setup|claims|claims-verify|lifecycle|lifecycle-verify|index|index-verify|ask|ask-verify)")
+	op := flag.String("op", "workspace", "operation to exercise (workspace|setup|claims|claims-verify|lifecycle|lifecycle-verify|index|index-verify|ask|ask-verify|approval)")
 	flag.Parse()
 	if *home == "" {
 		fail("home is required")
@@ -1037,6 +1416,8 @@ func main() {
 		err = runAskVerify(*home, *workspace)
 	case "index-verify":
 		err = runIndexVerify(*home, *workspace)
+	case "approval":
+		err = runApproval(*home, *workspace)
 	default:
 		fail("unknown op " + *op)
 	}

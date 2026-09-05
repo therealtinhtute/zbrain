@@ -13,3 +13,4 @@ include_dir = { workspace = true }
 rusqlite = { workspace = true }
 serde_yml = { workspace = true }
 sha2 = { workspace = true }
+console = { workspace = true }

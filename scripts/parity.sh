@@ -4,7 +4,8 @@
 # manifests byte-for-byte.
 #
 # Usage: scripts/parity.sh [workspace-name] [op]
-#   op: workspace | setup | claims | lifecycle   (defaults: research, workspace)
+#   op: workspace | setup | claims | lifecycle | index | ask | approval
+#       (defaults: research, workspace)
 set -euo pipefail
 
 root="$(cd "$(dirname "$0")/.." && pwd)"
@@ -98,6 +99,21 @@ case "$op" in
     run_rs --home "$go_home" --workspace "$workspace" --op ask-verify > "$tmp/rs_of_go.json"
     diff_or_fail "op=ask-verify go-reads-go" "$tmp/go_base.json" "$tmp/go_of_rs.json"
     diff_or_fail "op=ask-verify rust-reads-go" "$tmp/rs_of_go.json" "$tmp/go_base.json"
+    ;;
+  approval)
+    # m6: the owner-pinned approval ceremony (single/expired/batch challenge,
+    # grant walk, apply) compared byte-for-byte, then a two-way cross-read
+    # proof: each runtime re-verifies the OTHER runtime's post-apply workspace
+    # tree (read-only lifecycle-verify on the resulting state).
+    run_go --home "$go_home" --workspace "$workspace" --op approval > "$tmp/go.json"
+    run_rs --home "$rs_home" --workspace "$workspace" --op approval > "$tmp/rs.json"
+    diff_or_fail "op=approval workspace=$workspace" "$tmp/go.json" "$tmp/rs.json"
+
+    run_go --home "$go_home" --workspace "$workspace" --op lifecycle-verify > "$tmp/go_base.json"
+    run_go --home "$rs_home" --workspace "$workspace" --op lifecycle-verify > "$tmp/go_of_rs.json"
+    run_rs --home "$go_home" --workspace "$workspace" --op lifecycle-verify > "$tmp/rs_of_go.json"
+    diff_or_fail "op=approval-verify go-reads-rust" "$tmp/go_of_rs.json" "$tmp/go_base.json"
+    diff_or_fail "op=approval-verify rust-reads-go" "$tmp/rs_of_go.json" "$tmp/go_base.json"
     ;;
   *)
     echo "parity: unknown op $op" >&2

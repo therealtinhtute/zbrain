@@ -9,6 +9,9 @@ use std::path::{Path, PathBuf};
 use serde::Serialize;
 use sha2::{Digest as _, Sha256};
 
+use zbrain::approval::{
+    approval_show, ApprovalShowOutput, Challenge, ChallengeItem, ChallengePrepare, ChallengeStore,
+};
 use zbrain::claims::{Claim, ClaimStore, OKF_CLAIM_TYPE};
 use zbrain::clock::{rfc3339, FixedClock};
 use zbrain::config::ensure_config;
@@ -156,6 +159,7 @@ fn main() {
         "index-verify" => run_index_verify(Path::new(&home), &workspace),
         "ask" => run_ask(Path::new(&home), &workspace),
         "ask-verify" => run_ask_verify(Path::new(&home), &workspace),
+        "approval" => run_approval(Path::new(&home), &workspace),
         other => {
             eprintln!("zbrain-parity: unknown op {other:?}");
             std::process::exit(1);
@@ -231,6 +235,40 @@ fn parity_paths(home: &Path) -> Result<Paths, String> {
 
 fn normalize_evidence_ids(value: &str) -> String {
     normalize_pattern(value, "evd_", "evd_NORMALIZED")
+}
+
+/// Extends normalize_evidence_ids with the control-plane IDs minted at runtime
+/// (challenge, campaign run) and the random one-time token hash persisted
+/// inside challenge records.
+fn normalize_runtime_ids(value: &str) -> String {
+    let mut out = normalize_evidence_ids(value);
+    out = normalize_pattern(&out, "chg_", "chg_NORMALIZED");
+    out = normalize_pattern(&out, "cmp_", "cmp_NORMALIZED");
+    normalize_token_hash(&out)
+}
+
+fn normalize_token_hash(value: &str) -> String {
+    let needle = "\"token_sha256\": \"sha256:";
+    let mut out = String::with_capacity(value.len());
+    let bytes = value.as_bytes();
+    let mut index = 0;
+    while index < bytes.len() {
+        if bytes[index..].starts_with(needle.as_bytes())
+            && bytes.len() - index >= needle.len() + 65
+            && bytes[index + needle.len()..index + needle.len() + 64]
+                .iter()
+                .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(b))
+            && bytes[index + needle.len() + 64] == b'"'
+        {
+            out.push_str("\"token_sha256\": \"sha256:NORMALIZED\"");
+            index += needle.len() + 65;
+        } else {
+            let ch = value[index..].chars().next().unwrap();
+            out.push(ch);
+            index += ch.len_utf8();
+        }
+    }
+    out
 }
 
 fn normalize_pattern(value: &str, prefix: &str, replacement: &str) -> String {
@@ -502,15 +540,19 @@ fn is_evidence_id_shaped(value: &str) -> bool {
 }
 
 fn walk_tree_digest(runtime_dir: &Path) -> Result<Vec<TreeDigestEntry>, String> {
-    let mut entries = BTreeMap::new();
+    let mut entries = Vec::new();
     visit_digest(runtime_dir, runtime_dir, &mut entries)?;
-    Ok(entries.into_values().collect())
+    // Duplicate normalized paths are possible when several runtime-generated
+    // control files (e.g. challenge records) normalize to the same name; the
+    // content hash tiebreak keeps their order deterministic.
+    entries.sort_by(|a, b| a.path.cmp(&b.path).then(a.sha256.cmp(&b.sha256)));
+    Ok(entries)
 }
 
 fn visit_digest(
     runtime_dir: &Path,
     current: &Path,
-    entries: &mut BTreeMap<String, TreeDigestEntry>,
+    entries: &mut Vec<TreeDigestEntry>,
 ) -> Result<(), String> {
     let mut children: Vec<PathBuf> = std::fs::read_dir(current)
         .map_err(|err| format!("walk tree: {err}"))?
@@ -529,7 +571,7 @@ fn visit_digest(
             ("dir", String::new())
         } else {
             let contents = std::fs::read(&child).map_err(|err| format!("read {rel:?}: {err}"))?;
-            let normalized = normalize_evidence_ids(&String::from_utf8_lossy(&contents));
+            let normalized = normalize_runtime_ids(&String::from_utf8_lossy(&contents));
             let digest = Sha256::digest(normalized.as_bytes());
             (
                 "file",
@@ -537,16 +579,13 @@ fn visit_digest(
             )
         };
         let mode = format!("{:04o}", metadata.permissions().mode() & 0o777);
-        let normalized_rel = normalize_evidence_ids(&rel);
-        entries.insert(
-            normalized_rel.clone(),
-            TreeDigestEntry {
-                path: normalized_rel,
-                kind,
-                mode,
-                sha256,
-            },
-        );
+        let normalized_rel = normalize_runtime_ids(&rel);
+        entries.push(TreeDigestEntry {
+            path: normalized_rel,
+            kind,
+            mode,
+            sha256,
+        });
         if metadata.is_dir() {
             visit_digest(runtime_dir, &child, entries)?;
         }
@@ -719,7 +758,7 @@ fn visit_derived(
                 ("file", String::new())
             } else {
                 let contents = std::fs::read(&child).map_err(|err| format!("read {rel:?}: {err}"))?;
-                let normalized = normalize_evidence_ids(&String::from_utf8_lossy(&contents));
+                let normalized = normalize_runtime_ids(&String::from_utf8_lossy(&contents));
                 let digest = Sha256::digest(normalized.as_bytes());
                 (
                     "file",
@@ -728,7 +767,7 @@ fn visit_derived(
             }
         };
         let mode = format!("{:04o}", metadata.permissions().mode() & 0o777);
-        let normalized_rel = normalize_evidence_ids(&rel);
+        let normalized_rel = normalize_runtime_ids(&rel);
         entries.insert(
             normalized_rel.clone(),
             TreeDigestEntry {
@@ -1194,6 +1233,361 @@ fn run_ask_verify(home: &Path, workspace: &str) -> Result<(), String> {
         workspace: workspace.to_string(),
         cases,
         generation,
+        tree,
+    })
+}
+
+// ---------------------------------------------------------------------------
+// m6 approval parity (mirrors fixture-gen --op approval): the owner-pinned
+// challenge ceremony (single, expired, batch) driven through the Rust port's
+// runtime entry points, with the mutating apply path proven via the resulting
+// claim files and digests.
+// ---------------------------------------------------------------------------
+
+#[derive(Serialize)]
+struct ApprovalChallengeSummary {
+    schema: String,
+    id: String,
+    workspace: String,
+    operation: String,
+    claim_id: String,
+    #[serde(skip_serializing_if = "String::is_empty")]
+    canonical_draft_digest: String,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    superseded_ids: Vec<String>,
+    #[serde(skip_serializing_if = "String::is_empty")]
+    prior_verification_digest: String,
+    #[serde(skip_serializing_if = "String::is_empty")]
+    revoke_reason: String,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    items: Vec<ChallengeItem>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    granted_items: Vec<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    skipped_items: Vec<String>,
+    action_digest: String,
+    token_sha256: String,
+    expires_at: String,
+    token_expires_at: String,
+    granted: bool,
+    #[serde(skip_serializing_if = "String::is_empty")]
+    granted_at: String,
+    consumed: bool,
+}
+
+fn approval_challenge_summary_of(challenge: &Challenge) -> ApprovalChallengeSummary {
+    ApprovalChallengeSummary {
+        schema: challenge.schema.clone(),
+        id: challenge.id.clone(),
+        workspace: challenge.workspace.clone(),
+        operation: challenge.operation.clone(),
+        claim_id: challenge.claim_id.clone(),
+        canonical_draft_digest: challenge.canonical_draft_digest.clone(),
+        superseded_ids: challenge.superseded_ids.clone(),
+        prior_verification_digest: challenge.prior_verification_digest.clone(),
+        revoke_reason: challenge.revoke_reason.clone(),
+        items: challenge.items.clone(),
+        granted_items: challenge.granted_items.clone(),
+        skipped_items: challenge.skipped_items.clone(),
+        action_digest: challenge.action_digest.clone(),
+        // The one-time token hash is random per grant; normalize it.
+        token_sha256: if challenge.granted {
+            "sha256:NORMALIZED".to_string()
+        } else {
+            challenge.token_sha256.clone()
+        },
+        expires_at: challenge.expires_at.clone(),
+        token_expires_at: challenge.token_expires_at.clone(),
+        granted: challenge.granted,
+        granted_at: challenge.granted_at.clone(),
+        consumed: challenge.consumed,
+    }
+}
+
+#[derive(Serialize)]
+struct ApprovalClaimSummary {
+    id: String,
+    path: String,
+    status: String,
+    verified_digest: String,
+}
+
+fn approval_claim_summary_of(claim: &Claim) -> ApprovalClaimSummary {
+    ApprovalClaimSummary {
+        id: claim.id.clone(),
+        path: claim.path.clone(),
+        status: claim.status.clone(),
+        verified_digest: claim.verified_digest.clone(),
+    }
+}
+
+#[derive(Serialize)]
+struct ApprovalBatchItem {
+    claim_id: String,
+    status: String,
+    #[serde(skip_serializing_if = "String::is_empty")]
+    path: String,
+    #[serde(skip_serializing_if = "String::is_empty")]
+    error: String,
+}
+
+#[derive(Serialize)]
+struct ApprovalSingleSection {
+    challenge: ApprovalChallengeSummary,
+    grant_token_present: bool,
+    wrong_token_error: String,
+    approved: ApprovalClaimSummary,
+    replay_error: String,
+}
+
+#[derive(Serialize)]
+struct ApprovalExpiredSection {
+    challenge: ApprovalChallengeSummary,
+    apply_error: String,
+}
+
+#[derive(Serialize)]
+struct ApprovalBatchSection {
+    challenge: ApprovalChallengeSummary,
+    granted_items: Vec<String>,
+    skipped_items: Vec<String>,
+    items: Vec<ApprovalBatchItem>,
+    replay_error: String,
+    claims: Vec<ApprovalClaimSummary>,
+}
+
+#[derive(Serialize)]
+struct ApprovalManifest {
+    workspace: String,
+    generation: String,
+    show_single: ApprovalShowOutput,
+    show_batch: ApprovalShowOutput,
+    single: ApprovalSingleSection,
+    expired: ApprovalExpiredSection,
+    batch: ApprovalBatchSection,
+    tree: Vec<TreeDigestEntry>,
+}
+
+fn emit_normalized<T: serde::Serialize>(manifest: &T) -> Result<(), String> {
+    let mut out = serde_json::to_string_pretty(manifest)
+        .map_err(|err| format!("marshal manifest: {err}"))?;
+    out = normalize_runtime_ids(&out);
+    out.push('\n');
+    std::io::stdout()
+        .write_all(out.as_bytes())
+        .map_err(|err| format!("write manifest: {err}"))?;
+    Ok(())
+}
+
+fn run_approval(home: &Path, workspace: &str) -> Result<(), String> {
+    use std::sync::Arc;
+
+    let paths = parity_paths(home)?;
+    let clock = FixedClock::new(parity_now());
+    create_workspace(&paths, workspace, &clock).map_err(|err| format!("create workspace: {err}"))?;
+    let store = ClaimStore::with_clock(paths.clone(), Arc::new(clock));
+    let challenge_store = ChallengeStore::with_clock(paths.clone(), Arc::new(clock));
+    let created = rfc3339(parity_now());
+    let ids = [
+        "clm_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "clm_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "clm_cccccccccccccccccccccccccccccccc",
+        "clm_dddddddddddddddddddddddddddddddd",
+    ];
+    let titles = [
+        "Parity approval one",
+        "Parity approval two",
+        "Parity approval three",
+        "Parity approval four",
+    ];
+    for (id, title) in ids.iter().zip(titles) {
+        store
+            .write_draft(
+                workspace,
+                Claim {
+                    claim_type: OKF_CLAIM_TYPE.to_string(),
+                    id: id.to_string(),
+                    tier: "projects".to_string(),
+                    status: "draft".to_string(),
+                    title: title.to_string(),
+                    basis: "owner".to_string(),
+                    created_at: created.clone(),
+                    created_by: "owner".to_string(),
+                    body: "Parity body\n".to_string(),
+                    ..Claim::default()
+                },
+            )
+            .map_err(|err| format!("write draft {id}: {err}"))?;
+    }
+
+    // Single challenge ceremony: prepare -> show -> grant -> wrong token ->
+    // apply -> replay.
+    let prepared = store
+        .prepare_challenge(
+            workspace,
+            ChallengePrepare {
+                workspace: workspace.to_string(),
+                operation: "approve".to_string(),
+                claim_id: ids[0].to_string(),
+                ..ChallengePrepare::default()
+            },
+        )
+        .map_err(|err| format!("prepare challenge: {err}"))?;
+    let show_single = approval_show(&prepared.challenge, workspace);
+    let granted = challenge_store
+        .grant(workspace, &prepared.challenge.id)
+        .map_err(|err| format!("grant challenge: {err}"))?;
+    let wrong_token_error = store
+        .apply_challenge(
+            workspace,
+            &prepared.challenge.id,
+            "not-the-token",
+            zbrain::lifecycle::ClaimMutationOptions::default(),
+        )
+        .err()
+        .map(|err| err.to_string())
+        .ok_or("apply with wrong token unexpectedly succeeded")?;
+    let approved_claim = store
+        .apply_challenge(
+            workspace,
+            &prepared.challenge.id,
+            &granted.token,
+            zbrain::lifecycle::ClaimMutationOptions::default(),
+        )
+        .map_err(|err| format!("apply challenge: {err}"))?;
+    let replay_error = store
+        .apply_challenge(
+            workspace,
+            &prepared.challenge.id,
+            &granted.token,
+            zbrain::lifecycle::ClaimMutationOptions::default(),
+        )
+        .err()
+        .map(|err| err.to_string())
+        .ok_or("replayed apply unexpectedly succeeded")?;
+
+    // Expired challenge fails closed before any mutation.
+    let expired_prepared = store
+        .prepare_challenge(
+            workspace,
+            ChallengePrepare {
+                workspace: workspace.to_string(),
+                operation: "approve".to_string(),
+                claim_id: ids[3].to_string(),
+                ..ChallengePrepare::default()
+            },
+        )
+        .map_err(|err| format!("prepare expired challenge: {err}"))?;
+    let expired_grant = challenge_store
+        .grant(workspace, &expired_prepared.challenge.id)
+        .map_err(|err| format!("grant expired challenge: {err}"))?;
+    let expired_store = ClaimStore::with_clock(
+        paths.clone(),
+        Arc::new(FixedClock::new(parity_now() + chrono::Duration::hours(1))),
+    );
+    let expired_error = expired_store
+        .apply_challenge(
+            workspace,
+            &expired_prepared.challenge.id,
+            &expired_grant.token,
+            zbrain::lifecycle::ClaimMutationOptions::default(),
+        )
+        .err()
+        .map(|err| err.to_string())
+        .ok_or("expired apply unexpectedly succeeded")?;
+
+    // Batch challenge: one challenge binds N draft digests; per-item
+    // grant/skip decisions; the skipped claim stays a draft.
+    let items = vec![
+        ChallengeItem {
+            claim_id: ids[1].to_string(),
+            canonical_draft_digest: String::new(),
+        },
+        ChallengeItem {
+            claim_id: ids[2].to_string(),
+            canonical_draft_digest: String::new(),
+        },
+    ];
+    let batch = store
+        .prepare_batch_challenge(workspace, items)
+        .map_err(|err| format!("prepare batch challenge: {err}"))?;
+    let show_batch = approval_show(&batch.challenge, workspace);
+    let batch_granted = challenge_store
+        .grant_items(
+            workspace,
+            &batch.challenge.id,
+            &[ids[2].to_string()],
+            &[ids[1].to_string()],
+        )
+        .map_err(|err| format!("grant batch challenge: {err}"))?;
+    let batch_result = store
+        .apply_challenge_batch(
+            workspace,
+            &batch.challenge.id,
+            &batch_granted.token,
+            zbrain::lifecycle::ClaimMutationOptions::default(),
+        )
+        .map_err(|err| format!("apply batch challenge: {err}"))?;
+    let batch_replay_error = store
+        .apply_challenge_batch(
+            workspace,
+            &batch.challenge.id,
+            &batch_granted.token,
+            zbrain::lifecycle::ClaimMutationOptions::default(),
+        )
+        .err()
+        .map(|err| err.to_string())
+        .ok_or("replayed batch apply unexpectedly succeeded")?;
+    let batch_items = batch_result
+        .items
+        .iter()
+        .map(|item| ApprovalBatchItem {
+            claim_id: item.claim_id.clone(),
+            status: item.status.clone(),
+            path: item.path.clone(),
+            error: item.error.clone(),
+        })
+        .collect();
+
+    let skipped_claim = store
+        .read(workspace, ids[1])
+        .map_err(|err| format!("read skipped claim: {err}"))?;
+    let batch_approved_claim = store
+        .read(workspace, ids[2])
+        .map_err(|err| format!("read batch-approved claim: {err}"))?;
+
+    let root = zbrain::boundary::validate_workspace(&paths, workspace)
+        .map_err(|err| format!("validate workspace: {err}"))?;
+    let generation = std::fs::read_to_string(root.join(".zbrain/generation.json"))
+        .map_err(|err| format!("read generation: {err}"))?;
+    let tree = walk_tree_digest(&paths.runtime_dir)?;
+    emit_normalized(&ApprovalManifest {
+        workspace: workspace.to_string(),
+        generation,
+        show_single,
+        show_batch,
+        single: ApprovalSingleSection {
+            challenge: approval_challenge_summary_of(&granted.challenge),
+            grant_token_present: !granted.token.is_empty(),
+            wrong_token_error,
+            approved: approval_claim_summary_of(&approved_claim),
+            replay_error,
+        },
+        expired: ApprovalExpiredSection {
+            challenge: approval_challenge_summary_of(&expired_grant.challenge),
+            apply_error: expired_error,
+        },
+        batch: ApprovalBatchSection {
+            challenge: approval_challenge_summary_of(&batch_granted.challenge),
+            granted_items: vec![ids[2].to_string()],
+            skipped_items: vec![ids[1].to_string()],
+            items: batch_items,
+            replay_error: batch_replay_error,
+            claims: vec![
+                approval_claim_summary_of(&skipped_claim),
+                approval_claim_summary_of(&batch_approved_claim),
+            ],
+        },
         tree,
     })
 }
