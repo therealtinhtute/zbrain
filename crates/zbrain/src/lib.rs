@@ -5,6 +5,7 @@ pub mod config;
 pub mod coordination;
 pub mod claims;
 pub mod evidence;
+pub mod index_fts5_probe;
 pub mod lifecycle;
 pub mod lint;
 pub mod manifest;
