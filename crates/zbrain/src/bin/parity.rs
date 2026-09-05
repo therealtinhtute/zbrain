@@ -152,6 +152,10 @@ fn main() {
         "claims-verify" => run_claims_verify(Path::new(&home), &workspace),
         "lifecycle" => run_lifecycle(Path::new(&home), &workspace),
         "lifecycle-verify" => run_lifecycle_verify(Path::new(&home), &workspace),
+        "index" => run_index(Path::new(&home), &workspace),
+        "index-verify" => run_index_verify(Path::new(&home), &workspace),
+        "ask" => run_ask(Path::new(&home), &workspace),
+        "ask-verify" => run_ask_verify(Path::new(&home), &workspace),
         other => {
             eprintln!("zbrain-parity: unknown op {other:?}");
             std::process::exit(1);
@@ -622,4 +626,574 @@ fn visit(
         }
     }
     Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// m4 index parity (mirrors fixture-gen --op index).
+// ---------------------------------------------------------------------------
+
+use zbrain::index::{IndexStore, IndexError, SearchOptions};
+use zbrain::index_state::read_index_state;
+use zbrain::query::{trusted_query, TrustedQueryOptions};
+
+#[derive(Serialize)]
+struct IndexSearchResult {
+    id: String,
+    path: String,
+    #[serde(serialize_with = "zbrain::query::go_json_f64")]
+    score: f64,
+}
+
+#[derive(Serialize)]
+struct IndexSearchGroup {
+    query: String,
+    results: Vec<IndexSearchResult>,
+}
+
+#[derive(Serialize)]
+struct IndexStateSummary {
+    status: String,
+    invalid_count: i64,
+    manifest_digest: String,
+    rebuilt_at: String,
+}
+
+#[derive(Serialize)]
+struct ClaimStatusRow {
+    id: String,
+    status: String,
+}
+
+#[derive(Serialize)]
+struct IndexManifest {
+    workspace: String,
+    summary: zbrain::index::IndexSummary,
+    search: Vec<IndexSearchGroup>,
+    claims: Vec<ClaimStatusRow>,
+    state: IndexStateSummary,
+    generation: String,
+    check_fresh: String,
+    tree: Vec<TreeDigestEntry>,
+}
+
+fn round_score(score: f64) -> f64 {
+    (score * 1e6).round() / 1e6
+}
+
+fn is_derived_index_file(name: &str) -> bool {
+    name.ends_with(".sqlite")
+        || name.ends_with(".dirty")
+        || name.contains(".sqlite-")
+        || name.contains(".embeddings.sqlite.")
+}
+
+fn walk_tree_derived(runtime_dir: &Path) -> Result<Vec<TreeDigestEntry>, String> {
+    let mut entries = BTreeMap::new();
+    visit_derived(runtime_dir, runtime_dir, &mut entries)?;
+    Ok(entries.into_values().collect())
+}
+
+fn visit_derived(
+    runtime_dir: &Path,
+    current: &Path,
+    entries: &mut BTreeMap<String, TreeDigestEntry>,
+) -> Result<(), String> {
+    let mut children: Vec<PathBuf> = std::fs::read_dir(current)
+        .map_err(|err| format!("walk tree: {err}"))?
+        .filter_map(|entry| entry.ok())
+        .map(|entry| entry.path())
+        .collect();
+    children.sort();
+    for child in children {
+        let rel = child
+            .strip_prefix(runtime_dir)
+            .map_err(|err| format!("rel path: {err}"))?
+            .to_string_lossy()
+            .to_string();
+        let metadata = std::fs::symlink_metadata(&child).map_err(|err| format!("walk tree: {err}"))?;
+        let (kind, sha256) = if metadata.is_dir() {
+            ("dir", String::new())
+        } else {
+            let name = child.file_name().unwrap_or_default().to_string_lossy().to_string();
+            if is_derived_index_file(&name) {
+                ("file", String::new())
+            } else {
+                let contents = std::fs::read(&child).map_err(|err| format!("read {rel:?}: {err}"))?;
+                let normalized = normalize_evidence_ids(&String::from_utf8_lossy(&contents));
+                let digest = Sha256::digest(normalized.as_bytes());
+                (
+                    "file",
+                    digest.iter().map(|b| format!("{b:02x}")).collect(),
+                )
+            }
+        };
+        let mode = format!("{:04o}", metadata.permissions().mode() & 0o777);
+        let normalized_rel = normalize_evidence_ids(&rel);
+        entries.insert(
+            normalized_rel.clone(),
+            TreeDigestEntry {
+                path: normalized_rel,
+                kind,
+                mode,
+                sha256,
+            },
+        );
+        if metadata.is_dir() {
+            visit_derived(runtime_dir, &child, entries)?;
+        }
+    }
+    Ok(())
+}
+
+fn index_seed_claims(paths: &Paths, workspace: &str) -> Result<(), String> {
+    use zbrain::claims::{CLAIM_BASIS_OWNER, CLAIM_STATUS_DRAFT};
+    let clock = FixedClock::new(parity_now());
+    let created = rfc3339(parity_now());
+    let store = ClaimStore::with_clock(paths.clone(), std::sync::Arc::new(clock));
+    for (id, title, body, approve) in [
+        (
+            "clm_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "Parity Index Claim",
+            "parity index trusted token\n",
+            true,
+        ),
+        (
+            "clm_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            "Parity Second Claim",
+            "parity index second token\n",
+            true,
+        ),
+        (
+            "clm_dddddddddddddddddddddddddddddddd",
+            "Parity Draft Claim",
+            "parity index draft token\n",
+            false,
+        ),
+    ] {
+        store
+            .write_draft(
+                workspace,
+                Claim {
+                    claim_type: OKF_CLAIM_TYPE.into(),
+                    id: id.into(),
+                    tier: "projects".into(),
+                    status: CLAIM_STATUS_DRAFT.into(),
+                    title: title.into(),
+                    basis: CLAIM_BASIS_OWNER.into(),
+                    created_at: created.clone(),
+                    created_by: "owner".into(),
+                    tags: vec!["memory".into()],
+                    body: body.into(),
+                    ..Claim::default()
+                },
+            )
+            .map_err(|err| format!("write {id}: {err}"))?;
+        if approve {
+            store.approve(workspace, id).map_err(|err| format!("approve {id}: {err}"))?;
+        }
+    }
+    Ok(())
+}
+
+fn emit_index_facts(
+    paths: &Paths,
+    workspace: &str,
+    summary: Option<zbrain::index::IndexSummary>,
+) -> Result<(), String> {
+    let idx = IndexStore::new(paths.clone());
+    let queries = [
+        "parity index",
+        "parity index trusted",
+        "parity index draft",
+        "parity index second",
+        "unmatchable sqlite",
+    ];
+    let mut search: Vec<IndexSearchGroup> = Vec::with_capacity(queries.len());
+    for query in queries {
+        let results = idx
+            .search(
+                workspace,
+                SearchOptions {
+                    query: query.into(),
+                    statuses: vec![
+                        zbrain::claims::CLAIM_STATUS_APPROVED.into(),
+                        zbrain::claims::CLAIM_STATUS_DRAFT.into(),
+                    ],
+                    limit: 10,
+                },
+            )
+            .map_err(|err| format!("search {query:?}: {err}"))?;
+        search.push(IndexSearchGroup {
+            query: query.into(),
+            results: results
+                .iter()
+                .map(|result| IndexSearchResult {
+                    id: result.id.clone(),
+                    path: result.path.clone(),
+                    score: round_score(result.score),
+                })
+                .collect(),
+        });
+    }
+
+    let check_fresh = match idx.check_fresh(workspace) {
+        Ok(()) => String::new(),
+        Err(err) => err.to_string(),
+    };
+
+    let database_path = idx.database_path(workspace).map_err(|err| format!("database path: {err}"))?;
+    let conn = rusqlite::Connection::open(&database_path)
+        .map_err(|err| format!("open index: {err}"))?;
+    let (_manifest, state) = read_index_state(&conn).map_err(|err| format!("read index state: {err}"))?;
+    let mut statement = conn
+        .prepare("select id, status from claims order by id")
+        .map_err(|err| format!("query claims: {err}"))?;
+    let mut rows = statement.query([]).map_err(|err| format!("query claims: {err}"))?;
+    let mut claims: Vec<ClaimStatusRow> = Vec::new();
+    while let Some(row) = rows.next().map_err(|err| format!("query claims: {err}"))? {
+        claims.push(ClaimStatusRow {
+            id: row.get(0).map_err(|err| format!("query claims: {err}"))?,
+            status: row.get(1).map_err(|err| format!("query claims: {err}"))?,
+        });
+    }
+
+    let root = zbrain::boundary::validate_workspace(paths, workspace)
+        .map_err(|err| format!("validate workspace: {err}"))?;
+    let generation = std::fs::read_to_string(root.join(".zbrain/generation.json"))
+        .map_err(|err| format!("read generation: {err}"))?;
+    let tree = walk_tree_derived(&paths.runtime_dir)?;
+
+    emit(&IndexManifest {
+        workspace: workspace.to_string(),
+        summary: summary.unwrap_or_default(),
+        search,
+        claims,
+        state: IndexStateSummary {
+            status: state.status,
+            invalid_count: state.invalid_count,
+            manifest_digest: state.manifest_digest,
+            rebuilt_at: "NORMALIZED".into(),
+        },
+        generation,
+        check_fresh,
+        tree,
+    })
+}
+
+fn run_index(home: &Path, workspace: &str) -> Result<(), String> {
+    let paths = parity_paths(home)?;
+    let clock = FixedClock::new(parity_now());
+    create_workspace(&paths, workspace, &clock).map_err(|err| format!("create workspace: {err}"))?;
+    index_seed_claims(&paths, workspace)?;
+
+    let idx = IndexStore::new(paths.clone());
+    let mut summary = idx.rebuild(workspace).map_err(|err| format!("rebuild: {err}"))?;
+    summary.rebuilt_at = "NORMALIZED".into();
+    emit_index_facts(&paths, workspace, Some(summary))
+}
+
+// run_index_verify is read-only: it re-reads an index tree produced by either
+// runtime, proving the SQLite file opens and searches identically cross-engine.
+fn run_index_verify(home: &Path, workspace: &str) -> Result<(), String> {
+    let paths = parity_paths(home)?;
+    emit_index_facts(&paths, workspace, None)
+}
+
+// ---------------------------------------------------------------------------
+// m4 ask parity (mirrors fixture-gen --op ask).
+// ---------------------------------------------------------------------------
+
+#[derive(Serialize)]
+struct AskCase {
+    name: String,
+    error: String,
+    response: Option<zbrain::query::TrustedQueryResponse>,
+}
+
+#[derive(Serialize)]
+struct AskManifest {
+    workspace: String,
+    cases: Vec<AskCase>,
+    generation: String,
+    tree: Vec<TreeDigestEntry>,
+}
+
+fn normalize_home(mut value: String, paths: &Paths) -> String {
+    let canonical_workspaces = std::fs::canonicalize(&paths.workspaces_dir)
+        .map(|p| p.to_string_lossy().to_string());
+    if let Ok(canonical) = canonical_workspaces {
+        value = value.replace(&canonical, "HOME");
+    }
+    let canonical_runtime =
+        std::fs::canonicalize(&paths.runtime_dir).map(|p| p.to_string_lossy().to_string());
+    if let Ok(canonical) = canonical_runtime {
+        value = value.replace(&canonical, "HOME");
+    }
+    value
+        .replace(
+            &paths.workspaces_dir.to_string_lossy().to_string(),
+            "HOME",
+        )
+        .replace(&paths.runtime_dir.to_string_lossy().to_string(), "HOME")
+}
+
+fn with_rounded_scores(
+    mut response: zbrain::query::TrustedQueryResponse,
+) -> zbrain::query::TrustedQueryResponse {
+    for claims in [&mut response.claims, &mut response.promotion_candidates] {
+        for claim in claims.iter_mut().flatten() {
+            claim.score = round_score(claim.score);
+        }
+    }
+    response
+}
+
+fn run_ask(home: &Path, workspace: &str) -> Result<(), String> {
+    use zbrain::claims::{CLAIM_BASIS_OWNER, CLAIM_STATUS_DRAFT};
+
+    let paths = parity_paths(home)?;
+    let clock = FixedClock::new(parity_now());
+    create_workspace(&paths, workspace, &clock).map_err(|err| format!("create workspace: {err}"))?;
+    create_workspace(&paths, "elsewhere", &clock)
+        .map_err(|err| format!("create elsewhere workspace: {err}"))?;
+    let created = rfc3339(parity_now());
+    let store = ClaimStore::with_clock(paths.clone(), std::sync::Arc::new(clock));
+    for (id, title, body, approve) in [
+        (
+            "clm_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "Parity uses SQLite for indexes",
+            "parity ask trusted alpha token\n",
+            true,
+        ),
+        (
+            "clm_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            "Parity Second Claim",
+            "parity ask trusted beta token\n",
+            true,
+        ),
+        (
+            "clm_dddddddddddddddddddddddddddddddd",
+            "Parity uses BoltDB for indexes",
+            "parity ask draft candidate token\n",
+            false,
+        ),
+    ] {
+        store
+            .write_draft(
+                workspace,
+                Claim {
+                    claim_type: OKF_CLAIM_TYPE.into(),
+                    id: id.into(),
+                    tier: "projects".into(),
+                    status: CLAIM_STATUS_DRAFT.into(),
+                    title: title.into(),
+                    basis: CLAIM_BASIS_OWNER.into(),
+                    created_at: created.clone(),
+                    created_by: "owner".into(),
+                    tags: vec!["memory".into()],
+                    body: body.into(),
+                    ..Claim::default()
+                },
+            )
+            .map_err(|err| format!("write {id}: {err}"))?;
+        if approve {
+            store.approve(workspace, id).map_err(|err| format!("approve {id}: {err}"))?;
+        }
+    }
+
+    let idx = IndexStore::new(paths.clone());
+    idx.rebuild(workspace).map_err(|err| format!("rebuild: {err}"))?;
+
+    let mut cases: Vec<AskCase> = Vec::new();
+    let capture = |name: &str, result: Result<zbrain::query::TrustedQueryResponse, IndexError>, cases: &mut Vec<AskCase>| {
+        match result {
+            Ok(response) => cases.push(AskCase {
+                name: name.into(),
+                error: String::new(),
+                response: Some(with_rounded_scores(response)),
+            }),
+            Err(err) => cases.push(AskCase {
+                name: name.into(),
+                error: normalize_home(err.to_string(), &paths),
+                response: None,
+            }),
+        }
+    };
+
+    let result = trusted_query(
+        &paths,
+        TrustedQueryOptions {
+            query: "parity ask trusted".into(),
+            limit: 10,
+            ..TrustedQueryOptions::default()
+        },
+    );
+    capture("happy", result, &mut cases);
+
+    let result = trusted_query(
+        &paths,
+        TrustedQueryOptions {
+            query: "parity ask draft".into(),
+            limit: 10,
+            ..TrustedQueryOptions::default()
+        },
+    );
+    capture("draft-conflict", result, &mut cases);
+
+    let result = trusted_query(
+        &paths,
+        TrustedQueryOptions {
+            query: "unmatchable".into(),
+            limit: 10,
+            ..TrustedQueryOptions::default()
+        },
+    );
+    capture("gap", result, &mut cases);
+
+    let result = trusted_query(
+        &paths,
+        TrustedQueryOptions {
+            query: "parity ask trusted".into(),
+            as_of: "2026-01-01T00:00:00Z".into(),
+            limit: 10,
+            ..TrustedQueryOptions::default()
+        },
+    );
+    capture("as-of-early", result, &mut cases);
+
+    let result = trusted_query(
+        &paths,
+        TrustedQueryOptions {
+            workspace: "elsewhere".into(),
+            query: "parity ask trusted".into(),
+            limit: 10,
+            ..TrustedQueryOptions::default()
+        },
+    );
+    capture("missing-index", result, &mut cases);
+
+    idx.mark_dirty(workspace).map_err(|err| format!("mark dirty: {err}"))?;
+    let result = trusted_query(
+        &paths,
+        TrustedQueryOptions {
+            query: "parity ask trusted".into(),
+            limit: 10,
+            ..TrustedQueryOptions::default()
+        },
+    );
+    capture("dirty", result, &mut cases);
+
+    idx.rebuild(workspace).map_err(|err| format!("recovery rebuild: {err}"))?;
+    let claim_path = paths
+        .workspaces_dir
+        .join(workspace)
+        .join("wiki/projects/clm_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.md");
+    let contents = std::fs::read_to_string(&claim_path).map_err(|err| format!("read claim: {err}"))?;
+    let changed = contents.replacen(
+        "parity ask trusted alpha",
+        "parity ask stale alpha",
+        1,
+    );
+    std::fs::write(&claim_path, changed).map_err(|err| format!("edit claim: {err}"))?;
+    let result = trusted_query(
+        &paths,
+        TrustedQueryOptions {
+            query: "parity ask trusted".into(),
+            limit: 10,
+            ..TrustedQueryOptions::default()
+        },
+    );
+    capture("stale", result, &mut cases);
+
+    let root = zbrain::boundary::validate_workspace(&paths, workspace)
+        .map_err(|err| format!("validate workspace: {err}"))?;
+    let generation = std::fs::read_to_string(root.join(".zbrain/generation.json"))
+        .map_err(|err| format!("read generation: {err}"))?;
+    let tree = walk_tree_derived(&paths.runtime_dir)?;
+
+    emit(&AskManifest {
+        workspace: workspace.to_string(),
+        cases,
+        generation,
+        tree,
+    })
+}
+
+fn run_ask_verify(home: &Path, workspace: &str) -> Result<(), String> {
+    let paths = parity_paths(home)?;
+    let mut cases: Vec<AskCase> = Vec::new();
+    let capture = |name: &str, result: Result<zbrain::query::TrustedQueryResponse, IndexError>, cases: &mut Vec<AskCase>| {
+        match result {
+            Ok(response) => cases.push(AskCase {
+                name: name.into(),
+                error: String::new(),
+                response: Some(with_rounded_scores(response)),
+            }),
+            Err(err) => cases.push(AskCase {
+                name: name.into(),
+                error: normalize_home(err.to_string(), &paths),
+                response: None,
+            }),
+        }
+    };
+
+    let result = trusted_query(
+        &paths,
+        TrustedQueryOptions {
+            query: "parity ask trusted".into(),
+            limit: 10,
+            ..TrustedQueryOptions::default()
+        },
+    );
+    capture("happy", result, &mut cases);
+    let result = trusted_query(
+        &paths,
+        TrustedQueryOptions {
+            query: "parity ask draft".into(),
+            limit: 10,
+            ..TrustedQueryOptions::default()
+        },
+    );
+    capture("draft-conflict", result, &mut cases);
+    let result = trusted_query(
+        &paths,
+        TrustedQueryOptions {
+            query: "unmatchable".into(),
+            limit: 10,
+            ..TrustedQueryOptions::default()
+        },
+    );
+    capture("gap", result, &mut cases);
+    let result = trusted_query(
+        &paths,
+        TrustedQueryOptions {
+            query: "parity ask trusted".into(),
+            as_of: "2026-01-01T00:00:00Z".into(),
+            limit: 10,
+            ..TrustedQueryOptions::default()
+        },
+    );
+    capture("as-of-early", result, &mut cases);
+    let result = trusted_query(
+        &paths,
+        TrustedQueryOptions {
+            workspace: "elsewhere".into(),
+            query: "parity ask trusted".into(),
+            limit: 10,
+            ..TrustedQueryOptions::default()
+        },
+    );
+    capture("missing-index", result, &mut cases);
+
+    let root = zbrain::boundary::validate_workspace(&paths, workspace)
+        .map_err(|err| format!("validate workspace: {err}"))?;
+    let generation = std::fs::read_to_string(root.join(".zbrain/generation.json"))
+        .map_err(|err| format!("read generation: {err}"))?;
+    let tree = walk_tree_derived(&paths.runtime_dir)?;
+    emit(&AskManifest {
+        workspace: workspace.to_string(),
+        cases,
+        generation,
+        tree,
+    })
 }

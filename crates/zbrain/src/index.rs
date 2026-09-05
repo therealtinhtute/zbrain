@@ -133,7 +133,9 @@ pub struct IndexSummary {
     pub manifest_digest: String,
     pub rebuilt_at: String,
     pub embedding: EmbeddingSummary,
-    pub catalog: Vec<CatalogClaim>,
+    // Go's zero IndexSummary has a nil catalog (JSON null); Rebuild always
+    // sets a non-nil (possibly empty) catalog (JSON []).
+    pub catalog: Option<Vec<CatalogClaim>>,
 }
 
 // Mirror of InvalidClaim with Go's JSON tags (path/error strings).
@@ -544,7 +546,7 @@ impl IndexStore {
                 rebuild_state: rebuild_status.to_string(),
                 manifest_digest: manifest.digest.clone(),
                 rebuilt_at: rebuilt_at.clone(),
-                catalog: approved_catalog(&scan.claims),
+                catalog: Some(approved_catalog(&scan.claims)),
                 ..IndexSummary::default()
             };
 

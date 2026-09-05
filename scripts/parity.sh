@@ -71,6 +71,34 @@ case "$op" in
     diff_or_fail "op=lifecycle-verify go-reads-rust" "$tmp/go_of_rs.json" "$tmp/go.json"
     diff_or_fail "op=lifecycle-verify rust-reads-go" "$tmp/rs_of_go.json" "$tmp/go.json"
     ;;
+  index)
+    # m4: deterministic FTS5 rebuild/search compared byte-for-byte, then a
+    # two-way cross-read proof: each runtime opens the OTHER runtime's index
+    # file and re-searches it (read-only index-verify).
+    run_go --home "$go_home" --workspace "$workspace" --op index > "$tmp/go.json"
+    run_rs --home "$rs_home" --workspace "$workspace" --op index > "$tmp/rs.json"
+    diff_or_fail "op=index workspace=$workspace" "$tmp/go.json" "$tmp/rs.json"
+
+    run_go --home "$go_home" --workspace "$workspace" --op index-verify > "$tmp/go_base.json"
+    run_go --home "$rs_home" --workspace "$workspace" --op index-verify > "$tmp/go_of_rs.json"
+    run_rs --home "$go_home" --workspace "$workspace" --op index-verify > "$tmp/rs_of_go.json"
+    diff_or_fail "op=index-verify go-reads-rust" "$tmp/go_of_rs.json" "$tmp/go_base.json"
+    diff_or_fail "op=index-verify rust-reads-go" "$tmp/rs_of_go.json" "$tmp/go_base.json"
+    ;;
+  ask)
+    # m4: trusted-ask responses (including fail-closed fixtures) compared
+    # byte-for-byte, then a two-way cross-read proof: each runtime re-asks the
+    # OTHER runtime's tree (read-only ask-verify on the post-run state).
+    run_go --home "$go_home" --workspace "$workspace" --op ask > "$tmp/go.json"
+    run_rs --home "$rs_home" --workspace "$workspace" --op ask > "$tmp/rs.json"
+    diff_or_fail "op=ask workspace=$workspace" "$tmp/go.json" "$tmp/rs.json"
+
+    run_go --home "$go_home" --workspace "$workspace" --op ask-verify > "$tmp/go_base.json"
+    run_go --home "$rs_home" --workspace "$workspace" --op ask-verify > "$tmp/go_of_rs.json"
+    run_rs --home "$go_home" --workspace "$workspace" --op ask-verify > "$tmp/rs_of_go.json"
+    diff_or_fail "op=ask-verify go-reads-go" "$tmp/go_base.json" "$tmp/go_of_rs.json"
+    diff_or_fail "op=ask-verify rust-reads-go" "$tmp/rs_of_go.json" "$tmp/go_base.json"
+    ;;
   *)
     echo "parity: unknown op $op" >&2
     exit 1

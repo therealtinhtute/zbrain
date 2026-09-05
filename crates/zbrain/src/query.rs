@@ -56,21 +56,19 @@ pub struct TrustedQueryOptions {
 // non-nil slices as []).
 // ---------------------------------------------------------------------------
 
-/// Go json.Marshal float64 formatting: integral values without a fraction.
+/// Go encoding/json float64 formatting: integral values print without a
+/// fraction and always in decimal notation (never exponent form for the
+/// magnitudes we emit), which ryu-based f64 serialization does not reproduce
+/// for small magnitudes (e.g. -3e-6 vs Go's -0.000003).
 pub fn go_json_f64<S: serde::Serializer>(value: &f64, serializer: S) -> Result<S::Ok, S::Error> {
-    if value.fract() == 0.0 && value.abs() < 1e15 {
-        serializer.serialize_i64(*value as i64)
+    let text = if value.fract() == 0.0 && value.abs() < 1e15 {
+        format!("{}", *value as i64)
     } else {
-        serializer.serialize_f64(*value)
-    }
-}
-
-fn null_if_empty<S: serde::Serializer>(value: &[String], serializer: S) -> Result<S::Ok, S::Error> {
-    if value.is_empty() {
-        serializer.serialize_none()
-    } else {
-        serializer.serialize_some(value)
-    }
+        format!("{value}")
+    };
+    serde_json::value::RawValue::from_string(text)
+        .map_err(serde::ser::Error::custom)?
+        .serialize(serializer)
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -154,7 +152,7 @@ pub struct TrustedQueryResponse {
 #[derive(Debug, Clone, Serialize)]
 pub struct QueryScopesJson {
     pub primary: String,
-    #[serde(serialize_with = "null_if_empty")]
+    // Go initializes Includes as a non-nil empty slice, so it marshals as [].
     pub includes: Vec<String>,
 }
 
@@ -264,8 +262,16 @@ pub fn trusted_query(
                 continue;
             }
             let mut query_claim = to_query_claim(workspace, &claim);
-            query_claim.sources = Some(query_sources(&canonical.sources));
-            query_claim.contradicts = Some(query_contradictions(&canonical.contradicts));
+            query_claim.sources = if canonical.sources.is_empty() {
+                None
+            } else {
+                Some(query_sources(&canonical.sources))
+            };
+            query_claim.contradicts = if canonical.contradicts.is_empty() {
+                None
+            } else {
+                Some(query_contradictions(&canonical.contradicts))
+            };
             if temporal.as_of.is_some()
                 && (canonical.status == crate::claims::CLAIM_STATUS_SUPERSEDED
                     || canonical.status == crate::claims::CLAIM_STATUS_REVOKED)
@@ -294,8 +300,16 @@ pub fn trusted_query(
                 continue;
             }
             let mut query_claim = to_query_claim(workspace, &claim);
-            query_claim.sources = Some(query_sources(&canonical.sources));
-            query_claim.contradicts = Some(query_contradictions(&canonical.contradicts));
+            query_claim.sources = if canonical.sources.is_empty() {
+                None
+            } else {
+                Some(query_sources(&canonical.sources))
+            };
+            query_claim.contradicts = if canonical.contradicts.is_empty() {
+                None
+            } else {
+                Some(query_contradictions(&canonical.contradicts))
+            };
             if !canonical.contradicts.is_empty() {
                 query_claim.status = CLAIM_STATUS_CONFLICT.into();
             }
@@ -305,8 +319,12 @@ pub fn trusted_query(
                 .push(query_claim);
         }
     }
-    sort_query_claims(response.claims.get_or_insert_with(Vec::new));
-    sort_query_claims(response.promotion_candidates.get_or_insert_with(Vec::new));
+    if let Some(claims) = response.claims.as_mut() {
+        sort_query_claims(claims);
+    }
+    if let Some(candidates) = response.promotion_candidates.as_mut() {
+        sort_query_claims(candidates);
+    }
     let conflicts = find_query_conflicts(paths, response.claims.as_deref().unwrap_or(&[]))?;
     let blocked = !conflicts.is_empty();
     response.conflicts = conflicts;
