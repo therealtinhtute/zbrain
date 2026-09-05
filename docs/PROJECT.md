@@ -34,4 +34,4 @@
   (127.0.0.1 only)
 
 ## What are we working on right now?
-- plan: none active (trusted-memory-hygiene completed 2026-09-04; PR #28 merged)
+- plan: docs/plans/active/go-to-rust-migration.md (locked 2026-09-04) — Go→Rust big-bang rewrite on `rust-rewrite`; Go stays authoritative until cutover

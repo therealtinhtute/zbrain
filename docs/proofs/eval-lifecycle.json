@@ -4,15 +4,15 @@
       "scenario": "approve_supersede_revoke_cli",
       "steps": [
         {
-          "observed": "approved;digest_valid:b283bea169cb2702",
+          "observed": "approved;digest_valid:58e8bad83767ea76",
           "step": "approve"
         },
         {
-          "observed": "old:superseded;new:approved;digest_valid:d63aac849988014a",
+          "observed": "old:superseded;new:approved;digest_valid:10b04075341d6aad",
           "step": "supersede"
         },
         {
-          "observed": "revoked;digest_stable:d63aac849988014a",
+          "observed": "revoked;digest_stable:10b04075341d6aad",
           "step": "revoke"
         }
       ]
@@ -21,15 +21,15 @@
       "scenario": "approve_supersede_revoke_mcp",
       "steps": [
         {
-          "observed": "approved;digest_valid:7cc0ec7e71b59401",
+          "observed": "approved;digest_valid:0100d807540aa49a",
           "step": "approve"
         },
         {
-          "observed": "old:superseded;new:approved;digest_valid:19309e008451aeaf",
+          "observed": "old:superseded;new:approved;digest_valid:2c69998176fbfa1a",
           "step": "supersede"
         },
         {
-          "observed": "revoked;digest_stable:19309e008451aeaf",
+          "observed": "revoked;digest_stable:2c69998176fbfa1a",
           "step": "revoke"
         },
         {
