@@ -230,7 +230,7 @@ updated: 2026-09-04
 
   - phase_slug: m4-index-query
     story_id: rust-m4-index-query-20260904
-    status: planned
+    status: in-progress
     goal: FTS5 index, query/ask, temporal recall, loopback embedder ported; perf at or better than Go
     depends_on: m3-lifecycle-trust
     requirements: [R5, R7, R8]
