@@ -557,7 +557,7 @@ fn validate_index_boundary_path(path: &Path, directory: bool) -> Result<(), std:
     }
 }
 
-fn validated_index_paths(paths: &Paths, workspace: &str) -> Result<(), GenerationError> {
+pub(crate) fn validated_index_paths(paths: &Paths, workspace: &str) -> Result<(), GenerationError> {
     validate_workspace(paths, workspace)?;
     validate_index_boundary_path(&paths.indexes_dir, true).map_err(|err| {
         GenerationError::Io(std::io::Error::other(format!("validate index directory: {err}")))
@@ -570,7 +570,7 @@ fn validated_index_paths(paths: &Paths, workspace: &str) -> Result<(), Generatio
     Ok(())
 }
 
-fn mark_dirty_unlocked(paths: &Paths, workspace: &str) -> Result<(), MutationError> {
+pub(crate) fn mark_dirty_unlocked(paths: &Paths, workspace: &str) -> Result<(), MutationError> {
     validated_index_paths(paths, workspace).map_err(|err| MutationError::Message(err.to_string()))?;
     crate::paths::ensure_directory_mode(&paths.indexes_dir, crate::paths::RUNTIME_DIRECTORY_MODE)?;
     let dirty_path = paths.indexes_dir.join(format!("{workspace}.dirty"));

@@ -1,7 +1,6 @@
-use rusqlite::Connection;
-
 #[test]
 fn bundled_sqlite_compiles_and_runs_fts5() {
+    use rusqlite::Connection;
     let conn = Connection::open_in_memory().expect("open in-memory db");
     let enabled: i64 = conn
         .query_row("select sqlite_compileoption_used('ENABLE_FTS5')", [], |row| {
