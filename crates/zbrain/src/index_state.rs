@@ -474,7 +474,7 @@ mod tests {
     #[test]
     fn index_trust_inputs() {
         let conn = new_index_state_test_db();
-        let entries = vec![
+        let entries = [
             TrustInput {
                 path: "evidence/sources/ev_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/raw".into(),
                 kind: TRUST_INPUT_KIND_EVIDENCE_RAW.into(),

@@ -108,6 +108,12 @@ impl From<crate::manifest::ManifestError> for IndexError {
     }
 }
 
+impl From<crate::workspace::WorkspaceError> for IndexError {
+    fn from(source: crate::workspace::WorkspaceError) -> Self {
+        Self::Message(source.to_string())
+    }
+}
+
 fn msg<T>(message: impl std::fmt::Display) -> Result<T, IndexError> {
     Err(IndexError::Message(message.to_string()))
 }
@@ -994,6 +1000,7 @@ thread_local! {
     static CHANGE_TOKEN_OVERRIDE: Cell<Option<i64>> = const { Cell::new(None) };
 }
 
+#[cfg_attr(not(test), allow(dead_code))]
 pub(crate) fn set_trust_file_change_token_override(value: Option<i64>) {
     CHANGE_TOKEN_OVERRIDE.with(|slot| slot.set(value));
 }
@@ -1475,8 +1482,7 @@ fn set_file_times_now(path: &Path) -> Result<(), std::io::Error> {
     Ok(())
 }
 
-fn create_temp_file(dir: &Path, prefix: &str) -> Result<PathBuf, IndexError> {
-    use std::os::unix::fs::OpenOptionsExt;
+pub(crate) fn create_temp_file(dir: &Path, prefix: &str) -> Result<PathBuf, IndexError> {    use std::os::unix::fs::OpenOptionsExt;
     let mut attempt: u64 = 0;
     let nanos = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -1516,7 +1522,7 @@ impl MtimeNano for std::fs::Metadata {
     fn mtime_nsec_composed(&self) -> i64 {
         self.mtime()
             .saturating_mul(1_000_000_000)
-            .saturating_add(self.mtime_nsec() as i64)
+            .saturating_add(self.mtime_nsec())
     }
 }
 
@@ -1741,10 +1747,6 @@ pub(crate) mod test_support {
         let times = [stamp, stamp];
         let rc = unsafe { libc::utimensat(libc::AT_FDCWD, c_path.as_ptr(), times.as_ptr(), 0) };
         assert_eq!(rc, 0, "utimensat failed for {}", path.display());
-    }
-
-    pub fn store_writes_claim(store: &ClaimStore, workspace: &str, claim: Claim) -> Claim {
-        store.write_draft(workspace, claim).unwrap()
     }
 }
 
