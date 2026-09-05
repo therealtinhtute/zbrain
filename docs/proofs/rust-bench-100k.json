@@ -1,0 +1,13 @@
+{
+  "corpus_build_ms": 49417.995,
+  "corpus_size": 10000,
+  "engine": "rusqlite bundled FTS5",
+  "index_ms": 4480.318,
+  "p50_ms": 381.709,
+  "p95_ms": 384.782,
+  "p99_ms": 384.857,
+  "pass": true,
+  "samples": 40,
+  "schema": "zbrain.eval.perf-100k/v1",
+  "target_p95_s": 2
+}

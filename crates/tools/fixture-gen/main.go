@@ -5,11 +5,13 @@ package main
 
 import (
 	"crypto/sha256"
+	"database/sql"
 	"encoding/hex"
 	"encoding/json"
 	"flag"
 	"fmt"
 	"io/fs"
+	"math"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -454,10 +456,561 @@ func emitLifecycleManifest(paths zruntime.Paths, workspace string) error {
 	return nil
 }
 
+// m4 index parity: deterministic FTS5 rebuild + search manifest compared
+// byte-for-byte between the Go oracle and the Rust port.
+type indexSearchResult struct {
+	ID    string  `json:"id"`
+	Path  string  `json:"path"`
+	Score float64 `json:"score"`
+}
+
+type indexSearchGroup struct {
+	Query   string              `json:"query"`
+	Results []indexSearchResult `json:"results"`
+}
+
+type indexStateSummary struct {
+	Status         string `json:"status"`
+	InvalidCount   int    `json:"invalid_count"`
+	ManifestDigest string `json:"manifest_digest"`
+	RebuiltAt      string `json:"rebuilt_at"`
+}
+
+type claimStatusRow struct {
+	ID     string `json:"id"`
+	Status string `json:"status"`
+}
+
+type indexManifest struct {
+	Workspace  string              `json:"workspace"`
+	Summary    zruntime.IndexSummary `json:"summary"`
+	Search     []indexSearchGroup  `json:"search"`
+	Claims     []claimStatusRow    `json:"claims"`
+	State      indexStateSummary   `json:"state"`
+	Generation string              `json:"generation"`
+	CheckFresh string              `json:"check_fresh"`
+	Tree       []treeDigestEntry   `json:"tree"`
+}
+
+func roundScore(score float64) float64 {
+	return math.Round(score*1e6) / 1e6
+}
+
+func isDerivedIndexFile(name string) bool {
+	return strings.HasSuffix(name, ".sqlite") ||
+		strings.HasSuffix(name, ".dirty") ||
+		strings.Contains(name, ".sqlite-") ||
+		strings.Contains(name, ".embeddings.sqlite.")
+}
+
+func walkTreeDerived(runtimeDir string) ([]treeDigestEntry, error) {
+	var tree []treeDigestEntry
+	err := filepath.WalkDir(runtimeDir, func(path string, entry fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		rel, err := filepath.Rel(runtimeDir, path)
+		if err != nil {
+			return err
+		}
+		if rel == "." {
+			return nil
+		}
+		info, err := entry.Info()
+		if err != nil {
+			return err
+		}
+		kind := "file"
+		sum := ""
+		if info.IsDir() {
+			kind = "dir"
+		} else if !isDerivedIndexFile(info.Name()) {
+			contents, err := os.ReadFile(path)
+			if err != nil {
+				return fmt.Errorf("read %q: %w", rel, err)
+			}
+			digest := sha256.Sum256([]byte(normalizeEvidenceIDs(string(contents))))
+			sum = hex.EncodeToString(digest[:])
+		}
+		tree = append(tree, treeDigestEntry{
+			Path:   normalizeEvidenceIDs(rel),
+			Kind:   kind,
+			Mode:   fmt.Sprintf("%04o", info.Mode().Perm()),
+			SHA256: sum,
+		})
+		return nil
+	})
+	if err != nil {
+		return nil, fmt.Errorf("walk tree: %w", err)
+	}
+	sort.Slice(tree, func(i, j int) bool { return tree[i].Path < tree[j].Path })
+	return tree, nil
+}
+
+func indexSeedClaims(paths zruntime.Paths, workspace string) error {
+	store := zruntime.ClaimStore{Paths: paths, Now: parityNow}
+	created := parityNow().UTC().Format(time.RFC3339)
+	first := zruntime.Claim{
+		Type:      zruntime.OKFClaimType,
+		ID:        "clm_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+		Tier:      "projects",
+		Status:    zruntime.ClaimStatusDraft,
+		Title:     "Parity Index Claim",
+		Basis:     zruntime.ClaimBasisOwner,
+		CreatedAt: created,
+		CreatedBy: "owner",
+		Tags:      []string{"memory"},
+		Body:      "parity index trusted token\n",
+	}
+	if _, err := store.WriteDraft(workspace, first); err != nil {
+		return fmt.Errorf("write first draft: %w", err)
+	}
+	if _, err := store.Approve(workspace, first.ID); err != nil {
+		return fmt.Errorf("approve first claim: %w", err)
+	}
+	second := zruntime.Claim{
+		Type:      zruntime.OKFClaimType,
+		ID:        "clm_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+		Tier:      "projects",
+		Status:    zruntime.ClaimStatusDraft,
+		Title:     "Parity Second Claim",
+		Basis:     zruntime.ClaimBasisOwner,
+		CreatedAt: created,
+		CreatedBy: "owner",
+		Tags:      []string{"memory"},
+		Body:      "parity index second token\n",
+	}
+	if _, err := store.WriteDraft(workspace, second); err != nil {
+		return fmt.Errorf("write second draft: %w", err)
+	}
+	if _, err := store.Approve(workspace, second.ID); err != nil {
+		return fmt.Errorf("approve second claim: %w", err)
+	}
+	draft := zruntime.Claim{
+		Type:      zruntime.OKFClaimType,
+		ID:        "clm_dddddddddddddddddddddddddddddddd",
+		Tier:      "projects",
+		Status:    zruntime.ClaimStatusDraft,
+		Title:     "Parity Draft Claim",
+		Basis:     zruntime.ClaimBasisOwner,
+		CreatedAt: created,
+		CreatedBy: "owner",
+		Tags:      []string{"memory"},
+		Body:      "parity index draft token\n",
+	}
+	if _, err := store.WriteDraft(workspace, draft); err != nil {
+		return fmt.Errorf("write index draft: %w", err)
+	}
+	return nil
+}
+
+func indexSearchGroups(idx zruntime.IndexStore, workspace string) ([]indexSearchGroup, error) {
+	queries := []string{
+		"parity index",
+		"parity index trusted",
+		"parity index draft",
+		"parity index second",
+		"unmatchable sqlite",
+	}
+	search := make([]indexSearchGroup, 0, len(queries))
+	for _, query := range queries {
+		results, err := idx.Search(workspace, zruntime.SearchOptions{
+			Query:    query,
+			Statuses: []zruntime.ClaimStatus{zruntime.ClaimStatusApproved, zruntime.ClaimStatusDraft},
+			Limit:    10,
+		})
+		if err != nil {
+			return nil, fmt.Errorf("search %q: %w", query, err)
+		}
+		group := indexSearchGroup{Query: query, Results: make([]indexSearchResult, 0, len(results))}
+		for _, result := range results {
+			group.Results = append(group.Results, indexSearchResult{
+				ID:    result.ID,
+				Path:  result.Path,
+				Score: roundScore(result.Score),
+			})
+		}
+		search = append(search, group)
+	}
+	return search, nil
+}
+
+// emitIndexFacts is the read-only half of the index manifest: everything
+// derived from an existing (published) index without rebuilding it.
+func emitIndexFacts(paths zruntime.Paths, workspace string, summary *zruntime.IndexSummary) error {
+	idx := zruntime.IndexStore{Paths: paths}
+	search, err := indexSearchGroups(idx, workspace)
+	if err != nil {
+		return err
+	}
+	checkFresh := ""
+	if err := idx.CheckFresh(workspace); err != nil {
+		checkFresh = err.Error()
+	}
+
+	databasePath, err := idx.DatabasePath(workspace)
+	if err != nil {
+		return fmt.Errorf("database path: %w", err)
+	}
+	db, err := sql.Open("sqlite", databasePath)
+	if err != nil {
+		return fmt.Errorf("open index: %w", err)
+	}
+	defer func() { _ = db.Close() }()
+	_, state, err := zruntime.ReadIndexState(db)
+	if err != nil {
+		return fmt.Errorf("read index state: %w", err)
+	}
+	rows, err := db.Query("select id, status from claims order by id")
+	if err != nil {
+		return fmt.Errorf("query claims: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+	claims := []claimStatusRow{}
+	for rows.Next() {
+		var row claimStatusRow
+		if err := rows.Scan(&row.ID, &row.Status); err != nil {
+			return err
+		}
+		claims = append(claims, row)
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+
+	root, err := zruntime.ValidateWorkspace(paths, workspace)
+	if err != nil {
+		return fmt.Errorf("validate workspace: %w", err)
+	}
+	generation, err := os.ReadFile(filepath.Join(root, ".zbrain", "generation.json"))
+	if err != nil {
+		return fmt.Errorf("read generation: %w", err)
+	}
+	tree, err := walkTreeDerived(paths.RuntimeDir)
+	if err != nil {
+		return err
+	}
+
+	out, err := json.MarshalIndent(indexManifest{
+		Workspace: workspace,
+		Summary:   derefOrZero(summary),
+		Search:    search,
+		Claims:    claims,
+		State: indexStateSummary{
+			Status:         string(state.Status),
+			InvalidCount:   state.InvalidCount,
+			ManifestDigest: state.ManifestDigest,
+			RebuiltAt:      "NORMALIZED",
+		},
+		Generation: string(generation),
+		CheckFresh: checkFresh,
+		Tree:       tree,
+	}, "", "  ")
+	if err != nil {
+		return err
+	}
+	fmt.Println(string(out))
+	return nil
+}
+
+func derefOrZero(summary *zruntime.IndexSummary) zruntime.IndexSummary {
+	if summary == nil {
+		return zruntime.IndexSummary{}
+	}
+	return *summary
+}
+
+func runIndex(home, workspace string) error {
+	paths, err := parityPaths(home)
+	if err != nil {
+		return err
+	}
+	if err := zruntime.CreateWorkspace(paths, workspace, parityNow()); err != nil {
+		return fmt.Errorf("create workspace: %w", err)
+	}
+	if err := indexSeedClaims(paths, workspace); err != nil {
+		return err
+	}
+	idx := zruntime.IndexStore{Paths: paths}
+	summary, err := idx.Rebuild(workspace)
+	if err != nil {
+		return fmt.Errorf("rebuild: %w", err)
+	}
+	summary.RebuiltAt = "NORMALIZED"
+	return emitIndexFacts(paths, workspace, &summary)
+}
+
+// runIndexVerify is read-only: it re-reads an index tree produced by either
+// runtime, proving the SQLite file opens and searches identically cross-engine.
+func runIndexVerify(home, workspace string) error {
+	paths, err := parityPaths(home)
+	if err != nil {
+		return err
+	}
+	return emitIndexFacts(paths, workspace, nil)
+}
+
+// m4 ask parity: trusted-query responses (including fail-closed fixtures)
+// compared byte-for-byte on deterministic fields.
+type askCase struct {
+	Name     string                          `json:"name"`
+	Error    string                          `json:"error"`
+	Response *zruntime.TrustedQueryResponse  `json:"response"`
+}
+
+type askManifest struct {
+	Workspace  string            `json:"workspace"`
+	Cases      []askCase         `json:"cases"`
+	Generation string            `json:"generation"`
+	Tree       []treeDigestEntry `json:"tree"`
+}
+
+func runAsk(home, workspace string) error {
+	paths, err := parityPaths(home)
+	if err != nil {
+		return err
+	}
+	if err := zruntime.CreateWorkspace(paths, workspace, parityNow()); err != nil {
+		return fmt.Errorf("create workspace: %w", err)
+	}
+	if err := zruntime.CreateWorkspace(paths, "elsewhere", parityNow()); err != nil {
+		return fmt.Errorf("create elsewhere workspace: %w", err)
+	}
+	store := zruntime.ClaimStore{Paths: paths, Now: parityNow}
+	created := parityNow().UTC().Format(time.RFC3339)
+	first := zruntime.Claim{
+		Type:      zruntime.OKFClaimType,
+		ID:        "clm_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+		Tier:      "projects",
+		Status:    zruntime.ClaimStatusDraft,
+		Title:     "Parity uses SQLite for indexes",
+		Basis:     zruntime.ClaimBasisOwner,
+		CreatedAt: created,
+		CreatedBy: "owner",
+		Tags:      []string{"memory"},
+		Body:      "parity ask trusted alpha token\n",
+	}
+	if _, err := store.WriteDraft(workspace, first); err != nil {
+		return fmt.Errorf("write first draft: %w", err)
+	}
+	if _, err := store.Approve(workspace, first.ID); err != nil {
+		return fmt.Errorf("approve first claim: %w", err)
+	}
+	second := zruntime.Claim{
+		Type:      zruntime.OKFClaimType,
+		ID:        "clm_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+		Tier:      "projects",
+		Status:    zruntime.ClaimStatusDraft,
+		Title:     "Parity Second Claim",
+		Basis:     zruntime.ClaimBasisOwner,
+		CreatedAt: created,
+		CreatedBy: "owner",
+		Tags:      []string{"memory"},
+		Body:      "parity ask trusted beta token\n",
+	}
+	if _, err := store.WriteDraft(workspace, second); err != nil {
+		return fmt.Errorf("write second draft: %w", err)
+	}
+	if _, err := store.Approve(workspace, second.ID); err != nil {
+		return fmt.Errorf("approve second claim: %w", err)
+	}
+	draft := zruntime.Claim{
+		Type:      zruntime.OKFClaimType,
+		ID:        "clm_dddddddddddddddddddddddddddddddd",
+		Tier:      "projects",
+		Status:    zruntime.ClaimStatusDraft,
+		Title:     "Parity uses BoltDB for indexes",
+		Basis:     zruntime.ClaimBasisOwner,
+		CreatedAt: created,
+		CreatedBy: "owner",
+		Tags:      []string{"memory"},
+		Body:      "parity ask draft candidate token\n",
+	}
+	if _, err := store.WriteDraft(workspace, draft); err != nil {
+		return fmt.Errorf("write ask draft: %w", err)
+	}
+
+	idx := zruntime.IndexStore{Paths: paths}
+	if _, err := idx.Rebuild(workspace); err != nil {
+		return fmt.Errorf("rebuild: %w", err)
+	}
+
+	normalizeAskError := func(value string) string {
+		canonicalWorkspaces, err := filepath.EvalSymlinks(paths.WorkspacesDir)
+		if err == nil {
+			value = strings.ReplaceAll(value, canonicalWorkspaces, "HOME")
+		}
+		canonicalRuntime, err := filepath.EvalSymlinks(paths.RuntimeDir)
+		if err == nil {
+			value = strings.ReplaceAll(value, canonicalRuntime, "HOME")
+		}
+		value = strings.ReplaceAll(value, paths.WorkspacesDir, "HOME")
+		value = strings.ReplaceAll(value, paths.RuntimeDir, "HOME")
+		return value
+	}
+	// Copy the response per case: a shared &response would alias the reused
+	// variable and marshal the final (zero) value for every case.
+	capture := func(name string, err error, response zruntime.TrustedQueryResponse, cases []askCase) []askCase {
+		c := askCase{Name: name, Error: "", Response: nil}
+		if err != nil {
+			c.Error = normalizeAskError(err.Error())
+		} else {
+			stored := response
+			for i := range stored.Claims {
+				stored.Claims[i].Score = roundScore(stored.Claims[i].Score)
+			}
+			for i := range stored.PromotionCandidates {
+				stored.PromotionCandidates[i].Score = roundScore(stored.PromotionCandidates[i].Score)
+			}
+			c.Response = &stored
+		}
+		return append(cases, c)
+	}
+
+	var cases []askCase
+
+	response, err := zruntime.TrustedQuery(paths, zruntime.TrustedQueryOptions{Query: "parity ask trusted", Limit: 10})
+	cases = capture("happy", err, response, cases)
+
+	response, err = zruntime.TrustedQuery(paths, zruntime.TrustedQueryOptions{Query: "parity ask draft", Limit: 10})
+	cases = capture("draft-conflict", err, response, cases)
+
+	response, err = zruntime.TrustedQuery(paths, zruntime.TrustedQueryOptions{Query: "unmatchable", Limit: 10})
+	cases = capture("gap", err, response, cases)
+
+	response, err = zruntime.TrustedQuery(paths, zruntime.TrustedQueryOptions{Query: "parity ask trusted", Limit: 10, AsOf: "2026-01-01T00:00:00Z"})
+	cases = capture("as-of-early", err, response, cases)
+
+	response, err = zruntime.TrustedQuery(paths, zruntime.TrustedQueryOptions{Workspace: "elsewhere", Query: "parity ask trusted", Limit: 10})
+	cases = capture("missing-index", err, response, cases)
+
+	if err := idx.MarkDirty(workspace); err != nil {
+		return fmt.Errorf("mark dirty: %w", err)
+	}
+	response, err = zruntime.TrustedQuery(paths, zruntime.TrustedQueryOptions{Query: "parity ask trusted", Limit: 10})
+	cases = capture("dirty", err, response, cases)
+
+	if _, err := idx.Rebuild(workspace); err != nil {
+		return fmt.Errorf("recovery rebuild: %w", err)
+	}
+	claimPath := filepath.Join(paths.WorkspacesDir, workspace, "wiki", "projects", first.ID+".md")
+	contents, err := os.ReadFile(claimPath)
+	if err != nil {
+		return fmt.Errorf("read claim: %w", err)
+	}
+	changed := strings.Replace(string(contents), "parity ask trusted alpha", "parity ask stale alpha", 1)
+	if err := os.WriteFile(claimPath, []byte(changed), 0o644); err != nil {
+		return fmt.Errorf("edit claim: %w", err)
+	}
+	response, err = zruntime.TrustedQuery(paths, zruntime.TrustedQueryOptions{Query: "parity ask trusted", Limit: 10})
+	cases = capture("stale", err, response, cases)
+
+	root, err := zruntime.ValidateWorkspace(paths, workspace)
+	if err != nil {
+		return fmt.Errorf("validate workspace: %w", err)
+	}
+	generation, err := os.ReadFile(filepath.Join(root, ".zbrain", "generation.json"))
+	if err != nil {
+		return fmt.Errorf("read generation: %w", err)
+	}
+	tree, err := walkTreeDerived(paths.RuntimeDir)
+	if err != nil {
+		return err
+	}
+
+	out, err := json.MarshalIndent(askManifest{
+		Workspace:  workspace,
+		Cases:      cases,
+		Generation: string(generation),
+		Tree:       tree,
+	}, "", "  ")
+	if err != nil {
+		return err
+	}
+	fmt.Println(string(out))
+	return nil
+}
+
+// runAskVerify re-asks a tree produced by either runtime without mutating it.
+// The tree is in its post-run state (stale after the fixture's final edit), so
+// the error cases match deterministically.
+func runAskVerify(home, workspace string) error {
+	paths, err := parityPaths(home)
+	if err != nil {
+		return err
+	}
+	normalizeAskError := func(value string) string {
+		canonicalWorkspaces, err := filepath.EvalSymlinks(paths.WorkspacesDir)
+		if err == nil {
+			value = strings.ReplaceAll(value, canonicalWorkspaces, "HOME")
+		}
+		canonicalRuntime, err := filepath.EvalSymlinks(paths.RuntimeDir)
+		if err == nil {
+			value = strings.ReplaceAll(value, canonicalRuntime, "HOME")
+		}
+		value = strings.ReplaceAll(value, paths.WorkspacesDir, "HOME")
+		value = strings.ReplaceAll(value, paths.RuntimeDir, "HOME")
+		return value
+	}
+	capture := func(name string, err error, response zruntime.TrustedQueryResponse, cases []askCase) []askCase {
+		c := askCase{Name: name, Error: "", Response: nil}
+		if err != nil {
+			c.Error = normalizeAskError(err.Error())
+		} else {
+			stored := response
+			for i := range stored.Claims {
+				stored.Claims[i].Score = roundScore(stored.Claims[i].Score)
+			}
+			for i := range stored.PromotionCandidates {
+				stored.PromotionCandidates[i].Score = roundScore(stored.PromotionCandidates[i].Score)
+			}
+			c.Response = &stored
+		}
+		return append(cases, c)
+	}
+
+	var cases []askCase
+	response, err := zruntime.TrustedQuery(paths, zruntime.TrustedQueryOptions{Query: "parity ask trusted", Limit: 10})
+	cases = capture("happy", err, response, cases)
+	response, err = zruntime.TrustedQuery(paths, zruntime.TrustedQueryOptions{Query: "parity ask draft", Limit: 10})
+	cases = capture("draft-conflict", err, response, cases)
+	response, err = zruntime.TrustedQuery(paths, zruntime.TrustedQueryOptions{Query: "unmatchable", Limit: 10})
+	cases = capture("gap", err, response, cases)
+	response, err = zruntime.TrustedQuery(paths, zruntime.TrustedQueryOptions{Query: "parity ask trusted", Limit: 10, AsOf: "2026-01-01T00:00:00Z"})
+	cases = capture("as-of-early", err, response, cases)
+	response, err = zruntime.TrustedQuery(paths, zruntime.TrustedQueryOptions{Workspace: "elsewhere", Query: "parity ask trusted", Limit: 10})
+	cases = capture("missing-index", err, response, cases)
+
+	root, err := zruntime.ValidateWorkspace(paths, workspace)
+	if err != nil {
+		return fmt.Errorf("validate workspace: %w", err)
+	}
+	generation, err := os.ReadFile(filepath.Join(root, ".zbrain", "generation.json"))
+	if err != nil {
+		return fmt.Errorf("read generation: %w", err)
+	}
+	tree, err := walkTreeDerived(paths.RuntimeDir)
+	if err != nil {
+		return err
+	}
+
+	out, err := json.MarshalIndent(askManifest{
+		Workspace:  workspace,
+		Cases:      cases,
+		Generation: string(generation),
+		Tree:       tree,
+	}, "", "  ")
+	if err != nil {
+		return err
+	}
+	fmt.Println(string(out))
+	return nil
+}
+
 func main() {
 	home := flag.String("home", "", "runtime home directory (required)")
 	workspace := flag.String("workspace", "research", "workspace name to create")
-	op := flag.String("op", "workspace", "operation to exercise (workspace|setup|claims|claims-verify|lifecycle|lifecycle-verify)")
+	op := flag.String("op", "workspace", "operation to exercise (workspace|setup|claims|claims-verify|lifecycle|lifecycle-verify|index|index-verify|ask|ask-verify)")
 	flag.Parse()
 	if *home == "" {
 		fail("home is required")
@@ -476,6 +1029,14 @@ func main() {
 		err = runLifecycle(*home, *workspace)
 	case "lifecycle-verify":
 		err = runLifecycleVerify(*home, *workspace)
+	case "index":
+		err = runIndex(*home, *workspace)
+	case "ask":
+		err = runAsk(*home, *workspace)
+	case "ask-verify":
+		err = runAskVerify(*home, *workspace)
+	case "index-verify":
+		err = runIndexVerify(*home, *workspace)
 	default:
 		fail("unknown op " + *op)
 	}

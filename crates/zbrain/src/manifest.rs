@@ -254,7 +254,7 @@ fn hash_trust_input_file(path: &Path) -> Result<(i64, String), std::io::Error> {
     Ok((byte_length, digest.iter().map(|b| format!("{b:02x}")).collect()))
 }
 
-fn trust_input_manifest_digest(entries: &[TrustInput]) -> String {
+pub(crate) fn trust_input_manifest_digest(entries: &[TrustInput]) -> String {
     // Go json.Marshal of []TrustInput — compact, field order path, kind,
     // byte_length, sha256. serde_json emits the identical byte stream for
     // these ASCII-safe values.
