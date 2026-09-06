@@ -355,7 +355,7 @@ updated: 2026-09-04
 
   - phase_slug: m7-cli-view-eval
     story_id: rust-m7-cli-view-eval-20260904
-    status: in-progress
+    status: checked
     goal: Full CLI surface, loopback viewer, eval suite, and smoke script ported; differential harness covers every command
     depends_on: m6-approval-campaign
     notes: Parallel-eligible slices — W1.T1 (arg parsing/dispatch framework + help text) can start after m0; W2.T1 (view server) can start after m2 (claims read). The phase as a whole (full wiring + eval + smoke) completes after m4/m5/m6.
@@ -500,3 +500,7 @@ updated: 2026-09-04
 ## Progress (append)
 - 2026-09-05 | phase: m5-mcp-gateway | wave: W2 | task: W2.T1,W2.T2 | task_status: DONE | run_id: rust-rewrite-r5-w2t2 (subagent, resumed after cancelled run) | verification: 364 tests (+24 over m6); 94 mcp tests; 16/16 conformance responses schema-identical vs live `dist/zbrain mcp serve` (5 byte-identical zero-normalization, rest identical after volatile normalization); 7/7 parity ops OK | surfaces: crates/zbrain/src/mcp/{gateway,protocol,server}.rs, tests/w2t2_capture.rs | commits eddd505..8df9774 on r5-w2t2, merged to rust-rewrite
 - 2026-09-05 | phase: m5-mcp-gateway | gate | task_status: DONE | judge: same-session | verdict: APPROVED | notes: cancelled-run partial work (1872 lines) compiled clean (315 tests) and was preserved as eddd505 before resume; fixed 3 latent bugs in it (bool kind "boolean", null-vs-reflect.Value, null array items); Go tools.go has exactly 10 tools — evidence_check/doctor are NOT MCP tools, not ported/not invented; tools/list+resources/list unified to OrderedJson; 5s post-handler timeout guard ported (-32603); concurrent-apply → exactly 1 winner 3/3 runs; framing spaces unchanged (W1 compact-framing decision)
+
+## Progress (append)
+- 2026-09-05 | phase: m7-cli-view-eval | wave: W1-W2 | task: W1.T1,W2.T1,W2.T2 | task_status: DONE | run_id: rust-rewrite-r7-m7 (subagent) | verification: 393 lib tests (+29: 15 cli, 10 view, 4 eval); cli-parity 60/60 incl. real-pty interactive grant diff-clean; smoke.sh rc=0 doctor healthy; 7/7 parity OK; Go oracle cli/view/eval green | surfaces: crates/zbrain/src/{cli.rs,view.rs,main.rs,eval.rs,clock.rs,lib.rs}, tests/eval_suite.rs, scripts/{cli-parity.sh,smoke.sh} | commits cb39f23,4113e82 on r7-m7, merged to rust-rewrite
+- 2026-09-05 | phase: m7-cli-view-eval | gate | task_status: DONE | judge: same-session | verdict: APPROVED | notes: post-merge re-verified (393+cli-parity 60+smoke+7 parity); one transient parallel-run lib failure seen once by agent, unreproduced across ≥6 runs; CLI JSON lacks Go <>& HTML-escaping (no fixture exercises it; view JSON reproduces it, view endpoints byte-identical); App gained clock Arc<dyn Clock> mirroring Go App.Now; eval retrieval runner + drift CLI stay Go harnesses by design (no new CLI commands — help parity); Go eval proof-file churn reverted, not committed
