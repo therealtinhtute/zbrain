@@ -4,9 +4,7 @@
 // structured TrustValidationError.
 use std::collections::HashMap;
 
-use crate::claims::{
-    is_claim_id, verify_claim_digest, Claim, ClaimError, CLAIM_STATUS_APPROVED,
-};
+use crate::claims::{is_claim_id, verify_claim_digest, Claim, ClaimError, CLAIM_STATUS_APPROVED};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TrustValidationError {
@@ -174,7 +172,12 @@ impl TrustValidator {
         if self.active_roots.get(root_id).copied().unwrap_or(false) && id == root_id {
             return self.cycle(root_id, id, path);
         }
-        match self.states.get(id).copied().unwrap_or(VisitState::Unvisited) {
+        match self
+            .states
+            .get(id)
+            .copied()
+            .unwrap_or(VisitState::Unvisited)
+        {
             VisitState::Valid => return Ok(()),
             VisitState::Invalid => {
                 let failure = self.failures.get(id).cloned().unwrap_or(TrustFailure {
@@ -205,10 +208,13 @@ impl TrustValidator {
                         } else {
                             format!("supporting claim {id} cannot be parsed: {load_err}")
                         };
-                        self.mark_invalid(id, TrustFailure {
-                            path: vec![id.to_string()],
-                            reason: reason.clone(),
-                        });
+                        self.mark_invalid(
+                            id,
+                            TrustFailure {
+                                path: vec![id.to_string()],
+                                reason: reason.clone(),
+                            },
+                        );
                         return Err(new_trust_validation_error(root_id, path, &reason));
                     }
                 }
@@ -216,10 +222,13 @@ impl TrustValidator {
         }
         let Some(claim) = claim else {
             let reason = format!("missing supporting claim {id}");
-            self.mark_invalid(id, TrustFailure {
-                path: vec![id.to_string()],
-                reason: reason.clone(),
-            });
+            self.mark_invalid(
+                id,
+                TrustFailure {
+                    path: vec![id.to_string()],
+                    reason: reason.clone(),
+                },
+            );
             return Err(new_trust_validation_error(root_id, path, &reason));
         };
         self.states.insert(id.to_string(), VisitState::Visiting);
@@ -229,27 +238,36 @@ impl TrustValidator {
                 "supporting claim {id} is {}; only approved claims are trusted",
                 claim.status
             );
-            self.mark_invalid(id, TrustFailure {
-                path: vec![id.to_string()],
-                reason: reason.clone(),
-            });
+            self.mark_invalid(
+                id,
+                TrustFailure {
+                    path: vec![id.to_string()],
+                    reason: reason.clone(),
+                },
+            );
             return Err(new_trust_validation_error(root_id, path, &reason));
         }
         if let Err(err) = verify_claim_digest(&claim) {
             let reason = format!("supporting claim {id}: {err}");
-            self.mark_invalid(id, TrustFailure {
-                path: vec![id.to_string()],
-                reason: reason.clone(),
-            });
+            self.mark_invalid(
+                id,
+                TrustFailure {
+                    path: vec![id.to_string()],
+                    reason: reason.clone(),
+                },
+            );
             return Err(new_trust_validation_error(root_id, path, &reason));
         }
         {
             if let Err(err) = validate(&claim) {
                 let reason = format!("supporting claim {id}: {err}");
-                self.mark_invalid(id, TrustFailure {
-                    path: vec![id.to_string()],
-                    reason: reason.clone(),
-                });
+                self.mark_invalid(
+                    id,
+                    TrustFailure {
+                        path: vec![id.to_string()],
+                        reason: reason.clone(),
+                    },
+                );
                 return Err(new_trust_validation_error(root_id, path, &reason));
             }
         }
@@ -290,19 +308,25 @@ impl TrustValidator {
             if let Err(err) = self.visit(root_id, support_id, &child_path, &mut *validate) {
                 if self.states.get(id).copied() != Some(VisitState::Invalid) {
                     if let Some(failure) = self.failures.get(support_id).cloned() {
-                        self.mark_invalid(id, TrustFailure {
-                            path: {
-                                let mut combined = vec![id.to_string()];
-                                combined.extend(failure.path);
-                                combined
+                        self.mark_invalid(
+                            id,
+                            TrustFailure {
+                                path: {
+                                    let mut combined = vec![id.to_string()];
+                                    combined.extend(failure.path);
+                                    combined
+                                },
+                                reason: failure.reason,
                             },
-                            reason: failure.reason,
-                        });
+                        );
                     } else {
-                        self.mark_invalid(id, TrustFailure {
-                            path: vec![id.to_string(), support_id.clone()],
-                            reason: err.reason.clone(),
-                        });
+                        self.mark_invalid(
+                            id,
+                            TrustFailure {
+                                path: vec![id.to_string(), support_id.clone()],
+                                reason: err.reason.clone(),
+                            },
+                        );
                     }
                 }
                 return Err(err);
@@ -318,17 +342,23 @@ impl TrustValidator {
         id: &str,
         path: &[String],
     ) -> Result<(), TrustValidationError> {
-        let start = path.iter().position(|candidate| candidate == id).unwrap_or(0);
+        let start = path
+            .iter()
+            .position(|candidate| candidate == id)
+            .unwrap_or(0);
         let cycle_path: Vec<String> = path[start..].to_vec();
         let nodes: Vec<String> = cycle_path[..cycle_path.len() - 1].to_vec();
         for index in 0..nodes.len() {
             let mut rotated: Vec<String> = nodes[index..].to_vec();
             rotated.extend_from_slice(&nodes[..index]);
             rotated.push(nodes[index].clone());
-            self.mark_invalid(&nodes[index], TrustFailure {
-                path: rotated,
-                reason: "dependency cycle detected".into(),
-            });
+            self.mark_invalid(
+                &nodes[index],
+                TrustFailure {
+                    path: rotated,
+                    reason: "dependency cycle detected".into(),
+                },
+            );
         }
         Err(new_trust_validation_error(
             root_id,
@@ -375,8 +405,8 @@ fn combine_trust_path(current: &[String], suffix: &[String]) -> Vec<String> {
 mod tests {
     use super::*;
     use crate::claims::{
-        claim_verification_digest, CLAIM_BASIS_DERIVED, CLAIM_STATUS_DRAFT,
-        CLAIM_STATUS_REVOKED, CLAIM_STATUS_SUPERSEDED,
+        claim_verification_digest, CLAIM_BASIS_DERIVED, CLAIM_STATUS_DRAFT, CLAIM_STATUS_REVOKED,
+        CLAIM_STATUS_SUPERSEDED,
     };
 
     fn trust_test_claim_id(number: u32) -> String {
@@ -393,10 +423,7 @@ mod tests {
             basis: CLAIM_BASIS_DERIVED.into(),
             created_at: "2026-01-01T00:00:00Z".into(),
             created_by: "test".into(),
-            supporting_claim_ids: supporting
-                .iter()
-                .map(|n| trust_test_claim_id(*n))
-                .collect(),
+            supporting_claim_ids: supporting.iter().map(|n| trust_test_claim_id(*n)).collect(),
             body: format!("claim body {number}\n"),
             ..Claim::default()
         }
@@ -461,7 +488,11 @@ mod tests {
         root_unsafe.supporting_claim_ids = vec!["../outside".into()];
         let mut validator = TrustValidator::new(vec![root_unsafe.clone()]).unwrap();
         let validation_err = require_trust_validation_error(validator.validate_claim(&root_unsafe));
-        assert!(validation_err.reason.contains("unsafe"), "{}", validation_err.reason);
+        assert!(
+            validation_err.reason.contains("unsafe"),
+            "{}",
+            validation_err.reason
+        );
 
         // duplicate node
         let support = trust_test_approved_claim(2, &[]);
@@ -503,7 +534,9 @@ mod tests {
         let mut validator = TrustValidator::new(vec![root.clone(), support]).unwrap();
         let validation_err = require_trust_validation_error(validator.validate_claim(&root));
         assert!(
-            validation_err.reason.contains("verification digest mismatch"),
+            validation_err
+                .reason
+                .contains("verification digest mismatch"),
             "{}",
             validation_err.reason
         );

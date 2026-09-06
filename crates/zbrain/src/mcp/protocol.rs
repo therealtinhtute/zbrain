@@ -156,7 +156,11 @@ impl McpError {
                     data: None,
                 }
             }
-            Self::Wire { code, message, data } => WireError {
+            Self::Wire {
+                code,
+                message,
+                data,
+            } => WireError {
                 code: *code,
                 message: message.clone(),
                 data: data.clone(),
@@ -203,7 +207,10 @@ pub struct WireError {
 /// Result `_meta` carrying the SEP-2575 server identity annotation.
 #[derive(Debug, Default, Serialize)]
 pub struct ResultMeta {
-    #[serde(rename = "io.modelcontextprotocol/serverInfo", skip_serializing_if = "Option::is_none")]
+    #[serde(
+        rename = "io.modelcontextprotocol/serverInfo",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub server_info: Option<Implementation>,
 }
 
@@ -337,7 +344,12 @@ impl OrderedJson {
         if values.is_empty() {
             return Self::Null;
         }
-        Self::Array(values.iter().map(|value| Self::Str(value.clone())).collect())
+        Self::Array(
+            values
+                .iter()
+                .map(|value| Self::Str(value.clone()))
+                .collect(),
+        )
     }
 
     /// Renders with Go's `json.MarshalIndent(v, "", "  ")` byte shape,
@@ -355,7 +367,8 @@ impl OrderedJson {
         out
     }
 
-    fn render(&self, out: &mut String, depth: usize, pretty: bool) {        match self {
+    fn render(&self, out: &mut String, depth: usize, pretty: bool) {
+        match self {
             Self::Null => out.push_str("null"),
             Self::Bool(true) => out.push_str("true"),
             Self::Bool(false) => out.push_str("false"),
@@ -420,7 +433,8 @@ fn push_indent(out: &mut String, depth: usize) {
     for _ in 0..depth {
         out.push_str("  ");
     }
-}impl serde::Serialize for OrderedJson {
+}
+impl serde::Serialize for OrderedJson {
     fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         use serde::ser::SerializeMap as _;
         use serde::ser::SerializeSeq as _;
@@ -686,8 +700,11 @@ impl std::error::Error for TransportError {}
 /// Mirrors go-sdk `DecodeMessage`: non-`{"jsonrpc":"2.0"}` envelopes and
 /// invalid id types are fatal; frames without a method are responses.
 pub fn decode_frame(value: &Value) -> Result<Frame, TransportError> {
-    let invalid = |message: String| TransportError(format!("unmarshaling jsonrpc message: {message}"));
-    let object = value.as_object().ok_or_else(|| invalid("expected object".to_string()))?;
+    let invalid =
+        |message: String| TransportError(format!("unmarshaling jsonrpc message: {message}"));
+    let object = value
+        .as_object()
+        .ok_or_else(|| invalid("expected object".to_string()))?;
     let version = object
         .get("jsonrpc")
         .and_then(Value::as_str)
@@ -699,9 +716,9 @@ pub fn decode_frame(value: &Value) -> Result<Frame, TransportError> {
     }
     let id = match object.get("id") {
         None | Some(Value::Null) => None,
-        Some(Value::Number(n)) => Some(Id::Number(
-            n.as_f64().map(|f| f as i64).unwrap_or_default(),
-        )),
+        Some(Value::Number(n)) => {
+            Some(Id::Number(n.as_f64().map(|f| f as i64).unwrap_or_default()))
+        }
         Some(Value::String(s)) => Some(Id::Text(s.clone())),
         Some(other) => {
             return Err(TransportError(format!("invalid ID type {other:?}")));
@@ -836,9 +853,13 @@ mod tests {
         assert!(legacy(Some(&json!({}))));
         assert!(legacy(Some(&json!({"_meta": {}}))));
         assert!(legacy(Some(&json!({"_meta": {"other": 1}}))));
-        assert!(legacy(Some(&json!({"_meta": {META_PROTOCOL_VERSION: 20260728}}))));
+        assert!(legacy(Some(
+            &json!({"_meta": {META_PROTOCOL_VERSION: 20260728}})
+        )));
         // Versions below the stateless era stay on the legacy path.
-        assert!(legacy(Some(&json!({"_meta": {META_PROTOCOL_VERSION: "2025-11-25"}}))));
+        assert!(legacy(Some(
+            &json!({"_meta": {META_PROTOCOL_VERSION: "2025-11-25"}})
+        )));
         assert!(validate_request_meta(Some(&json!({
             "_meta": {META_PROTOCOL_VERSION: "2999-01-01"}
         })))
@@ -865,7 +886,13 @@ mod tests {
             "_meta": {META_PROTOCOL_VERSION: "2026-07-28", META_CLIENT_CAPABILITIES: "wrong"}
         })))
         .unwrap_err();
-        assert!(matches!(err, McpError::Wire { code: CODE_INVALID_PARAMS, .. }));
+        assert!(matches!(
+            err,
+            McpError::Wire {
+                code: CODE_INVALID_PARAMS,
+                ..
+            }
+        ));
 
         let ok = validate_request_meta(Some(&json!({
             "_meta": {
@@ -879,7 +906,10 @@ mod tests {
         assert_eq!(ok.protocol_version.as_deref(), Some("2026-07-28"));
         assert_eq!(
             ok.client_info,
-            Some(Implementation { name: "t".into(), version: "0".into() })
+            Some(Implementation {
+                name: "t".into(),
+                version: "0".into()
+            })
         );
     }
 
@@ -933,15 +963,23 @@ mod tests {
         }
 
         // String ids round-trip; float ids coerce like Go's float64 -> int64.
-        let string_id = decode_frame(&json!({"jsonrpc": "2.0", "id": "abc", "method": "ping"})).unwrap();
+        let string_id =
+            decode_frame(&json!({"jsonrpc": "2.0", "id": "abc", "method": "ping"})).unwrap();
         assert!(matches!(
             string_id,
-            Frame::Request(RpcRequest { id: Some(Id::Text(_)), .. })
+            Frame::Request(RpcRequest {
+                id: Some(Id::Text(_)),
+                ..
+            })
         ));
-        let float_id = decode_frame(&json!({"jsonrpc": "2.0", "id": 1.5, "method": "ping"})).unwrap();
+        let float_id =
+            decode_frame(&json!({"jsonrpc": "2.0", "id": 1.5, "method": "ping"})).unwrap();
         assert!(matches!(
             float_id,
-            Frame::Request(RpcRequest { id: Some(Id::Number(1)), .. })
+            Frame::Request(RpcRequest {
+                id: Some(Id::Number(1)),
+                ..
+            })
         ));
     }
 
@@ -952,7 +990,8 @@ mod tests {
             Frame::Response
         ));
         assert!(matches!(
-            decode_frame(&json!({"jsonrpc": "2.0", "id": 7, "error": {"code": 1, "message": "x"}})).unwrap(),
+            decode_frame(&json!({"jsonrpc": "2.0", "id": 7, "error": {"code": 1, "message": "x"}}))
+                .unwrap(),
             Frame::Response
         ));
     }
@@ -983,7 +1022,10 @@ mod tests {
     fn error_wire_mapping() {
         let method_not_found = McpError::MethodNotFound.to_wire("no_such_method");
         assert_eq!(method_not_found.code, CODE_METHOD_NOT_FOUND);
-        assert_eq!(method_not_found.message, "method not found: \"no_such_method\"");
+        assert_eq!(
+            method_not_found.message,
+            "method not found: \"no_such_method\""
+        );
         assert_eq!(method_not_found.data, None);
 
         let unknown_tool = McpError::unknown_tool("no_such_tool").to_wire("tools/call");
@@ -993,10 +1035,17 @@ mod tests {
         let unsupported =
             McpError::unsupported_protocol_version("2999-01-01").to_wire("tools/list");
         assert_eq!(unsupported.code, CODE_UNSUPPORTED_PROTOCOL_VERSION);
-        assert_eq!(unsupported.data.as_ref().unwrap()["requested"], "2999-01-01");
-        assert_eq!(unsupported.data.as_ref().unwrap()["supported"][0], "2026-07-28");
+        assert_eq!(
+            unsupported.data.as_ref().unwrap()["requested"],
+            "2999-01-01"
+        );
+        assert_eq!(
+            unsupported.data.as_ref().unwrap()["supported"][0],
+            "2026-07-28"
+        );
 
-        let plain = McpError::Plain("duplicate \"initialize\" received".to_string()).to_wire("initialize");
+        let plain =
+            McpError::Plain("duplicate \"initialize\" received".to_string()).to_wire("initialize");
         assert_eq!(plain.code, 0);
         assert_eq!(plain.message, "duplicate \"initialize\" received");
     }
@@ -1020,13 +1069,19 @@ mod tests {
         let result = InitializeResult {
             capabilities: ServerCapabilities {
                 logging: Some(LoggingCapabilities {}),
-                resources: Some(ResourceCapabilities { list_changed: true, subscribe: false }),
+                resources: Some(ResourceCapabilities {
+                    list_changed: true,
+                    subscribe: false,
+                }),
                 tools: Some(ToolCapabilities { list_changed: true }),
                 ..Default::default()
             },
             instructions: None,
             protocol_version: "2025-06-18".to_string(),
-            server_info: Implementation { name: SERVER_NAME.into(), version: "0.0.0".into() },
+            server_info: Implementation {
+                name: SERVER_NAME.into(),
+                version: "0.0.0".into(),
+            },
         };
         let encoded = serde_json::to_string(&result).unwrap();
         assert_eq!(
@@ -1040,11 +1095,17 @@ mod tests {
         let result = DiscoverResult {
             result_type: "complete",
             meta: ResultMeta {
-                server_info: Some(Implementation { name: SERVER_NAME.into(), version: "0.0.0".into() }),
+                server_info: Some(Implementation {
+                    name: SERVER_NAME.into(),
+                    version: "0.0.0".into(),
+                }),
             },
             ttl_ms: 0,
             cache_scope: "public",
-            supported_versions: SUPPORTED_PROTOCOL_VERSIONS.iter().map(|v| v.to_string()).collect(),
+            supported_versions: SUPPORTED_PROTOCOL_VERSIONS
+                .iter()
+                .map(|v| v.to_string())
+                .collect(),
             capabilities: ServerCapabilities {
                 logging: Some(LoggingCapabilities {}),
                 ..Default::default()
@@ -1074,7 +1135,10 @@ mod tests {
         let modern = ListResult {
             result_type: Some("complete"),
             meta: Some(ResultMeta {
-                server_info: Some(Implementation { name: SERVER_NAME.into(), version: "0.0.0".into() }),
+                server_info: Some(Implementation {
+                    name: SERVER_NAME.into(),
+                    version: "0.0.0".into(),
+                }),
             }),
             ttl_ms: 0,
             cache_scope: "public",
@@ -1090,12 +1154,19 @@ mod tests {
     fn call_tool_result_field_order() {
         let result = CallToolResult {
             meta: Some(ResultMeta {
-                server_info: Some(Implementation { name: SERVER_NAME.into(), version: "0.0.0".into() }),
+                server_info: Some(Implementation {
+                    name: SERVER_NAME.into(),
+                    version: "0.0.0".into(),
+                }),
             }),
-            content: vec![ContentBlock { r#type: "text", text: "ok".to_string() }],
-            structured_content: Some(OrderedJson::object(vec![
-                ("schema_version", OrderedJson::Int(1)),
-            ])),
+            content: vec![ContentBlock {
+                r#type: "text",
+                text: "ok".to_string(),
+            }],
+            structured_content: Some(OrderedJson::object(vec![(
+                "schema_version",
+                OrderedJson::Int(1),
+            )])),
             is_error: false,
             result_type: Some("complete"),
         };
@@ -1105,7 +1176,10 @@ mod tests {
             r#"{"_meta":{"io.modelcontextprotocol/serverInfo":{"name":"zbrain","version":"0.0.0"}},"content":[{"type":"text","text":"ok"}],"structuredContent":{"schema_version":1},"resultType":"complete"}"#
         );
         let errored = CallToolResult {
-            content: vec![ContentBlock { r#type: "text", text: "boom".to_string() }],
+            content: vec![ContentBlock {
+                r#type: "text",
+                text: "boom".to_string(),
+            }],
             is_error: true,
             ..Default::default()
         };

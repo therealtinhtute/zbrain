@@ -111,7 +111,11 @@ pub fn score_query(
     }
 }
 
-pub fn ndcg_at_k(retrieved: &[String], relevant: &std::collections::HashSet<&str>, k: usize) -> f64 {
+pub fn ndcg_at_k(
+    retrieved: &[String],
+    relevant: &std::collections::HashSet<&str>,
+    k: usize,
+) -> f64 {
     if retrieved.is_empty() || relevant.is_empty() {
         return 0.0;
     }
@@ -222,10 +226,18 @@ pub fn drift_delta(before: &EvalSummary, after: &EvalSummary) -> DriftDelta {
 pub fn drift_detected(delta: &DriftDelta, threshold: f64) -> (bool, String) {
     let mut reasons = Vec::new();
     if delta.precision.abs() > threshold {
-        reasons.push(format!("ΔP={:.3} > {:.1}%", delta.precision, threshold * 100.0));
+        reasons.push(format!(
+            "ΔP={:.3} > {:.1}%",
+            delta.precision,
+            threshold * 100.0
+        ));
     }
     if delta.recall.abs() > threshold {
-        reasons.push(format!("ΔR={:.3} > {:.1}%", delta.recall, threshold * 100.0));
+        reasons.push(format!(
+            "ΔR={:.3} > {:.1}%",
+            delta.recall,
+            threshold * 100.0
+        ));
     }
     (!reasons.is_empty(), reasons.join("; "))
 }
@@ -347,35 +359,95 @@ mod tests {
     fn mcnemar_counts_and_chi2_match_drift_oracle() {
         // b=1 before-only hit, c=3 after-only hits: chi2 = (1-3)^2/4 = 1.
         let before = vec![
-            PerQuery { id: "a".into(), hits: 1, ..PerQuery::default() },
-            PerQuery { id: "b".into(), hits: 1, ..PerQuery::default() },
-            PerQuery { id: "c".into(), hits: 0, ..PerQuery::default() },
-            PerQuery { id: "d".into(), hits: 0, ..PerQuery::default() },
-            PerQuery { id: "e".into(), hits: 0, ..PerQuery::default() },
+            PerQuery {
+                id: "a".into(),
+                hits: 1,
+                ..PerQuery::default()
+            },
+            PerQuery {
+                id: "b".into(),
+                hits: 1,
+                ..PerQuery::default()
+            },
+            PerQuery {
+                id: "c".into(),
+                hits: 0,
+                ..PerQuery::default()
+            },
+            PerQuery {
+                id: "d".into(),
+                hits: 0,
+                ..PerQuery::default()
+            },
+            PerQuery {
+                id: "e".into(),
+                hits: 0,
+                ..PerQuery::default()
+            },
         ];
         let after = vec![
-            PerQuery { id: "a".into(), hits: 1, ..PerQuery::default() },
-            PerQuery { id: "b".into(), hits: 0, ..PerQuery::default() },
-            PerQuery { id: "c".into(), hits: 1, ..PerQuery::default() },
-            PerQuery { id: "d".into(), hits: 1, ..PerQuery::default() },
-            PerQuery { id: "e".into(), hits: 1, ..PerQuery::default() },
+            PerQuery {
+                id: "a".into(),
+                hits: 1,
+                ..PerQuery::default()
+            },
+            PerQuery {
+                id: "b".into(),
+                hits: 0,
+                ..PerQuery::default()
+            },
+            PerQuery {
+                id: "c".into(),
+                hits: 1,
+                ..PerQuery::default()
+            },
+            PerQuery {
+                id: "d".into(),
+                hits: 1,
+                ..PerQuery::default()
+            },
+            PerQuery {
+                id: "e".into(),
+                hits: 1,
+                ..PerQuery::default()
+            },
         ];
         let result = mcnemar(&before, &after);
-        assert_eq!((result.a_both_hit, result.b_before_only, result.c_after_only, result.d_both_miss), (1, 1, 3, 0));
+        assert_eq!(
+            (
+                result.a_both_hit,
+                result.b_before_only,
+                result.c_after_only,
+                result.d_both_miss
+            ),
+            (1, 1, 3, 0)
+        );
         assert!((result.chi2 - 1.0).abs() < 1e-12);
         assert!(result.feasible);
         // chi2=1, df=1 -> p ~= 0.317; continuity-corrected chi2=0.25 -> p ~= 0.617.
-        assert!((result.p_value - 0.3173).abs() < 1e-3, "p={}", result.p_value);
+        assert!(
+            (result.p_value - 0.3173).abs() < 1e-3,
+            "p={}",
+            result.p_value
+        );
         assert!(!result.significant);
     }
 
     #[test]
     fn drift_threshold_flags_large_deltas_only() {
-        let delta = DriftDelta { precision: 0.06, recall: 0.01, ..DriftDelta::default() };
+        let delta = DriftDelta {
+            precision: 0.06,
+            recall: 0.01,
+            ..DriftDelta::default()
+        };
         let (detected, reason) = drift_detected(&delta, 0.05);
         assert!(detected);
         assert!(reason.contains("ΔP="));
-        let small = DriftDelta { precision: 0.01, recall: 0.01, ..DriftDelta::default() };
+        let small = DriftDelta {
+            precision: 0.01,
+            recall: 0.01,
+            ..DriftDelta::default()
+        };
         assert!(!drift_detected(&small, 0.05).0);
     }
 }

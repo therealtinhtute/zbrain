@@ -4,8 +4,10 @@
 //! Go→Rust cutover, so marshaling is a hand-rolled emitter reproducing
 //! yaml.v3's exact output for the claim/evidence schemas (4-space root indent,
 //! 2-space steps inside block sequence items, yaml.v3 scalar quoting). The
-//! libyaml-based serde_yml emitter cannot reproduce that style, so it is used
-//! only for unmarshal, where output style is irrelevant.
+//! libyaml-based serde_yml emitter cannot reproduce that style, so it was used
+//! only for unmarshal, where output style is irrelevant. serde_yml was later
+//! removed (RUSTSEC-2025-0067/0068: unsound + unmaintained); parsing now uses
+//! pure-Rust serde_yaml, covered by the same 150-case oracle corpus.
 
 use std::fmt::Write as _;
 
@@ -56,15 +58,13 @@ pub fn emit(root: &Yaml) -> Vec<u8> {
     match root {
         Yaml::Map(entries) => write_map(&mut out, entries, 0, false),
         Yaml::Seq(items) => write_seq(&mut out, items, 0),
-        Yaml::Scalar { value, style } => {
-            match style {
-                YamlStyle::Literal => write_literal(&mut out, value, 4),
-                _ => {
-                    out.push_str(&render_inline(value, *style));
-                    out.push('\n');
-                }
+        Yaml::Scalar { value, style } => match style {
+            YamlStyle::Literal => write_literal(&mut out, value, 4),
+            _ => {
+                out.push_str(&render_inline(value, *style));
+                out.push('\n');
             }
-        }
+        },
     }
     out.into_bytes()
 }
@@ -231,7 +231,10 @@ fn write_literal(out: &mut String, value: &str, content_indent: usize) {
     };
     let lines: Vec<&str> = content.split('\n').collect();
     let mut header = String::from("|");
-    if lines.first().is_some_and(|line| line.is_empty() || line.starts_with(' ')) {
+    if lines
+        .first()
+        .is_some_and(|line| line.is_empty() || line.starts_with(' '))
+    {
         let _ = write!(header, "{}", content_indent);
     }
     header.push_str(chomp);
@@ -367,17 +370,18 @@ fn resolves_as_non_string(value: &str) -> bool {
 }
 
 fn parse_go_int(body: &str) -> Option<i64> {
-    let (digits, radix) = if let Some(rest) = body.strip_prefix("0x").or_else(|| body.strip_prefix("0X")) {
-        (rest, 16)
-    } else if let Some(rest) = body.strip_prefix("0b").or_else(|| body.strip_prefix("0B")) {
-        (rest, 2)
-    } else if let Some(rest) = body.strip_prefix("0o").or_else(|| body.strip_prefix("0O")) {
-        (rest, 8)
-    } else if body.len() > 1 && body.starts_with('0') {
-        (&body[1..], 8)
-    } else {
-        (body, 10)
-    };
+    let (digits, radix) =
+        if let Some(rest) = body.strip_prefix("0x").or_else(|| body.strip_prefix("0X")) {
+            (rest, 16)
+        } else if let Some(rest) = body.strip_prefix("0b").or_else(|| body.strip_prefix("0B")) {
+            (rest, 2)
+        } else if let Some(rest) = body.strip_prefix("0o").or_else(|| body.strip_prefix("0O")) {
+            (rest, 8)
+        } else if body.len() > 1 && body.starts_with('0') {
+            (&body[1..], 8)
+        } else {
+            (body, 10)
+        };
     if digits.is_empty() || digits.starts_with(['+', '-']) {
         return None;
     }
@@ -535,7 +539,21 @@ fn plain_allowed(value: &str) -> bool {
     }
     if matches!(
         first,
-        '#' | ',' | '[' | ']' | '{' | '}' | '&' | '*' | '!' | '|' | '>' | '\'' | '"' | '%' | '@' | '`'
+        '#' | ','
+            | '['
+            | ']'
+            | '{'
+            | '}'
+            | '&'
+            | '*'
+            | '!'
+            | '|'
+            | '>'
+            | '\''
+            | '"'
+            | '%'
+            | '@'
+            | '`'
     ) {
         return false;
     }
@@ -592,7 +610,10 @@ mod tests {
     fn indents_like_yaml_v3() {
         let claim = Yaml::map(vec![
             ("type", Yaml::scalar("zbrain.claim")),
-            ("tags", Yaml::string_list(&["memory".into(), "trust".into()])),
+            (
+                "tags",
+                Yaml::string_list(&["memory".into(), "trust".into()]),
+            ),
             (
                 "sources",
                 Yaml::seq(vec![Yaml::map(vec![
@@ -600,8 +621,17 @@ mod tests {
                     (
                         "spans",
                         Yaml::seq(vec![Yaml::map(vec![
-                            ("evidence_id", Yaml::scalar("evd_0123456789abcdef0123456789abcdef")),
-                            ("start_line", Yaml::Scalar { value: "2".into(), style: YamlStyle::Plain }),
+                            (
+                                "evidence_id",
+                                Yaml::scalar("evd_0123456789abcdef0123456789abcdef"),
+                            ),
+                            (
+                                "start_line",
+                                Yaml::Scalar {
+                                    value: "2".into(),
+                                    style: YamlStyle::Plain,
+                                },
+                            ),
                             ("digest", Yaml::scalar("sha256:span-v1:abc")),
                         ])]),
                     ),

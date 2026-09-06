@@ -12,8 +12,8 @@ serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["raw_value"] }
 chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
 libc = "0.2"
+serde_yaml = "0.9"
 rusqlite = { version = "0.32", features = ["bundled"] }
 include_dir = "0.7"
-serde_yml = "0.0.12"
 sha2 = "0.10"
 console = "0.15"

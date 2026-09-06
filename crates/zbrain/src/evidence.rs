@@ -105,8 +105,8 @@ impl From<LockError> for EvidenceError {
     }
 }
 
-impl From<serde_yml::Error> for EvidenceError {
-    fn from(source: serde_yml::Error) -> Self {
+impl From<serde_yaml::Error> for EvidenceError {
+    fn from(source: serde_yaml::Error) -> Self {
         Self::Message(source.to_string())
     }
 }
@@ -130,7 +130,11 @@ pub fn evidence_snapshot_digest(metadata: &[u8], evidence: &Evidence) -> String 
         "\nraw-byte-length:{}\nraw-sha256:{}\n",
         evidence.byte_length, evidence.sha256
     ));
-    format!("{}{}", EVIDENCE_SNAPSHOT_DIGEST_PREFIX, hex_lower(&hash.finalize()))
+    format!(
+        "{}{}",
+        EVIDENCE_SNAPSHOT_DIGEST_PREFIX,
+        hex_lower(&hash.finalize())
+    )
 }
 
 pub fn is_legacy_evidence_digest(value: &str) -> bool {
@@ -142,7 +146,9 @@ pub fn is_legacy_evidence_digest(value: &str) -> bool {
 
 pub fn is_evidence_sha256(value: &str) -> bool {
     value.len() == 64
-        && value.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+        && value
+            .bytes()
+            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
 }
 
 fn hex_lower(bytes: &[u8]) -> String {
@@ -196,7 +202,11 @@ impl EvidenceStore {
         let id = crate::claims::new_evidence_id()?;
         let root = self.evidence_root(workspace, &id)?;
         match std::fs::symlink_metadata(&root) {
-            Ok(_) => return Err(EvidenceError::Message(format!("evidence {id} already exists"))),
+            Ok(_) => {
+                return Err(EvidenceError::Message(format!(
+                    "evidence {id} already exists"
+                )))
+            }
             Err(source) if source.kind() == std::io::ErrorKind::NotFound => {}
             Err(source) => return Err(source.into()),
         }
@@ -206,7 +216,15 @@ impl EvidenceStore {
             ensure_directory_mode(&directory, EVIDENCE_DIRECTORY_MODE)?;
         }
         ensure_directory_mode(&root, EVIDENCE_DIRECTORY_MODE)?;
-        let created = self.write_snapshot(workspace, &id, &mut source, origin, &media_type, &digest, clock);
+        let created = self.write_snapshot(
+            workspace,
+            &id,
+            &mut source,
+            origin,
+            &media_type,
+            &digest,
+            clock,
+        );
         match created {
             Ok(evidence) => Ok(evidence),
             Err(err) => {
@@ -254,7 +272,9 @@ impl EvidenceStore {
 
         let actual = hex_lower(&hash.finalize());
         if actual != digest {
-            return Err(EvidenceError::Message("source file changed during capture".into()));
+            return Err(EvidenceError::Message(
+                "source file changed during capture".into(),
+            ));
         }
         let evidence = Evidence {
             id: id.to_string(),
@@ -281,7 +301,7 @@ impl EvidenceStore {
         }
         let metadata_path = self.evidence_file_path(workspace, id, "source.yaml")?;
         let contents = std::fs::read(&metadata_path)?;
-        let evidence: Evidence = serde_yml::from_slice(&contents)?;
+        let evidence: Evidence = serde_yaml::from_slice(&contents)?;
         if evidence.id != id {
             return Err(EvidenceError::Message(format!(
                 "evidence metadata id {:?} does not match path id {id:?}",
@@ -314,7 +334,10 @@ impl EvidenceStore {
         let scan = ClaimStore::new(self.paths.clone()).scan_workspace(workspace)?;
         for claim in &scan.claims {
             for id in &claim.evidence_ids {
-                affected.entry(id.clone()).or_default().push(claim.id.clone());
+                affected
+                    .entry(id.clone())
+                    .or_default()
+                    .push(claim.id.clone());
             }
         }
         let sources_root = resolve_workspace_path(&self.paths, workspace, "evidence/sources")?;
@@ -358,14 +381,23 @@ impl EvidenceStore {
             .map_err(EvidenceError::Boundary)
     }
 
-    fn evidence_file_path(&self, workspace: &str, id: &str, name: &str) -> Result<PathBuf, EvidenceError> {
+    fn evidence_file_path(
+        &self,
+        workspace: &str,
+        id: &str,
+        name: &str,
+    ) -> Result<PathBuf, EvidenceError> {
         if !is_evidence_id(id) {
             return Err(EvidenceError::Message(
                 "evidence id must match evd_<32 lowercase hex chars>".into(),
             ));
         }
-        resolve_workspace_path(&self.paths, workspace, &format!("evidence/sources/{id}/{name}"))
-            .map_err(EvidenceError::Boundary)
+        resolve_workspace_path(
+            &self.paths,
+            workspace,
+            &format!("evidence/sources/{id}/{name}"),
+        )
+        .map_err(EvidenceError::Boundary)
     }
 
     fn lookup_evidence_by_sha256(
@@ -463,21 +495,22 @@ impl EvidenceValidator {
             reason,
         };
         if !is_evidence_id(id) {
-            return Err(failure(&evidence_metadata_path(id), "evidence id is unsafe".into()));
+            return Err(failure(
+                &evidence_metadata_path(id),
+                "evidence id is unsafe".into(),
+            ));
         }
-        let metadata_path = match resolve_workspace_path(
-            &self.paths,
-            &self.workspace,
-            &evidence_metadata_path(id),
-        ) {
-            Ok(path) => path,
-            Err(err) => {
-                return Err(failure(
-                    &evidence_metadata_path(id),
-                    format!("resolve metadata path: {err}"),
-                ));
-            }
-        };
+        let metadata_path =
+            match resolve_workspace_path(&self.paths, &self.workspace, &evidence_metadata_path(id))
+            {
+                Ok(path) => path,
+                Err(err) => {
+                    return Err(failure(
+                        &evidence_metadata_path(id),
+                        format!("resolve metadata path: {err}"),
+                    ));
+                }
+            };
         let contents = match std::fs::read(&metadata_path) {
             Ok(contents) => contents,
             Err(err) => {
@@ -487,7 +520,7 @@ impl EvidenceValidator {
                 ));
             }
         };
-        let evidence: Evidence = match serde_yml::from_slice(&contents) {
+        let evidence: Evidence = match serde_yaml::from_slice(&contents) {
             Ok(evidence) => evidence,
             Err(err) => {
                 return Err(failure(
@@ -500,19 +533,16 @@ impl EvidenceValidator {
             return Err(failure(&evidence_metadata_path(id), err));
         }
 
-        let raw_path = match resolve_workspace_path(
-            &self.paths,
-            &self.workspace,
-            &evidence_raw_path(id),
-        ) {
-            Ok(path) => path,
-            Err(err) => {
-                return Err(failure(
-                    &evidence_raw_path(id),
-                    format!("resolve raw path: {err}"),
-                ));
-            }
-        };
+        let raw_path =
+            match resolve_workspace_path(&self.paths, &self.workspace, &evidence_raw_path(id)) {
+                Ok(path) => path,
+                Err(err) => {
+                    return Err(failure(
+                        &evidence_raw_path(id),
+                        format!("resolve raw path: {err}"),
+                    ));
+                }
+            };
         let raw = match std::fs::read(&raw_path) {
             Ok(raw) => raw,
             Err(err) => {
@@ -535,8 +565,10 @@ impl EvidenceValidator {
                 format!("sha256 = {actual}, want {}", evidence.sha256),
             ));
         }
-        self.snapshot_digests
-            .insert(id.to_string(), evidence_snapshot_digest(&contents, &evidence));
+        self.snapshot_digests.insert(
+            id.to_string(),
+            evidence_snapshot_digest(&contents, &evidence),
+        );
         Ok(())
     }
 }
@@ -629,31 +661,21 @@ pub(crate) fn validate_claim_evidence(
         let evidence = store.read(&validator.workspace, id).map_err(|err| {
             ClaimError::Message(format!("evidence {id}: read current metadata: {err}"))
         })?;
-        let source = approved_sources
-            .get(id)
-            .ok_or_else(|| {
-                ClaimError::Message(format!(
-                    "claim {} evidence source closure does not match approved evidence ids",
-                    claim.id
-                ))
-            })?;
+        let source = approved_sources.get(id).ok_or_else(|| {
+            ClaimError::Message(format!(
+                "claim {} evidence source closure does not match approved evidence ids",
+                claim.id
+            ))
+        })?;
         let expected_resource = format!("evidence/sources/{id}/raw");
         if source.resource != expected_resource || source.title != evidence.origin {
             return Err(ClaimError::Message(format!(
                 "evidence {id} source reference does not match current metadata"
             )));
         }
-        let current_digest = validator
-            .snapshot_digest(id)
-            .cloned()
-            .unwrap_or_default();
+        let current_digest = validator.snapshot_digest(id).cloned().unwrap_or_default();
         if source.digest == current_digest {
-            validate_evidence_spans(
-                validator,
-                id,
-                source,
-                &current_digest,
-            )?;
+            validate_evidence_spans(validator, id, source, &current_digest)?;
             continue;
         }
         if is_legacy_evidence_digest(&source.digest) {
@@ -707,8 +729,8 @@ fn validate_evidence_spans(
                 span.start_line, span.end_line
             )));
         }
-        let joined: Vec<u8> = lines[(span.start_line - 1) as usize..span.end_line as usize]
-            .concat();
+        let joined: Vec<u8> =
+            lines[(span.start_line - 1) as usize..span.end_line as usize].concat();
         let want = evidence_span_digest(snapshot_digest, span.start_line, span.end_line, &joined);
         if span.digest != want {
             return Err(ClaimError::Message(format!(
@@ -851,7 +873,10 @@ pub struct EvidenceDriftReport {
     pub findings: Vec<EvidenceDriftFinding>,
 }
 
-fn classify_evidence_drift(evidence: Evidence, affected_claim_ids: &[String]) -> EvidenceDriftFinding {
+fn classify_evidence_drift(
+    evidence: Evidence,
+    affected_claim_ids: &[String],
+) -> EvidenceDriftFinding {
     let mut affected: Vec<String> = affected_claim_ids.to_vec();
     affected.sort();
     let mut finding = EvidenceDriftFinding {
@@ -961,7 +986,8 @@ mod tests {
     use chrono::{TimeZone, Utc};
 
     fn fixture(name: &str) -> (PathBuf, Paths, FixedClock) {
-        let dir = std::env::temp_dir().join(format!("zbrain-evidence-{}-{name}", std::process::id()));
+        let dir =
+            std::env::temp_dir().join(format!("zbrain-evidence-{}-{name}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         let paths = Paths::resolve(Options {
@@ -977,7 +1003,10 @@ mod tests {
     }
 
     fn write_source(dir: &Path, body: &[u8]) -> PathBuf {
-        let path = dir.join(format!("source-{}.txt", crate::claims::random_hex(6).unwrap()));
+        let path = dir.join(format!(
+            "source-{}.txt",
+            crate::claims::random_hex(6).unwrap()
+        ));
         std::fs::write(&path, body).unwrap();
         path
     }
@@ -1007,7 +1036,13 @@ mod tests {
 
         let store = EvidenceStore::new(paths.clone());
         let evidence = store
-            .add_file("research", &source, "file://source.txt", "text/plain", &fixture_clock())
+            .add_file(
+                "research",
+                &source,
+                "file://source.txt",
+                "text/plain",
+                &fixture_clock(),
+            )
             .unwrap();
         assert!(is_evidence_id(&evidence.id), "{}", evidence.id);
         assert_eq!(evidence.sha256, sha256_hex(b"original evidence"));
@@ -1034,7 +1069,13 @@ mod tests {
         let source = write_source(&dir, b"trusted evidence");
         let store = EvidenceStore::new(paths.clone());
         let evidence = store
-            .add_file("research", &source, source.to_str().unwrap(), "text/plain", &fixture_clock())
+            .add_file(
+                "research",
+                &source,
+                source.to_str().unwrap(),
+                "text/plain",
+                &fixture_clock(),
+            )
             .unwrap();
         let raw = paths
             .workspaces_dir
@@ -1052,7 +1093,14 @@ mod tests {
         let (dir, paths, clock) = fixture("isolation");
         crate::workspace::create_workspace(&paths, "personal", &clock).unwrap();
         let store = EvidenceStore::new(paths.clone());
-        let evidence = add_evidence(&paths, &dir, "research", b"workspace scoped", "origin", "text/plain");
+        let evidence = add_evidence(
+            &paths,
+            &dir,
+            "research",
+            b"workspace scoped",
+            "origin",
+            "text/plain",
+        );
         assert!(store.read("personal", &evidence.id).is_err());
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -1105,7 +1153,13 @@ mod tests {
         for workspace in ["../outside", "missing"] {
             assert!(
                 store
-                    .add_file(workspace, &source, "file://source.txt", "text/plain", &fixture_clock())
+                    .add_file(
+                        workspace,
+                        &source,
+                        "file://source.txt",
+                        "text/plain",
+                        &fixture_clock()
+                    )
                     .is_err(),
                 "{workspace}"
             );
@@ -1120,7 +1174,13 @@ mod tests {
         let store = EvidenceStore::new(paths.clone());
         let source = write_source(&dir, b"original evidence");
         let first = store
-            .add_file("research", &source, "file://source.txt", "text/plain", &fixture_clock())
+            .add_file(
+                "research",
+                &source,
+                "file://source.txt",
+                "text/plain",
+                &fixture_clock(),
+            )
             .unwrap();
         assert!(!first.deduped);
         let metadata = std::fs::read_to_string(
@@ -1135,7 +1195,13 @@ mod tests {
         let before = crate::coordination::read_workspace_generation(&paths, "research").unwrap();
 
         let second = store
-            .add_file("research", &source, "file://other-origin", "application/json", &fixture_clock())
+            .add_file(
+                "research",
+                &source,
+                "file://other-origin",
+                "application/json",
+                &fixture_clock(),
+            )
             .unwrap();
         assert_eq!(second.id, first.id);
         assert!(second.deduped);
@@ -1153,11 +1219,20 @@ mod tests {
         .unwrap();
         assert_eq!(raw, b"original evidence");
         let after = crate::coordination::read_workspace_generation(&paths, "research").unwrap();
-        assert_eq!(after.current, before.current, "generation current bumped on skip");
+        assert_eq!(
+            after.current, before.current,
+            "generation current bumped on skip"
+        );
 
         let other = write_source(&dir, b"other evidence");
         let third = store
-            .add_file("research", &other, "file://other.txt", "text/plain", &fixture_clock())
+            .add_file(
+                "research",
+                &other,
+                "file://other.txt",
+                "text/plain",
+                &fixture_clock(),
+            )
             .unwrap();
         assert_ne!(third.id, first.id);
         assert!(!third.deduped);
@@ -1167,9 +1242,14 @@ mod tests {
 
     fn evidence_source_ids(paths: &Paths, workspace: &str) -> Vec<String> {
         let mut ids = Vec::new();
-        for entry in std::fs::read_dir(paths.workspaces_dir.join(workspace).join("evidence/sources"))
-            .unwrap()
-            .filter_map(|entry| entry.ok())
+        for entry in std::fs::read_dir(
+            paths
+                .workspaces_dir
+                .join(workspace)
+                .join("evidence/sources"),
+        )
+        .unwrap()
+        .filter_map(|entry| entry.ok())
         {
             let name = entry.file_name().to_string_lossy().to_string();
             if entry.file_type().map(|t| t.is_dir()).unwrap_or(false) && is_evidence_id(&name) {
@@ -1196,11 +1276,46 @@ mod tests {
         let missing_path = write_origin("missing.txt", b"missing origin");
 
         let store = EvidenceStore::new(paths.clone());
-        let unchanged = add_evidence(&paths, &dir, "research", b"unchanged origin", unchanged_path.to_str().unwrap(), "text/plain");
-        let scheme = add_evidence(&paths, &dir, "research", b"scheme origin", &format!("file://{scheme_path}", scheme_path = scheme_path.display()), "text/plain");
-        let changed = add_evidence(&paths, &dir, "research", b"changed origin", changed_path.to_str().unwrap(), "text/plain");
-        let missing = add_evidence(&paths, &dir, "research", b"missing origin", missing_path.to_str().unwrap(), "text/plain");
-        let remote = add_evidence(&paths, &dir, "research", b"remote origin", "https://example.com/remote.txt", "text/plain");
+        let unchanged = add_evidence(
+            &paths,
+            &dir,
+            "research",
+            b"unchanged origin",
+            unchanged_path.to_str().unwrap(),
+            "text/plain",
+        );
+        let scheme = add_evidence(
+            &paths,
+            &dir,
+            "research",
+            b"scheme origin",
+            &format!("file://{scheme_path}", scheme_path = scheme_path.display()),
+            "text/plain",
+        );
+        let changed = add_evidence(
+            &paths,
+            &dir,
+            "research",
+            b"changed origin",
+            changed_path.to_str().unwrap(),
+            "text/plain",
+        );
+        let missing = add_evidence(
+            &paths,
+            &dir,
+            "research",
+            b"missing origin",
+            missing_path.to_str().unwrap(),
+            "text/plain",
+        );
+        let remote = add_evidence(
+            &paths,
+            &dir,
+            "research",
+            b"remote origin",
+            "https://example.com/remote.txt",
+            "text/plain",
+        );
 
         let claim_id = crate::claims::new_claim_id().unwrap();
         ClaimStore::new(paths.clone())
@@ -1232,9 +1347,15 @@ mod tests {
             .map(|finding| (finding.id.clone(), finding))
             .collect();
         assert_eq!(report.findings.len(), 5);
-        assert_eq!(statuses[&unchanged.id].status, EvidenceDriftStatus::Unchanged);
+        assert_eq!(
+            statuses[&unchanged.id].status,
+            EvidenceDriftStatus::Unchanged
+        );
         assert_eq!(statuses[&scheme.id].status, EvidenceDriftStatus::Unchanged);
-        assert_eq!(statuses[&remote.id].status, EvidenceDriftStatus::Uncheckable);
+        assert_eq!(
+            statuses[&remote.id].status,
+            EvidenceDriftStatus::Uncheckable
+        );
         let changed_finding = statuses[&changed.id];
         assert_eq!(changed_finding.status, EvidenceDriftStatus::Changed);
         assert_eq!(changed_finding.recorded_sha256, changed.sha256);
@@ -1244,10 +1365,16 @@ mod tests {
         assert_eq!(statuses[&missing.id].status, EvidenceDriftStatus::Missing);
         assert!(statuses[&missing.id].recovery_action.contains("supersede"));
         assert_eq!(changed_finding.affected_claim_ids, vec![claim_id.clone()]);
-        assert_eq!(statuses[&unchanged.id].affected_claim_ids, vec![claim_id.clone()]);
+        assert_eq!(
+            statuses[&unchanged.id].affected_claim_ids,
+            vec![claim_id.clone()]
+        );
         assert!(statuses[&remote.id].affected_claim_ids.is_empty());
         assert!(statuses[&scheme.id].affected_claim_ids.is_empty());
-        assert_eq!(statuses[&unchanged.id].recovery_action, "no action required");
+        assert_eq!(
+            statuses[&unchanged.id].recovery_action,
+            "no action required"
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -1256,7 +1383,13 @@ mod tests {
         let store = EvidenceStore::new(paths.clone());
         let source = write_source(&dir, b"trusted evidence");
         let evidence = store
-            .add_file("research", &source, source.to_str().unwrap(), "text/plain", &fixture_clock())
+            .add_file(
+                "research",
+                &source,
+                source.to_str().unwrap(),
+                "text/plain",
+                &fixture_clock(),
+            )
             .unwrap();
         (dir, paths, evidence, fixture_clock())
     }
@@ -1281,12 +1414,36 @@ mod tests {
     fn evidence_verify_metadata() {
         type MetadataCase = (&'static str, Box<dyn Fn(&mut Evidence)>, &'static str);
         let cases: Vec<MetadataCase> = vec![
-            ("id mismatch", Box::new(|e: &mut Evidence| e.id = "evd_cccccccccccccccccccccccccccccccc".into()), "metadata id"),
-            ("missing origin", Box::new(|e: &mut Evidence| e.origin = String::new()), "metadata origin"),
-            ("invalid capture time", Box::new(|e: &mut Evidence| e.captured_at = "not-a-time".into()), "captured_at"),
-            ("invalid media type", Box::new(|e: &mut Evidence| e.media_type = "not media".into()), "media_type"),
-            ("negative byte length", Box::new(|e: &mut Evidence| e.byte_length = -1), "byte_length"),
-            ("invalid sha256", Box::new(|e: &mut Evidence| e.sha256 = "not-a-sha256".into()), "sha256"),
+            (
+                "id mismatch",
+                Box::new(|e: &mut Evidence| e.id = "evd_cccccccccccccccccccccccccccccccc".into()),
+                "metadata id",
+            ),
+            (
+                "missing origin",
+                Box::new(|e: &mut Evidence| e.origin = String::new()),
+                "metadata origin",
+            ),
+            (
+                "invalid capture time",
+                Box::new(|e: &mut Evidence| e.captured_at = "not-a-time".into()),
+                "captured_at",
+            ),
+            (
+                "invalid media type",
+                Box::new(|e: &mut Evidence| e.media_type = "not media".into()),
+                "media_type",
+            ),
+            (
+                "negative byte length",
+                Box::new(|e: &mut Evidence| e.byte_length = -1),
+                "byte_length",
+            ),
+            (
+                "invalid sha256",
+                Box::new(|e: &mut Evidence| e.sha256 = "not-a-sha256".into()),
+                "sha256",
+            ),
         ];
         for (name, mutate, want) in cases {
             let (dir, paths, evidence, _clock) = verification_fixture("verifymetadata");
@@ -1309,7 +1466,10 @@ mod tests {
         unlock_file(&metadata_path);
         std::fs::write(&metadata_path, b"id: [\n").unwrap();
         let store = EvidenceStore::new(paths.clone());
-        let err = store.verify("research", &evidence.id).unwrap_err().to_string();
+        let err = store
+            .verify("research", &evidence.id)
+            .unwrap_err()
+            .to_string();
         assert!(err.contains("parse metadata"), "{err}");
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -1324,7 +1484,10 @@ mod tests {
             .join("source.yaml");
         std::fs::rename(&metadata_path, metadata_path.with_extension("yaml.missing")).unwrap();
         let store = EvidenceStore::new(paths.clone());
-        let err = store.verify("research", &evidence.id).unwrap_err().to_string();
+        let err = store
+            .verify("research", &evidence.id)
+            .unwrap_err()
+            .to_string();
         assert!(err.contains("source.yaml"), "{err}");
         let _ = std::fs::remove_dir_all(&dir);
 
@@ -1336,7 +1499,10 @@ mod tests {
             .join("raw");
         std::fs::rename(&raw_path, raw_path.with_extension("raw.missing")).unwrap();
         let store = EvidenceStore::new(paths.clone());
-        let err = store.verify("research", &evidence.id).unwrap_err().to_string();
+        let err = store
+            .verify("research", &evidence.id)
+            .unwrap_err()
+            .to_string();
         assert!(err.contains("raw"), "{err}");
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -1348,7 +1514,10 @@ mod tests {
         evidence.byte_length += 1;
         rewrite_metadata(&paths, &evidence.id, &evidence);
         let store = EvidenceStore::new(paths.clone());
-        let err = store.verify("research", &evidence.id).unwrap_err().to_string();
+        let err = store
+            .verify("research", &evidence.id)
+            .unwrap_err()
+            .to_string();
         assert!(err.contains("byte length"), "{err}");
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -1365,7 +1534,10 @@ mod tests {
         unlock_file(&raw_path);
         std::fs::write(&raw_path, "x".repeat(len)).unwrap();
         let store = EvidenceStore::new(paths.clone());
-        let err = store.verify("research", &evidence.id).unwrap_err().to_string();
+        let err = store
+            .verify("research", &evidence.id)
+            .unwrap_err()
+            .to_string();
         assert!(err.contains("sha256"), "{err}");
         let _ = std::fs::remove_dir_all(&dir);
 
@@ -1374,7 +1546,10 @@ mod tests {
         evidence.sha256 = "0".repeat(64);
         rewrite_metadata(&paths, &evidence.id, &evidence);
         let store = EvidenceStore::new(paths.clone());
-        let err = store.verify("research", &evidence.id).unwrap_err().to_string();
+        let err = store
+            .verify("research", &evidence.id)
+            .unwrap_err()
+            .to_string();
         assert!(err.contains("sha256"), "{err}");
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -1386,7 +1561,13 @@ mod tests {
         let store = EvidenceStore::new(paths.clone());
         let source = write_source(&dir, b"workspace scoped");
         let evidence = store
-            .add_file("research", &source, source.to_str().unwrap(), "text/plain", &fixture_clock())
+            .add_file(
+                "research",
+                &source,
+                source.to_str().unwrap(),
+                "text/plain",
+                &fixture_clock(),
+            )
             .unwrap();
         let mut validator = EvidenceValidator::new(paths.clone(), "personal").unwrap();
         let err = validator.verify(&evidence.id).unwrap_err().to_string();
@@ -1408,21 +1589,27 @@ mod tests {
             .join("raw");
         unlock_file(&raw_path);
         std::fs::write(&raw_path, "x".repeat(evidence.byte_length as usize)).unwrap();
-        validator.verify(&evidence.id).expect("cached verify must succeed");
+        validator
+            .verify(&evidence.id)
+            .expect("cached verify must succeed");
         assert_eq!(validator.verify_count(&evidence.id), 1);
 
         let mut fresh = EvidenceValidator::new(paths.clone(), "research").unwrap();
-        assert!(fresh.verify(&evidence.id).is_err(), "fresh verify must detect the tamper");
+        assert!(
+            fresh.verify(&evidence.id).is_err(),
+            "fresh verify must detect the tamper"
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
     fn evidence_metadata_fixture_round_trips_byte_identically() {
         let contents = std::fs::read(
-            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/evidence-source.yaml"),
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("tests/fixtures/evidence-source.yaml"),
         )
         .unwrap();
-        let evidence: Evidence = serde_yml::from_slice(&contents).unwrap();
+        let evidence: Evidence = serde_yaml::from_slice(&contents).unwrap();
         assert_eq!(yaml::emit(&evidence_to_yaml(&evidence)), contents);
         let _ = fixture("metafixture");
     }

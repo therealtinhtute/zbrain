@@ -15,8 +15,8 @@ use std::time::Instant;
 
 use chrono::{TimeZone, Utc};
 use zbrain::claims::{
-    claim_verification_digest, write_claim_atomic, Claim,
-    CLAIM_BASIS_OWNER, CLAIM_STATUS_APPROVED, OKF_CLAIM_TYPE,
+    claim_verification_digest, write_claim_atomic, Claim, CLAIM_BASIS_OWNER, CLAIM_STATUS_APPROVED,
+    OKF_CLAIM_TYPE,
 };
 use zbrain::clock::{rfc3339, FixedClock};
 use zbrain::config::ensure_config;
@@ -49,8 +49,7 @@ fn bench_claim(index: usize) -> Claim {
     };
     claim.verified_at = rfc3339(fixed_bench_now());
     claim.verified_by = "owner".into();
-    claim.verified_digest = claim_verification_digest(&claim)
-        .expect("bench claim digest");
+    claim.verified_digest = claim_verification_digest(&claim).expect("bench claim digest");
     claim
 }
 
@@ -104,7 +103,10 @@ fn ask_p95_bench() {
         )
         .expect("TrustedQuery");
         assert!(
-            !response.claims.as_ref().is_none_or(|claims| claims.is_empty()),
+            !response
+                .claims
+                .as_ref()
+                .is_none_or(|claims| claims.is_empty()),
             "TrustedQuery({i}) returned no results"
         );
         durations.push(start.elapsed());

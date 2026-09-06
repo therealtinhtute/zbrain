@@ -216,7 +216,11 @@ impl ChallengeStore {
     /// Creates a new owner-pinned challenge. It binds every listed input into
     /// the action digest and persists no token until the local owner ceremony
     /// releases one through grant.
-    pub fn prepare(&self, workspace: &str, prepare: ChallengePrepare) -> Result<PreparedChallenge, ClaimError> {
+    pub fn prepare(
+        &self,
+        workspace: &str,
+        prepare: ChallengePrepare,
+    ) -> Result<PreparedChallenge, ClaimError> {
         let _lock = acquire_workspace_lock(&self.paths, workspace, true).map_err(claim_message)?;
         self.prepare_unlocked(workspace, prepare)
     }
@@ -319,7 +323,9 @@ impl ChallengeStore {
         for entry in entries {
             let entry = entry.map_err(ClaimError::Io)?;
             let name = entry.file_name().to_string_lossy().to_string();
-            if !entry.file_type().map(|t| t.is_dir()).unwrap_or(false) || !is_safe_workspace_name(&name) {
+            if !entry.file_type().map(|t| t.is_dir()).unwrap_or(false)
+                || !is_safe_workspace_name(&name)
+            {
                 continue;
             }
             match self.read(&name, challenge_id) {
@@ -524,7 +530,11 @@ impl ChallengeStore {
         Ok(challenge)
     }
 
-    pub(crate) fn validate_token(&self, challenge: &Challenge, token: &str) -> Result<(), ClaimError> {
+    pub(crate) fn validate_token(
+        &self,
+        challenge: &Challenge,
+        token: &str,
+    ) -> Result<(), ClaimError> {
         if !challenge.granted {
             return Err(message(format!(
                 "challenge {} has not been owner-granted",
@@ -547,13 +557,14 @@ impl ChallengeStore {
         if now > challenge_expires_at {
             return Err(message(format!("challenge {} expired", challenge.id)));
         }
-        let token_expires_at = parse_expiry(&challenge.token_expires_at)
-            .map_err(|err| message(format!("challenge {} has invalid token expiry: {err}", challenge.id)))?;
-        if now > token_expires_at {
-            return Err(message(format!(
-                "challenge {} token expired",
+        let token_expires_at = parse_expiry(&challenge.token_expires_at).map_err(|err| {
+            message(format!(
+                "challenge {} has invalid token expiry: {err}",
                 challenge.id
-            )));
+            ))
+        })?;
+        if now > token_expires_at {
+            return Err(message(format!("challenge {} token expired", challenge.id)));
         }
         let want_hash = format!("sha256:{}", hex(&Sha256::digest(token.as_bytes())));
         if !constant_time_eq(want_hash.as_bytes(), challenge.token_sha256.as_bytes()) {
@@ -565,7 +576,11 @@ impl ChallengeStore {
         Ok(())
     }
 
-    fn validate_prepare(&self, workspace: &str, prepare: &ChallengePrepare) -> Result<(), ClaimError> {
+    fn validate_prepare(
+        &self,
+        workspace: &str,
+        prepare: &ChallengePrepare,
+    ) -> Result<(), ClaimError> {
         if !is_safe_workspace_name(workspace) {
             return Err(message("challenge workspace name is not safe"));
         }
@@ -587,7 +602,9 @@ impl ChallengeStore {
             return Ok(());
         }
         match prepare.operation.as_str() {
-            CHALLENGE_OPERATION_APPROVE | CHALLENGE_OPERATION_SUPERSEDE | CHALLENGE_OPERATION_REVOKE => {}
+            CHALLENGE_OPERATION_APPROVE
+            | CHALLENGE_OPERATION_SUPERSEDE
+            | CHALLENGE_OPERATION_REVOKE => {}
             other => {
                 return Err(message(format!(
                     "challenge operation {other:?} is not supported"
@@ -620,7 +637,9 @@ impl ChallengeStore {
                 )));
             }
         }
-        if prepare.operation == CHALLENGE_OPERATION_REVOKE && prepare.revoke_reason.trim().is_empty() {
+        if prepare.operation == CHALLENGE_OPERATION_REVOKE
+            && prepare.revoke_reason.trim().is_empty()
+        {
             return Err(message("revoke challenge requires a revoke reason"));
         }
         Ok(())
@@ -663,7 +682,9 @@ impl ChallengeStore {
             )));
         }
         match challenge.operation.as_str() {
-            CHALLENGE_OPERATION_APPROVE | CHALLENGE_OPERATION_SUPERSEDE | CHALLENGE_OPERATION_REVOKE => {}
+            CHALLENGE_OPERATION_APPROVE
+            | CHALLENGE_OPERATION_SUPERSEDE
+            | CHALLENGE_OPERATION_REVOKE => {}
             other => {
                 return Err(message(format!(
                     "challenge {id} operation {other:?} is not supported"
@@ -687,9 +708,8 @@ impl ChallengeStore {
                     "challenge {id} batch items exclude single-claim fields"
                 )));
             }
-            normalize_challenge_items(&challenge.items).map_err(|err| {
-                message(format!("challenge {id} batch items are invalid: {err}"))
-            })?;
+            normalize_challenge_items(&challenge.items)
+                .map_err(|err| message(format!("challenge {id} batch items are invalid: {err}")))?;
         } else if !challenge.granted_items.is_empty() || !challenge.skipped_items.is_empty() {
             return Err(message(format!(
                 "challenge {id} item decisions require bound batch items"
@@ -739,8 +759,11 @@ impl ChallengeStore {
                     "challenge {id} token_expires_at is required when granted"
                 )));
             }
-            let token_expires_at = parse_expiry(&challenge.token_expires_at)
-                .map_err(|err| message(format!("challenge {id} token_expires_at must be RFC3339: {err}")))?;
+            let token_expires_at = parse_expiry(&challenge.token_expires_at).map_err(|err| {
+                message(format!(
+                    "challenge {id} token_expires_at must be RFC3339: {err}"
+                ))
+            })?;
             if token_expires_at > challenge_expires_at {
                 return Err(message(format!(
                     "challenge {id} token expiry must not outlive challenge expiry"
@@ -751,8 +774,9 @@ impl ChallengeStore {
                     "challenge {id} granted_at is required when granted"
                 )));
             }
-            parse_expiry(&challenge.granted_at)
-                .map_err(|err| message(format!("challenge {id} granted_at must be RFC3339: {err}")))?;
+            parse_expiry(&challenge.granted_at).map_err(|err| {
+                message(format!("challenge {id} granted_at must be RFC3339: {err}"))
+            })?;
         } else {
             if !challenge.token_sha256.is_empty() || !challenge.token_expires_at.is_empty() {
                 return Err(message(format!(
@@ -779,9 +803,7 @@ impl ChallengeStore {
             items: challenge.items.clone(),
         });
         if expected != challenge.action_digest {
-            return Err(message(format!(
-                "challenge {id} action digest mismatch"
-            )));
+            return Err(message(format!("challenge {id} action digest mismatch")));
         }
         Ok(())
     }
@@ -825,12 +847,7 @@ impl ChallengeStore {
         let mut encoded = serde_json::to_vec_pretty(challenge)
             .map_err(|err| message(format!("marshal challenge {}: {err}", challenge.id)))?;
         encoded.push(b'\n');
-        write_atomic_json(
-            &path,
-            &encoded,
-            &challenge.id,
-            "challenge",
-        )
+        write_atomic_json(&path, &encoded, &challenge.id, "challenge")
     }
 }
 
@@ -893,7 +910,11 @@ fn validate_challenge_item_decisions(challenge: &Challenge) -> Result<(), ClaimE
         .map(|item| item.claim_id.as_str())
         .collect();
     let mut seen = std::collections::HashSet::new();
-    for decided in challenge.granted_items.iter().chain(challenge.skipped_items.iter()) {
+    for decided in challenge
+        .granted_items
+        .iter()
+        .chain(challenge.skipped_items.iter())
+    {
         if !item_index.contains(decided.as_str()) {
             return Err(message(format!(
                 "challenge {id} item decision {decided:?} is not bound"
@@ -923,7 +944,10 @@ pub(crate) fn is_challenge_token_hash(value: &str) -> bool {
     let Some(rest) = value.strip_prefix("sha256:") else {
         return false;
     };
-    rest.len() == 32 * 2 && rest.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+    rest.len() == 32 * 2
+        && rest
+            .bytes()
+            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
 }
 
 fn constant_time_eq(left: &[u8], right: &[u8]) -> bool {
@@ -937,13 +961,20 @@ fn constant_time_eq(left: &[u8], right: &[u8]) -> bool {
     diff == 0
 }
 
-fn validate_workspace_control_directory(root: &Path, directory: &Path) -> Result<(), std::io::Error> {
+fn validate_workspace_control_directory(
+    root: &Path,
+    directory: &Path,
+) -> Result<(), std::io::Error> {
     let info = std::fs::symlink_metadata(directory)?;
     if info.file_type().is_symlink() {
-        return Err(std::io::Error::other("workspace control directory must not be a symlink"));
+        return Err(std::io::Error::other(
+            "workspace control directory must not be a symlink",
+        ));
     }
     if !info.is_dir() {
-        return Err(std::io::Error::other("workspace control directory is not a directory"));
+        return Err(std::io::Error::other(
+            "workspace control directory is not a directory",
+        ));
     }
     let resolved = std::fs::canonicalize(directory)?;
     let resolved = crate::paths::absolute(&resolved)?;
@@ -1019,7 +1050,11 @@ pub(crate) fn write_atomic_json(
         .to_string();
     let mut temporary_path = None;
     for attempt in 0..64 {
-        let candidate = dir.join(format!(".{file_name}.{}.{}.tmp", std::process::id(), attempt));
+        let candidate = dir.join(format!(
+            ".{file_name}.{}.{}.tmp",
+            std::process::id(),
+            attempt
+        ));
         match std::fs::OpenOptions::new()
             .write(true)
             .create_new(true)
@@ -1042,7 +1077,9 @@ pub(crate) fn write_atomic_json(
         }
     }
     let Some(temporary_path) = temporary_path else {
-        return Err(message(format!("create {what} temporary file: exhausted attempts")));
+        return Err(message(format!(
+            "create {what} temporary file: exhausted attempts"
+        )));
     };
     let result = (|| -> Result<(), ClaimError> {
         std::fs::rename(&temporary_path, path)
@@ -1164,9 +1201,12 @@ impl ClaimStore {
             CHALLENGE_OPERATION_APPROVE | CHALLENGE_OPERATION_SUPERSEDE => {
                 self.prepare_approve_unlocked(workspace, &challenge.claim_id, options)?
             }
-            CHALLENGE_OPERATION_REVOKE => {
-                self.prepare_revoke_unlocked(workspace, &challenge.claim_id, &challenge.revoke_reason, options)?
-            }
+            CHALLENGE_OPERATION_REVOKE => self.prepare_revoke_unlocked(
+                workspace,
+                &challenge.claim_id,
+                &challenge.revoke_reason,
+                options,
+            )?,
             other => {
                 return Err(message(format!(
                     "challenge {} operation {other:?} is not supported",
@@ -1262,15 +1302,15 @@ impl ClaimStore {
         }
         challenge_store.consume_unlocked(workspace, &challenge.id, token)?;
         for (index, item) in validated {
-            let plan = match self.prepare_approve_unlocked(workspace, &item.claim_id, options.clone())
-            {
-                Ok(plan) => plan,
-                Err(err) => {
-                    results[index].status = BATCH_APPLY_ITEM_FAILED.to_string();
-                    results[index].error = err.to_string();
-                    continue;
-                }
-            };
+            let plan =
+                match self.prepare_approve_unlocked(workspace, &item.claim_id, options.clone()) {
+                    Ok(plan) => plan,
+                    Err(err) => {
+                        results[index].status = BATCH_APPLY_ITEM_FAILED.to_string();
+                        results[index].error = err.to_string();
+                        continue;
+                    }
+                };
             match self.commit_approve_unlocked(workspace, plan) {
                 Ok(claim) => {
                     results[index].status = BATCH_APPLY_ITEM_APPLIED.to_string();
@@ -1356,8 +1396,10 @@ impl ClaimStore {
                         "challenge {id} supersede action requires a superseded claim"
                     )));
                 }
-                let prior =
-                    self.first_superseded_verification_digest(&challenge.workspace, &expected_superseded)?;
+                let prior = self.first_superseded_verification_digest(
+                    &challenge.workspace,
+                    &expected_superseded,
+                )?;
                 if challenge.prior_verification_digest != prior {
                     return Err(message(format!(
                         "challenge {id} prior verification digest is stale"
@@ -1385,9 +1427,7 @@ impl ClaimStore {
                     )));
                 }
                 if challenge.revoke_reason.trim().is_empty() {
-                    return Err(message(format!(
-                        "challenge {id} revoke reason is required"
-                    )));
+                    return Err(message(format!("challenge {id} revoke reason is required")));
                 }
             }
             other => {
@@ -1558,7 +1598,11 @@ pub fn run_grant_batch(
             challenge.items.len(),
             item.claim_id
         );
-        let _ = writeln!(stderr, "canonical draft digest: {}", item.canonical_draft_digest);
+        let _ = writeln!(
+            stderr,
+            "canonical draft digest: {}",
+            item.canonical_draft_digest
+        );
         let confirm = prompt_line(
             stderr,
             prompt,
@@ -1605,11 +1649,11 @@ pub fn run_grant_batch(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::clock::FixedClock;
-    use crate::config::ensure_config;
     use crate::claims::{
         claim_verification_digest, CLAIM_BASIS_OWNER, CLAIM_STATUS_SUPERSEDED, OKF_CLAIM_TYPE,
     };
+    use crate::clock::FixedClock;
+    use crate::config::ensure_config;
     use crate::paths::Options;
     use crate::term::{ApprovalPrompt, ScriptedPrompt};
     use crate::workspace::create_workspace;
@@ -1622,7 +1666,8 @@ mod tests {
     }
 
     fn fixture(name: &str) -> (PathBuf, Paths, FixedClock) {
-        let dir = std::env::temp_dir().join(format!("zbrain-approval-{}-{name}", std::process::id()));
+        let dir =
+            std::env::temp_dir().join(format!("zbrain-approval-{}-{name}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         let paths = Paths::resolve(Options {
@@ -1743,22 +1788,36 @@ mod tests {
         let read = store.read("research", &challenge.id).unwrap();
         assert_eq!(read.action_digest, challenge.action_digest);
         assert!(read.token_sha256.is_empty() && read.token_expires_at.is_empty());
-        let err = store.verify("research", &challenge.id, "not-issued").unwrap_err();
-        assert!(err.to_string().contains("has not been owner-granted"), "{err}");
+        let err = store
+            .verify("research", &challenge.id, "not-issued")
+            .unwrap_err();
+        assert!(
+            err.to_string().contains("has not been owner-granted"),
+            "{err}"
+        );
 
         let granted = store.grant("research", &challenge.id).unwrap();
-        assert!(granted.challenge.granted && !granted.challenge.granted_at.is_empty() && !granted.token.is_empty());
+        assert!(
+            granted.challenge.granted
+                && !granted.challenge.granted_at.is_empty()
+                && !granted.token.is_empty()
+        );
         let token = granted.token.clone();
         store.verify("research", &challenge.id, &token).unwrap();
         let err = store.grant("research", &challenge.id).unwrap_err();
-        assert!(err.to_string().contains("already been owner-granted"), "{err}");
+        assert!(
+            err.to_string().contains("already been owner-granted"),
+            "{err}"
+        );
 
         store.consume("research", &challenge.id, &token).unwrap();
         assert!(store.consume("research", &challenge.id, &token).is_err());
         assert!(store.verify("research", &challenge.id, &token).is_err());
 
         let second = store.prepare("research", base_prepare("research")).unwrap();
-        assert!(store.verify("research", &second.challenge.id, "not-the-token").is_err());
+        assert!(store
+            .verify("research", &second.challenge.id, "not-the-token")
+            .is_err());
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -1768,14 +1827,17 @@ mod tests {
         let store = challenge_store(&paths, &clock);
         let prepared = store.prepare("research", base_prepare("research")).unwrap();
         let path = challenge_file(&paths, &prepared.challenge.id);
-        let before: Challenge =
-            serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        let before: Challenge = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
         assert!(before.token_sha256.is_empty() && before.token_expires_at.is_empty());
         let granted = challenge_store(&paths, &clock)
             .grant("research", &prepared.challenge.id)
             .unwrap();
         let granted_contents = String::from_utf8(std::fs::read(&path).unwrap()).unwrap();
-        assert!(!granted_contents.contains(&granted.token), "{}", granted.token);
+        assert!(
+            !granted_contents.contains(&granted.token),
+            "{}",
+            granted.token
+        );
         let want_hash = format!("sha256:{}", hex(&Sha256::digest(granted.token.as_bytes())));
         assert!(granted_contents.contains(&want_hash), "{granted_contents}");
         let _ = std::fs::remove_dir_all(&dir);
@@ -1791,13 +1853,46 @@ mod tests {
         let baseline = compute_challenge_action_digest(&base);
 
         let mutations: Vec<PrepareMutation> = vec![
-            ("workspace", Box::new(|c: &mut ChallengePrepare| c.workspace = "other".to_string())),
-            ("operation", Box::new(|c: &mut ChallengePrepare| c.operation = CHALLENGE_OPERATION_REVOKE.to_string())),
-            ("claim_id", Box::new(|c: &mut ChallengePrepare| c.claim_id = "clm_22222222222222222222222222222222".to_string())),
-            ("canonical_draft_digest", Box::new(|c: &mut ChallengePrepare| c.canonical_draft_digest = format!("sha256:{}", hex_repeat('c', 64)))),
-            ("superseded_ids", Box::new(|c: &mut ChallengePrepare| c.superseded_ids = vec!["clm_33333333333333333333333333333333".to_string()])),
-            ("prior_verification_digest", Box::new(|c: &mut ChallengePrepare| c.prior_verification_digest = format!("sha256:{}", hex_repeat('d', 64)))),
-            ("revoke_reason", Box::new(|c: &mut ChallengePrepare| c.revoke_reason = "different reason".to_string())),
+            (
+                "workspace",
+                Box::new(|c: &mut ChallengePrepare| c.workspace = "other".to_string()),
+            ),
+            (
+                "operation",
+                Box::new(|c: &mut ChallengePrepare| {
+                    c.operation = CHALLENGE_OPERATION_REVOKE.to_string()
+                }),
+            ),
+            (
+                "claim_id",
+                Box::new(|c: &mut ChallengePrepare| {
+                    c.claim_id = "clm_22222222222222222222222222222222".to_string()
+                }),
+            ),
+            (
+                "canonical_draft_digest",
+                Box::new(|c: &mut ChallengePrepare| {
+                    c.canonical_draft_digest = format!("sha256:{}", hex_repeat('c', 64))
+                }),
+            ),
+            (
+                "superseded_ids",
+                Box::new(|c: &mut ChallengePrepare| {
+                    c.superseded_ids = vec!["clm_33333333333333333333333333333333".to_string()]
+                }),
+            ),
+            (
+                "prior_verification_digest",
+                Box::new(|c: &mut ChallengePrepare| {
+                    c.prior_verification_digest = format!("sha256:{}", hex_repeat('d', 64))
+                }),
+            ),
+            (
+                "revoke_reason",
+                Box::new(|c: &mut ChallengePrepare| {
+                    c.revoke_reason = "different reason".to_string()
+                }),
+            ),
         ];
         for (name, mutate) in &mutations {
             let mut got = base.clone();
@@ -1827,7 +1922,9 @@ mod tests {
             paths.clone(),
             clock_at(base_time + challenge_token_lifetime()),
         );
-        at_token_expiry.verify("research", &prepared.challenge.id, &token).unwrap();
+        at_token_expiry
+            .verify("research", &prepared.challenge.id, &token)
+            .unwrap();
         let after_token_expiry = ChallengeStore::with_clock(
             paths.clone(),
             clock_at(base_time + challenge_token_lifetime() + chrono::Duration::microseconds(1)),
@@ -1845,11 +1942,9 @@ mod tests {
             .verify("research", &prepared.challenge.id, &token)
             .unwrap_err();
         assert!(err.to_string().contains("expired"), "{err}");
-        assert!(
-            after_expiry
-                .consume("research", &prepared.challenge.id, &token)
-                .is_err()
-        );
+        assert!(after_expiry
+            .consume("research", &prepared.challenge.id, &token)
+            .is_err());
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -1858,17 +1953,23 @@ mod tests {
         let (dir, paths, _clock) = fixture("grantttl");
         let base_time = Utc.with_ymd_and_hms(2026, 8, 20, 10, 0, 0).unwrap();
         let prepare_store = ChallengeStore::with_clock(paths.clone(), clock_at(base_time));
-        let prepared = prepare_store.prepare("research", base_prepare("research")).unwrap();
+        let prepared = prepare_store
+            .prepare("research", base_prepare("research"))
+            .unwrap();
 
         let grant_time = base_time + chrono::Duration::minutes(4);
         let grant_store = ChallengeStore::with_clock(paths.clone(), clock_at(grant_time));
-        let granted = grant_store.grant("research", &prepared.challenge.id).unwrap();
+        let granted = grant_store
+            .grant("research", &prepared.challenge.id)
+            .unwrap();
         assert_eq!(
             granted.challenge.token_expires_at,
             rfc3339(grant_time + challenge_token_lifetime())
         );
-        let before_prepare_ttl =
-            ChallengeStore::with_clock(paths.clone(), clock_at(base_time + chrono::Duration::minutes(6)));
+        let before_prepare_ttl = ChallengeStore::with_clock(
+            paths.clone(),
+            clock_at(base_time + chrono::Duration::minutes(6)),
+        );
         before_prepare_ttl
             .verify("research", &prepared.challenge.id, &granted.token)
             .unwrap();
@@ -1908,16 +2009,43 @@ mod tests {
         let store = challenge_store(&paths, &clock);
         let valid = base_prepare("research");
         let cases: Vec<PrepareMutation> = vec![
-            ("workspace mismatch", Box::new(|c: &mut ChallengePrepare| c.workspace = "other".to_string())),
-            ("unsupported operation", Box::new(|c: &mut ChallengePrepare| c.operation = "publish".to_string())),
-            ("invalid claim id", Box::new(|c: &mut ChallengePrepare| c.claim_id = "not-a-claim".to_string())),
-            ("invalid draft digest", Box::new(|c: &mut ChallengePrepare| c.canonical_draft_digest = "md5:abc".to_string())),
-            ("invalid prior digest", Box::new(|c: &mut ChallengePrepare| c.prior_verification_digest = "not-a-digest".to_string())),
-            ("invalid superseded id", Box::new(|c: &mut ChallengePrepare| c.superseded_ids = vec!["../escape".to_string()])),
-            ("revoke without reason", Box::new(|c: &mut ChallengePrepare| {
-                c.operation = CHALLENGE_OPERATION_REVOKE.to_string();
-                c.revoke_reason = String::new();
-            })),
+            (
+                "workspace mismatch",
+                Box::new(|c: &mut ChallengePrepare| c.workspace = "other".to_string()),
+            ),
+            (
+                "unsupported operation",
+                Box::new(|c: &mut ChallengePrepare| c.operation = "publish".to_string()),
+            ),
+            (
+                "invalid claim id",
+                Box::new(|c: &mut ChallengePrepare| c.claim_id = "not-a-claim".to_string()),
+            ),
+            (
+                "invalid draft digest",
+                Box::new(|c: &mut ChallengePrepare| {
+                    c.canonical_draft_digest = "md5:abc".to_string()
+                }),
+            ),
+            (
+                "invalid prior digest",
+                Box::new(|c: &mut ChallengePrepare| {
+                    c.prior_verification_digest = "not-a-digest".to_string()
+                }),
+            ),
+            (
+                "invalid superseded id",
+                Box::new(|c: &mut ChallengePrepare| {
+                    c.superseded_ids = vec!["../escape".to_string()]
+                }),
+            ),
+            (
+                "revoke without reason",
+                Box::new(|c: &mut ChallengePrepare| {
+                    c.operation = CHALLENGE_OPERATION_REVOKE.to_string();
+                    c.revoke_reason = String::new();
+                }),
+            ),
         ];
         for (name, mutate) in &cases {
             let mut candidate = valid.clone();
@@ -1967,7 +2095,11 @@ mod tests {
             c.token_expires_at = String::new();
         });
         let err = store.read("research", &prepared.challenge.id).unwrap_err();
-        assert!(err.to_string().contains("granted_at requires granted state"), "{err}");
+        assert!(
+            err.to_string()
+                .contains("granted_at requires granted state"),
+            "{err}"
+        );
         restore();
 
         write_tampered(&|c| {
@@ -1978,7 +2110,10 @@ mod tests {
             c.consumed = true;
         });
         let err = store.read("research", &prepared.challenge.id).unwrap_err();
-        assert!(err.to_string().contains("consumed without an owner grant"), "{err}");
+        assert!(
+            err.to_string().contains("consumed without an owner grant"),
+            "{err}"
+        );
         restore();
 
         write_tampered(&|c| c.operation = CHALLENGE_OPERATION_REVOKE.to_string());
@@ -1987,7 +2122,9 @@ mod tests {
         restore();
 
         write_tampered(&|c| c.token_sha256 = format!("sha256:{}", hex_repeat('0', 64)));
-        let err = store.verify("research", &prepared.challenge.id, &token).unwrap_err();
+        let err = store
+            .verify("research", &prepared.challenge.id, &token)
+            .unwrap_err();
         assert!(err.to_string().contains("token mismatch"), "{err}");
         restore();
 
@@ -2020,7 +2157,9 @@ mod tests {
             let store = Arc::clone(&store);
             let token = token.clone();
             let id = prepared.challenge.id.clone();
-            handles.push(std::thread::spawn(move || store.consume("research", &id, &token).is_ok()));
+            handles.push(std::thread::spawn(move || {
+                store.consume("research", &id, &token).is_ok()
+            }));
         }
         let mut winners = 0;
         for handle in handles {
@@ -2028,7 +2167,10 @@ mod tests {
                 winners += 1;
             }
         }
-        assert_eq!(winners, 1, "concurrent consume must have exactly one winner");
+        assert_eq!(
+            winners, 1,
+            "concurrent consume must have exactly one winner"
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -2085,8 +2227,15 @@ mod tests {
                 .unwrap();
             assert_eq!(item.canonical_draft_digest, want);
         }
-        assert_eq!(challenge.expires_at, rfc3339(fixed_now() + challenge_lifetime()));
-        assert!(challenge.token_sha256.is_empty() && challenge.token_expires_at.is_empty() && !challenge.granted);
+        assert_eq!(
+            challenge.expires_at,
+            rfc3339(fixed_now() + challenge_lifetime())
+        );
+        assert!(
+            challenge.token_sha256.is_empty()
+                && challenge.token_expires_at.is_empty()
+                && !challenge.granted
+        );
         let read = challenge_store.read("research", &challenge.id).unwrap();
         assert_eq!(read.action_digest, challenge.action_digest);
 
@@ -2119,12 +2268,18 @@ mod tests {
             )
             .unwrap();
         assert!(single.challenge.items.is_empty() && single.challenge.granted_items.is_empty());
-        let read_single = challenge_store.read("research", &single.challenge.id).unwrap();
+        let read_single = challenge_store
+            .read("research", &single.challenge.id)
+            .unwrap();
         assert_eq!(read_single.action_digest, single.challenge.action_digest);
 
-        assert!(store.prepare_batch_challenge("research", Vec::new()).is_err());
+        assert!(store
+            .prepare_batch_challenge("research", Vec::new())
+            .is_err());
         let duplicate = batch_items(&[ids[0].clone(), ids[0].clone()]);
-        assert!(store.prepare_batch_challenge("research", duplicate).is_err());
+        assert!(store
+            .prepare_batch_challenge("research", duplicate)
+            .is_err());
         let batch_of_one = store
             .prepare_batch_challenge("research", batch_items(&[ids[1].clone()]))
             .unwrap();
@@ -2150,7 +2305,11 @@ mod tests {
         let granted = challenge_store
             .grant_items("research", &prepared.challenge.id, &ids, &[])
             .unwrap();
-        assert!(!granted.token.is_empty() && granted.challenge.granted && !granted.challenge.granted_at.is_empty());
+        assert!(
+            !granted.token.is_empty()
+                && granted.challenge.granted
+                && !granted.challenge.granted_at.is_empty()
+        );
         assert_eq!(granted.challenge.granted_items, ids);
         assert!(granted.challenge.skipped_items.is_empty());
         challenge_store
@@ -2159,7 +2318,10 @@ mod tests {
         let err = challenge_store
             .grant_items("research", &prepared.challenge.id, &ids, &[])
             .unwrap_err();
-        assert!(err.to_string().contains("already been owner-granted"), "{err}");
+        assert!(
+            err.to_string().contains("already been owner-granted"),
+            "{err}"
+        );
 
         // skip one of three
         let prepared = prepare(&ids);
@@ -2172,9 +2334,14 @@ mod tests {
             )
             .unwrap();
         assert!(!granted.token.is_empty());
-        assert_eq!(granted.challenge.granted_items, vec![ids[0].clone(), ids[2].clone()]);
+        assert_eq!(
+            granted.challenge.granted_items,
+            vec![ids[0].clone(), ids[2].clone()]
+        );
         assert_eq!(granted.challenge.skipped_items, vec![ids[1].clone()]);
-        challenge_store.read("research", &prepared.challenge.id).unwrap();
+        challenge_store
+            .read("research", &prepared.challenge.id)
+            .unwrap();
 
         // partial grant issues exactly one token
         let prepared = prepare(&ids);
@@ -2188,7 +2355,10 @@ mod tests {
             .unwrap();
         assert_eq!(granted.token.len(), 64);
         assert_eq!(granted.challenge.granted_items, vec![ids[1].clone()]);
-        assert_eq!(granted.challenge.skipped_items, vec![ids[0].clone(), ids[2].clone()]);
+        assert_eq!(
+            granted.challenge.skipped_items,
+            vec![ids[0].clone(), ids[2].clone()]
+        );
 
         // skip all grants nothing
         let prepared = prepare(&ids);
@@ -2196,8 +2366,14 @@ mod tests {
             .grant_items("research", &prepared.challenge.id, &[], &ids)
             .unwrap_err();
         assert!(err.to_string().contains("granted no items"), "{err}");
-        let unchanged = challenge_store.read("research", &prepared.challenge.id).unwrap();
-        assert!(!unchanged.granted && unchanged.token_sha256.is_empty() && unchanged.skipped_items.is_empty());
+        let unchanged = challenge_store
+            .read("research", &prepared.challenge.id)
+            .unwrap();
+        assert!(
+            !unchanged.granted
+                && unchanged.token_sha256.is_empty()
+                && unchanged.skipped_items.is_empty()
+        );
 
         // decisions must partition the bound items
         let prepared = prepare(&ids);
@@ -2212,7 +2388,9 @@ mod tests {
                 &[ids[1].clone(), ids[2].clone()],
             )
             .is_err());
-        let unchanged = challenge_store.read("research", &prepared.challenge.id).unwrap();
+        let unchanged = challenge_store
+            .read("research", &prepared.challenge.id)
+            .unwrap();
         assert!(!unchanged.granted && unchanged.token_sha256.is_empty());
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -2239,7 +2417,12 @@ mod tests {
         let token = granted.token;
 
         let result = store
-            .apply_challenge_batch("research", &prepared.challenge.id, &token, ClaimMutationOptions::default())
+            .apply_challenge_batch(
+                "research",
+                &prepared.challenge.id,
+                &token,
+                ClaimMutationOptions::default(),
+            )
             .unwrap();
         assert_eq!(result.challenge_id, prepared.challenge.id);
         assert_eq!(result.items.len(), 3);
@@ -2249,7 +2432,11 @@ mod tests {
             (&ids[2], BATCH_APPLY_ITEM_APPLIED),
         ];
         for item in &result.items {
-            let want = want_status.iter().find(|(id, _)| *id == &item.claim_id).unwrap().1;
+            let want = want_status
+                .iter()
+                .find(|(id, _)| *id == &item.claim_id)
+                .unwrap()
+                .1;
             assert_eq!(item.status, want, "{}", item.claim_id);
             if item.status == BATCH_APPLY_ITEM_SKIPPED {
                 assert!(item.path.is_empty(), "{}", item.claim_id);
@@ -2262,11 +2449,18 @@ mod tests {
         let skipped_claim = store.read("research", &ids[1]).unwrap();
         assert_eq!(skipped_claim.status, CLAIM_STATUS_DRAFT);
         assert!(skipped_claim.transitions.is_empty());
-        let consumed = challenge_store.read("research", &prepared.challenge.id).unwrap();
+        let consumed = challenge_store
+            .read("research", &prepared.challenge.id)
+            .unwrap();
         assert!(consumed.consumed);
 
         let err = store
-            .apply_challenge_batch("research", &prepared.challenge.id, &token, ClaimMutationOptions::default())
+            .apply_challenge_batch(
+                "research",
+                &prepared.challenge.id,
+                &token,
+                ClaimMutationOptions::default(),
+            )
             .unwrap_err();
         assert!(err.to_string().contains("already consumed"), "{err}");
 
@@ -2274,9 +2468,17 @@ mod tests {
             .prepare_batch_challenge("research", batch_items(&[ids[1].clone()]))
             .unwrap();
         let err = store
-            .apply_challenge_batch("research", &candidate.challenge.id, "not-issued", ClaimMutationOptions::default())
+            .apply_challenge_batch(
+                "research",
+                &candidate.challenge.id,
+                "not-issued",
+                ClaimMutationOptions::default(),
+            )
             .unwrap_err();
-        assert!(err.to_string().contains("has not been owner-granted"), "{err}");
+        assert!(
+            err.to_string().contains("has not been owner-granted"),
+            "{err}"
+        );
         let still_draft = store.read("research", &ids[1]).unwrap();
         assert_eq!(still_draft.status, CLAIM_STATUS_DRAFT);
         let _ = std::fs::remove_dir_all(&dir);
@@ -2301,7 +2503,12 @@ mod tests {
         store.write_draft("research", changed).unwrap();
 
         let result = store
-            .apply_challenge_batch("research", &prepared.challenge.id, &granted.token, ClaimMutationOptions::default())
+            .apply_challenge_batch(
+                "research",
+                &prepared.challenge.id,
+                &granted.token,
+                ClaimMutationOptions::default(),
+            )
             .unwrap();
         let mut statuses = std::collections::HashMap::new();
         for item in &result.items {
@@ -2343,7 +2550,12 @@ mod tests {
             .unwrap();
 
         let err = store
-            .apply_challenge_batch("research", &prepared.challenge.id, "not-the-token", ClaimMutationOptions::default())
+            .apply_challenge_batch(
+                "research",
+                &prepared.challenge.id,
+                "not-the-token",
+                ClaimMutationOptions::default(),
+            )
             .unwrap_err();
         assert!(err.to_string().contains("token mismatch"), "{err}");
         for id in &ids {
@@ -2359,7 +2571,12 @@ mod tests {
             clock_at(fixed_now() + challenge_lifetime() + chrono::Duration::microseconds(1)),
         );
         let err = expired_store
-            .apply_challenge_batch("research", &prepared.challenge.id, &granted.token, ClaimMutationOptions::default())
+            .apply_challenge_batch(
+                "research",
+                &prepared.challenge.id,
+                &granted.token,
+                ClaimMutationOptions::default(),
+            )
             .unwrap_err();
         assert!(err.to_string().contains("expired"), "{err}");
         for id in &ids {
@@ -2390,19 +2607,34 @@ mod tests {
         let baseline = compute_challenge_action_digest(&base);
         assert!(baseline.starts_with("sha256:challenge-v1:"));
         let mutations: Vec<PrepareMutation> = vec![
-            ("item_digest", Box::new(|c: &mut ChallengePrepare| {
-                c.items[1].canonical_draft_digest = format!("sha256:{}", hex_repeat('c', 64));
-            })),
-            ("item_claim", Box::new(|c: &mut ChallengePrepare| {
-                c.items[1].claim_id = "clm_22222222222222222222222222222222".to_string();
-            })),
-            ("item_order", Box::new(|c: &mut ChallengePrepare| {
-                c.items = vec![items[1].clone(), items[0].clone()];
-            })),
-            ("item_count", Box::new(|c: &mut ChallengePrepare| {
-                c.items = items[..1].to_vec();
-            })),
-            ("workspace", Box::new(|c: &mut ChallengePrepare| c.workspace = "other".to_string())),
+            (
+                "item_digest",
+                Box::new(|c: &mut ChallengePrepare| {
+                    c.items[1].canonical_draft_digest = format!("sha256:{}", hex_repeat('c', 64));
+                }),
+            ),
+            (
+                "item_claim",
+                Box::new(|c: &mut ChallengePrepare| {
+                    c.items[1].claim_id = "clm_22222222222222222222222222222222".to_string();
+                }),
+            ),
+            (
+                "item_order",
+                Box::new(|c: &mut ChallengePrepare| {
+                    c.items = vec![items[1].clone(), items[0].clone()];
+                }),
+            ),
+            (
+                "item_count",
+                Box::new(|c: &mut ChallengePrepare| {
+                    c.items = items[..1].to_vec();
+                }),
+            ),
+            (
+                "workspace",
+                Box::new(|c: &mut ChallengePrepare| c.workspace = "other".to_string()),
+            ),
         ];
         for (name, mutate) in &mutations {
             let mut got = base.clone();
@@ -2420,7 +2652,10 @@ mod tests {
             canonical_draft_digest: items[0].canonical_draft_digest.clone(),
             ..ChallengePrepare::default()
         });
-        assert_ne!(single, baseline, "batch digest collides with the single-claim digest shape");
+        assert_ne!(
+            single, baseline,
+            "batch digest collides with the single-claim digest shape"
+        );
     }
 
     // -- Challenge-gated lifecycle (claim_store_test.go) --------------------
@@ -2443,9 +2678,17 @@ mod tests {
             )
             .unwrap();
         let err = store
-            .apply_challenge("research", &prepared.challenge.id, "not-issued", ClaimMutationOptions::default())
+            .apply_challenge(
+                "research",
+                &prepared.challenge.id,
+                "not-issued",
+                ClaimMutationOptions::default(),
+            )
             .unwrap_err();
-        assert!(err.to_string().contains("has not been owner-granted"), "{err}");
+        assert!(
+            err.to_string().contains("has not been owner-granted"),
+            "{err}"
+        );
         let unchanged = store.read("research", &claim.id).unwrap();
         assert_eq!(unchanged.status, CLAIM_STATUS_DRAFT);
         assert!(unchanged.verified_digest.is_empty() && unchanged.transitions.is_empty());
@@ -2473,7 +2716,12 @@ mod tests {
         let got = approved.transitions[0].authorization.as_ref().unwrap();
         assert_eq!(got.challenge_id, prepared.challenge.id);
         let err = store
-            .apply_challenge("research", &prepared.challenge.id, &token, ClaimMutationOptions::default())
+            .apply_challenge(
+                "research",
+                &prepared.challenge.id,
+                &token,
+                ClaimMutationOptions::default(),
+            )
             .unwrap_err();
         assert!(err.to_string().contains("already consumed"), "{err}");
         let _ = std::fs::remove_dir_all(&dir);
@@ -2486,7 +2734,8 @@ mod tests {
         let old = valid_store_claim("clm_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", CLAIM_BASIS_OWNER);
         store.write_draft("research", old.clone()).unwrap();
         let old_approved = store.approve("research", &old.id).unwrap();
-        let replacement = valid_store_claim("clm_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", CLAIM_BASIS_OWNER);
+        let replacement =
+            valid_store_claim("clm_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", CLAIM_BASIS_OWNER);
         let replacement = store
             .write_superseding_draft("research", &old_approved.id, replacement)
             .unwrap();
@@ -2524,7 +2773,10 @@ mod tests {
             )
             .unwrap();
         assert_eq!(superseded.status, CLAIM_STATUS_APPROVED);
-        assert_eq!(superseded.transitions[0].kind, crate::claims::CLAIM_TRANSITION_SUPERSEDE);
+        assert_eq!(
+            superseded.transitions[0].kind,
+            crate::claims::CLAIM_TRANSITION_SUPERSEDE
+        );
         let old_after = store.read("research", &old.id).unwrap();
         assert_eq!(old_after.status, CLAIM_STATUS_SUPERSEDED);
         let got = old_after.transitions[1].authorization.as_ref().unwrap();
@@ -2564,7 +2816,13 @@ mod tests {
             )
             .unwrap();
         assert_eq!(revoked.status, crate::claims::CLAIM_STATUS_REVOKED);
-        let got = revoked.transitions.last().unwrap().authorization.as_ref().unwrap();
+        let got = revoked
+            .transitions
+            .last()
+            .unwrap()
+            .authorization
+            .as_ref()
+            .unwrap();
         assert_eq!(got.challenge_id, revoke_challenge.challenge.id);
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -2573,7 +2831,8 @@ mod tests {
     fn apply_challenge_rejects_stale_canonical_digest_before_consumption() {
         let (dir, paths, clock) = fixture("staledigest");
         let store = store(&paths, &clock);
-        let mut claim = valid_store_claim("clm_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", CLAIM_BASIS_OWNER);
+        let mut claim =
+            valid_store_claim("clm_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", CLAIM_BASIS_OWNER);
         store.write_draft("research", claim.clone()).unwrap();
         let digest = store
             .canonical_digest("research", &claim.id)
@@ -2598,9 +2857,17 @@ mod tests {
         claim.body = "Changed after challenge\n".to_string();
         store.write_draft("research", claim).unwrap();
         let err = store
-            .apply_challenge("research", &prepared.challenge.id, &token, ClaimMutationOptions::default())
+            .apply_challenge(
+                "research",
+                &prepared.challenge.id,
+                &token,
+                ClaimMutationOptions::default(),
+            )
             .unwrap_err();
-        assert!(err.to_string().contains("canonical draft digest is stale"), "{err}");
+        assert!(
+            err.to_string().contains("canonical draft digest is stale"),
+            "{err}"
+        );
         challenge_store(&paths, &clock)
             .verify("research", &prepared.challenge.id, &token)
             .unwrap();
@@ -2618,7 +2885,10 @@ mod tests {
             .challenge_path("../bad", "chg_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
             .is_err());
         assert!(!is_challenge_token_hash("sha256:zzzz"));
-        assert!(is_challenge_token_hash(&format!("sha256:{}", hex_repeat('a', 64))));
+        assert!(is_challenge_token_hash(&format!(
+            "sha256:{}",
+            hex_repeat('a', 64)
+        )));
 
         let workspace_root = validate_workspace(&paths, "research").unwrap();
         std::fs::create_dir_all(workspace_root.join(".zbrain")).unwrap();
@@ -2639,7 +2909,9 @@ mod tests {
             expires_at: rfc3339(fixed_now() + challenge_lifetime()),
             ..Challenge::default()
         };
-        assert!(cstore.write_challenge("research", &invalid_challenge).is_err());
+        assert!(cstore
+            .write_challenge("research", &invalid_challenge)
+            .is_err());
 
         let claim_store = ClaimStore::with_clock(paths.clone(), clock_at(fixed_now()));
         let claim = valid_store_claim("clm_ffffffffffffffffffffffffffffffff", CLAIM_BASIS_OWNER);
@@ -2685,33 +2957,65 @@ mod tests {
             .unwrap();
         let base = prepared.challenge.clone();
         let cases: Vec<ChallengeMutation> = vec![
-            ("bad schema", Box::new(|c: &mut Challenge| c.schema = "bad".to_string())),
-            ("bad id", Box::new(|c: &mut Challenge| c.id = "bad".to_string())),
-            ("workspace mismatch", Box::new(|c: &mut Challenge| c.workspace = "other".to_string())),
-            ("bad operation", Box::new(|c: &mut Challenge| c.operation = "bad".to_string())),
-            ("bad claim id", Box::new(|c: &mut Challenge| c.claim_id = "bad".to_string())),
-            ("bad expires", Box::new(|c: &mut Challenge| c.expires_at = "bad".to_string())),
-            ("consumed without granted", Box::new(|c: &mut Challenge| {
-                c.consumed = true;
-                c.granted = false;
-            })),
-            ("granted without token", Box::new(|c: &mut Challenge| {
-                c.granted = true;
-                c.token_sha256 = String::new();
-            })),
-            ("token hash bad", Box::new(|c: &mut Challenge| {
-                c.granted = true;
-                c.token_sha256 = "bad".to_string();
-                c.token_expires_at = base.token_expires_at.clone();
-                c.granted_at = base.granted_at.clone();
-            })),
-            ("action digest mismatch", Box::new(|c: &mut Challenge| c.action_digest = "sha256:bad".to_string())),
+            (
+                "bad schema",
+                Box::new(|c: &mut Challenge| c.schema = "bad".to_string()),
+            ),
+            (
+                "bad id",
+                Box::new(|c: &mut Challenge| c.id = "bad".to_string()),
+            ),
+            (
+                "workspace mismatch",
+                Box::new(|c: &mut Challenge| c.workspace = "other".to_string()),
+            ),
+            (
+                "bad operation",
+                Box::new(|c: &mut Challenge| c.operation = "bad".to_string()),
+            ),
+            (
+                "bad claim id",
+                Box::new(|c: &mut Challenge| c.claim_id = "bad".to_string()),
+            ),
+            (
+                "bad expires",
+                Box::new(|c: &mut Challenge| c.expires_at = "bad".to_string()),
+            ),
+            (
+                "consumed without granted",
+                Box::new(|c: &mut Challenge| {
+                    c.consumed = true;
+                    c.granted = false;
+                }),
+            ),
+            (
+                "granted without token",
+                Box::new(|c: &mut Challenge| {
+                    c.granted = true;
+                    c.token_sha256 = String::new();
+                }),
+            ),
+            (
+                "token hash bad",
+                Box::new(|c: &mut Challenge| {
+                    c.granted = true;
+                    c.token_sha256 = "bad".to_string();
+                    c.token_expires_at = base.token_expires_at.clone();
+                    c.granted_at = base.granted_at.clone();
+                }),
+            ),
+            (
+                "action digest mismatch",
+                Box::new(|c: &mut Challenge| c.action_digest = "sha256:bad".to_string()),
+            ),
         ];
         for (name, mutate) in &cases {
             let mut candidate = base.clone();
             mutate(&mut candidate);
             assert!(
-                cstore.validate_challenge_record("research", &candidate).is_err(),
+                cstore
+                    .validate_challenge_record("research", &candidate)
+                    .is_err(),
                 "{name}"
             );
         }
@@ -2775,7 +3079,10 @@ mod tests {
         });
         assert!(result.is_ok(), "{result:?}");
         assert!(stderr.contains("action digest: "), "{stderr}");
-        assert!(stderr.contains("confirm the last 16 hex characters"), "{stderr}");
+        assert!(
+            stderr.contains("confirm the last 16 hex characters"),
+            "{stderr}"
+        );
         store.read("research", &challenge.id).unwrap();
 
         let prepared = store.prepare("research", base_prepare("research")).unwrap();
@@ -2803,20 +3110,23 @@ mod tests {
             .prepare_batch_challenge("research", batch_items(&ids))
             .unwrap();
         let challenge = prepared.challenge.clone();
-        let suffix_one = action_digest_suffix(&challenge.items[0].canonical_draft_digest).to_string();
-        let suffix_three = action_digest_suffix(&challenge.items[2].canonical_draft_digest).to_string();
+        let suffix_one =
+            action_digest_suffix(&challenge.items[0].canonical_draft_digest).to_string();
+        let suffix_three =
+            action_digest_suffix(&challenge.items[2].canonical_draft_digest).to_string();
 
-        let (stderr, result) = batch_walk(
-            &store,
-            &challenge,
-            &[&suffix_one, "skip", &suffix_three],
-        );
+        let (stderr, result) =
+            batch_walk(&store, &challenge, &[&suffix_one, "skip", &suffix_three]);
         let output = result.unwrap();
         assert_eq!(output.granted_items, vec![ids[0].clone(), ids[2].clone()]);
         assert_eq!(output.skipped_items, vec![ids[1].clone()]);
         assert!(output.token.is_some());
         assert!(
-            stderr.contains(&format!("item 1/{} claim {}", challenge.items.len(), ids[0])),
+            stderr.contains(&format!(
+                "item 1/{} claim {}",
+                challenge.items.len(),
+                ids[0]
+            )),
             "{stderr}"
         );
         assert!(stderr.contains("or type skip"), "{stderr}");
@@ -2866,7 +3176,10 @@ mod tests {
         let (dir, _paths, _clock) = fixture("grantexhaust");
         let mut prompt = ScriptedPrompt::new(&[]);
         let err = prompt.read_confirmation().unwrap_err();
-        assert!(err.to_string().contains("requires the confirmation input"), "{err}");
+        assert!(
+            err.to_string().contains("requires the confirmation input"),
+            "{err}"
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -2886,7 +3199,10 @@ mod tests {
         assert_eq!(shown.operation, CHALLENGE_OPERATION_APPROVE);
         assert_eq!(shown.workspace, "research");
         assert_eq!(shown.items.len(), 3);
-        assert_eq!(shown.items[0].digest_suffix, action_digest_suffix(&prepared.challenge.items[0].canonical_draft_digest));
+        assert_eq!(
+            shown.items[0].digest_suffix,
+            action_digest_suffix(&prepared.challenge.items[0].canonical_draft_digest)
+        );
 
         let single = store.prepare("research", base_prepare("research")).unwrap();
         let shown = approval_show(&single.challenge, "research");

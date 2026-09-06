@@ -60,7 +60,10 @@ impl From<BoundaryError> for ManifestError {
 }
 
 /// BuildTrustInputManifest hashes the canonical files that can affect trust.
-pub fn build_trust_input_manifest(paths: &Paths, workspace: &str) -> Result<TrustInputManifest, ManifestError> {
+pub fn build_trust_input_manifest(
+    paths: &Paths,
+    workspace: &str,
+) -> Result<TrustInputManifest, ManifestError> {
     let root = validate_workspace(paths, workspace)?;
 
     struct ManifestInput {
@@ -173,7 +176,11 @@ fn walk_trust_input_evidence(
         .collect();
     children.sort();
     for path in children {
-        let entry_name = path.file_name().unwrap_or_default().to_string_lossy().to_string();
+        let entry_name = path
+            .file_name()
+            .unwrap_or_default()
+            .to_string_lossy()
+            .to_string();
         let info = std::fs::symlink_metadata(&path)?;
         if info.file_type().is_symlink() {
             return Err(ManifestError::Message(format!(
@@ -225,7 +232,9 @@ fn validate_trust_input_directory(workspace_root: &Path, path: &Path) -> Result<
     let resolved = std::fs::canonicalize(path)?;
     let resolved = crate::paths::absolute(&resolved)?;
     if !path_within(workspace_root, &resolved) {
-        return Err(ManifestError::Message("resolved path escapes workspace".into()));
+        return Err(ManifestError::Message(
+            "resolved path escapes workspace".into(),
+        ));
     }
     if resolved != absolute {
         return Err(ManifestError::Message(format!(
@@ -251,7 +260,10 @@ fn hash_trust_input_file(path: &Path) -> Result<(i64, String), std::io::Error> {
         byte_length += read as i64;
     }
     let digest = hash.finalize();
-    Ok((byte_length, digest.iter().map(|b| format!("{b:02x}")).collect()))
+    Ok((
+        byte_length,
+        digest.iter().map(|b| format!("{b:02x}")).collect(),
+    ))
 }
 
 pub(crate) fn trust_input_manifest_digest(entries: &[TrustInput]) -> String {
@@ -261,10 +273,7 @@ pub(crate) fn trust_input_manifest_digest(entries: &[TrustInput]) -> String {
     let encoded = serde_json::to_vec(entries).unwrap_or_default();
     let mut hash = Sha256::new();
     hash.update(&encoded);
-    hash.finalize()
-        .iter()
-        .map(|b| format!("{b:02x}"))
-        .collect()
+    hash.finalize().iter().map(|b| format!("{b:02x}")).collect()
 }
 
 #[cfg(test)]
@@ -277,7 +286,8 @@ mod tests {
     use std::path::PathBuf;
 
     fn fixture(name: &str) -> (PathBuf, Paths) {
-        let dir = std::env::temp_dir().join(format!("zbrain-manifest-{}-{name}", std::process::id()));
+        let dir =
+            std::env::temp_dir().join(format!("zbrain-manifest-{}-{name}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         let paths = Paths::resolve(Options {
@@ -319,11 +329,31 @@ mod tests {
         let root = paths.workspaces_dir.join("research");
         let files: Vec<(&str, &[u8], &str)> = vec![
             ("wiki/axioms/axiom.md", b"axiom\n", TRUST_INPUT_KIND_CLAIM),
-            ("wiki/mental-models/model.md", b"model\n", TRUST_INPUT_KIND_CLAIM),
-            ("wiki/projects/nested/project.md", b"project\n", TRUST_INPUT_KIND_CLAIM),
-            ("wiki/decisions/decision.md", b"decision\n", TRUST_INPUT_KIND_CLAIM),
-            ("evidence/sources/evd_test/source.yaml", b"id: evd_test\n", TRUST_INPUT_KIND_EVIDENCE_METADATA),
-            ("evidence/sources/evd_test/raw", &[0x00, 0x01, 0x02], TRUST_INPUT_KIND_EVIDENCE_RAW),
+            (
+                "wiki/mental-models/model.md",
+                b"model\n",
+                TRUST_INPUT_KIND_CLAIM,
+            ),
+            (
+                "wiki/projects/nested/project.md",
+                b"project\n",
+                TRUST_INPUT_KIND_CLAIM,
+            ),
+            (
+                "wiki/decisions/decision.md",
+                b"decision\n",
+                TRUST_INPUT_KIND_CLAIM,
+            ),
+            (
+                "evidence/sources/evd_test/source.yaml",
+                b"id: evd_test\n",
+                TRUST_INPUT_KIND_EVIDENCE_METADATA,
+            ),
+            (
+                "evidence/sources/evd_test/raw",
+                &[0x00, 0x01, 0x02],
+                TRUST_INPUT_KIND_EVIDENCE_RAW,
+            ),
         ];
         for (relative, contents, _) in &files {
             write_manifest_file(&root, relative, contents);
@@ -368,7 +398,11 @@ mod tests {
         let before = build_trust_input_manifest(&paths, "research").unwrap();
         std::fs::write(&claim_path, b"two\n").unwrap();
         let after_replacement = build_trust_input_manifest(&paths, "research").unwrap();
-        let before_entry = before.entries.iter().find(|e| e.path == "wiki/projects/claim.md").unwrap();
+        let before_entry = before
+            .entries
+            .iter()
+            .find(|e| e.path == "wiki/projects/claim.md")
+            .unwrap();
         let replacement_entry = after_replacement
             .entries
             .iter()
@@ -392,9 +426,13 @@ mod tests {
     fn trust_input_manifest_rejects_unsafe_missing_and_covered_boundary_inputs() {
         let (dir, paths) = fixture("boundary");
         for workspace in ["../outside", "missing"] {
-            assert!(build_trust_input_manifest(&paths, workspace).is_err(), "{workspace}");
+            assert!(
+                build_trust_input_manifest(&paths, workspace).is_err(),
+                "{workspace}"
+            );
         }
-        std::os::unix::fs::symlink(std::env::temp_dir(), paths.workspaces_dir.join("linked")).unwrap();
+        std::os::unix::fs::symlink(std::env::temp_dir(), paths.workspaces_dir.join("linked"))
+            .unwrap();
         assert!(build_trust_input_manifest(&paths, "linked").is_err());
         let _ = std::fs::remove_dir_all(&dir);
 

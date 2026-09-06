@@ -30,7 +30,11 @@ enum ScanError {
 
 impl<R: Read> FrameReader<R> {
     pub fn new(inner: R) -> Self {
-        Self { inner, buf: Vec::with_capacity(4096), eof: false }
+        Self {
+            inner,
+            buf: Vec::with_capacity(4096),
+            eof: false,
+        }
     }
 
     fn fill(&mut self) -> Result<(), std::io::Error> {
@@ -90,9 +94,7 @@ impl<R: Read> FrameReader<R> {
                         if self.buf.is_empty() {
                             return Ok(None);
                         }
-                        return Err(TransportError(
-                            "unexpected end of JSON input".to_string(),
-                        ));
+                        return Err(TransportError("unexpected end of JSON input".to_string()));
                     }
                 }
                 Err(ScanError::Invalid(message)) => {
@@ -236,7 +238,10 @@ pub struct IoTransport<R: BufRead, W: Write> {
 
 impl<R: BufRead, W: Write> IoTransport<R, W> {
     pub fn new(reader: R, writer: W) -> Self {
-        Self { reader: FrameReader::new(reader), writer }
+        Self {
+            reader: FrameReader::new(reader),
+            writer,
+        }
     }
 
     pub fn into_writer(self) -> W {
@@ -290,7 +295,9 @@ pub struct SafeStderr {
 
 impl SafeStderr {
     pub fn new(writer: Box<dyn Write + Send>) -> Self {
-        Self { inner: Mutex::new(Some(writer)) }
+        Self {
+            inner: Mutex::new(Some(writer)),
+        }
     }
 
     /// Real stderr, as `mcp serve` uses.
@@ -326,11 +333,20 @@ pub struct MemoryClient {
 impl MemorySession {
     pub fn pair() -> (MemoryClient, MemorySession) {
         let shared = Arc::new(Mutex::new(MemorySessionShared::default()));
-        (MemoryClient { shared: Arc::clone(&shared) }, MemorySession { shared })
+        (
+            MemoryClient {
+                shared: Arc::clone(&shared),
+            },
+            MemorySession { shared },
+        )
     }
 
     pub fn responses(&self) -> Vec<String> {
-        self.shared.lock().expect("memory session").responses.clone()
+        self.shared
+            .lock()
+            .expect("memory session")
+            .responses
+            .clone()
     }
 }
 
@@ -342,8 +358,8 @@ impl Transport for MemorySession {
                 shared.pending.pop_front()
             };
             let Some(raw) = raw else { return Ok(None) };
-            let value: Value = serde_json::from_str(&raw)
-                .map_err(|error| TransportError(error.to_string()))?;
+            let value: Value =
+                serde_json::from_str(&raw).map_err(|error| TransportError(error.to_string()))?;
             match decode_frame(&value)? {
                 Frame::Request(request) => return Ok(Some(request)),
                 Frame::Response => continue,
@@ -439,17 +455,15 @@ mod tests {
 
     #[test]
     fn rejects_wrong_version_tag() {
-        let mut transport = MemoryTransport::with_requests(
-            r#"{"jsonrpc":"1.0","id":1,"method":"ping"}"#,
-        );
+        let mut transport =
+            MemoryTransport::with_requests(r#"{"jsonrpc":"1.0","id":1,"method":"ping"}"#);
         assert!(transport.read_request().is_err());
     }
 
     #[test]
     fn rejects_truncated_value() {
-        let mut transport = MemoryTransport::with_requests(
-            r#"{"jsonrpc":"2.0","id":1,"method":"pi"#,
-        );
+        let mut transport =
+            MemoryTransport::with_requests(r#"{"jsonrpc":"2.0","id":1,"method":"pi"#);
         assert!(transport.read_request().is_err());
     }
 
@@ -463,8 +477,13 @@ mod tests {
     #[test]
     fn write_frame_appends_newline() {
         let mut transport = MemoryTransport::with_requests(Vec::new());
-        transport.write_frame(r#"{"jsonrpc":"2.0","id":1,"result":{}}"#).unwrap();
-        assert_eq!(transport.responses(), b"{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{}}\n");
+        transport
+            .write_frame(r#"{"jsonrpc":"2.0","id":1,"result":{}}"#)
+            .unwrap();
+        assert_eq!(
+            transport.responses(),
+            b"{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{}}\n"
+        );
     }
 
     #[test]
@@ -479,7 +498,10 @@ mod tests {
                 json!({}),
             ))
             .unwrap();
-        assert_eq!(session.responses(), [r#"{"jsonrpc":"2.0","id":1,"result":{}}"#]);
+        assert_eq!(
+            session.responses(),
+            [r#"{"jsonrpc":"2.0","id":1,"result":{}}"#]
+        );
         assert!(session.read_request().unwrap().is_none());
     }
 

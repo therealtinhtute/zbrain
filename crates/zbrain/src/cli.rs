@@ -79,9 +79,9 @@ struct VecPrompt {
 
 impl ApprovalPrompt for VecPrompt {
     fn read_confirmation(&mut self) -> std::io::Result<String> {
-        self.lines.pop_front().ok_or_else(|| {
-            std::io::Error::other("approval grant requires the confirmation input")
-        })
+        self.lines
+            .pop_front()
+            .ok_or_else(|| std::io::Error::other("approval grant requires the confirmation input"))
     }
 }
 
@@ -179,8 +179,8 @@ impl App {
                 summary.catalog = None;
             }
         }
-        summary.embedding =
-            crate::embedder::EmbeddingStore::new(self.paths.clone()).summary(&workspace, summary.approved);
+        summary.embedding = crate::embedder::EmbeddingStore::new(self.paths.clone())
+            .summary(&workspace, summary.approved);
         if let Err(err) = idx.check_fresh(&workspace) {
             summary.rebuild_state = crate::index::REBUILD_STATUS_REJECTED.to_string();
             if summary.invalid == 0 {
@@ -265,7 +265,11 @@ impl App {
                 Ok(_) => {}
             }
         }
-        let status = if findings.is_empty() { "healthy" } else { "degraded" };
+        let status = if findings.is_empty() {
+            "healthy"
+        } else {
+            "degraded"
+        };
         let mut next_action = "zbrain reindex";
         if !freshness_failed && !structural.is_empty() {
             next_action = "review structural findings";
@@ -336,15 +340,21 @@ impl App {
             return Err(CliError::usage("usage: zbrain view"));
         }
         let mut server = crate::view::Server::new(self.paths.clone());
-        let url = server.listen().map_err(|err| CliError::failure(err.to_string()))?;
+        let url = server
+            .listen()
+            .map_err(|err| CliError::failure(err.to_string()))?;
         let _ = writeln!(self.stdout, "viewer: {url}");
         let _ = self.stdout.flush();
-        server.serve().map_err(|err| CliError::failure(err.to_string()))
+        server
+            .serve()
+            .map_err(|err| CliError::failure(err.to_string()))
     }
 
     fn run_approval(&mut self, args: &[String]) -> Result<(), CliError> {
         if args.is_empty() {
-            return Err(CliError::usage("approval requires a subcommand: show or grant"));
+            return Err(CliError::usage(
+                "approval requires a subcommand: show or grant",
+            ));
         }
         if help_requested(args) {
             self.print_approval_help();
@@ -369,7 +379,9 @@ impl App {
         }
         let parsed = parse_flags(args, NO_FLAGS)?;
         if parsed.rest.len() != 1 {
-            return Err(CliError::usage("usage: zbrain approval show <challenge-id>"));
+            return Err(CliError::usage(
+                "usage: zbrain approval show <challenge-id>",
+            ));
         }
         let (challenge, workspace) = self.find_challenge(&parsed.rest[0])?;
         write_json(&mut self.stdout, &approval_show(&challenge, &workspace))
@@ -382,20 +394,34 @@ impl App {
         }
         let parsed = parse_flags(args, NO_FLAGS)?;
         if parsed.rest.len() != 1 {
-            return Err(CliError::usage("usage: zbrain approval grant <challenge-id>"));
+            return Err(CliError::usage(
+                "usage: zbrain approval grant <challenge-id>",
+            ));
         }
         let (challenge, workspace) = self.find_challenge(&parsed.rest[0])?;
         let store =
             crate::approval::ChallengeStore::with_clock(self.paths.clone(), self.clock.clone());
         if !challenge.items.is_empty() {
             let mut prompt = self.make_prompt()?;
-            let output = run_grant_batch(&store, &challenge, &workspace, &mut self.stderr, &mut *prompt)
-                .map_err(|err| CliError::failure(err.to_string()))?;
+            let output = run_grant_batch(
+                &store,
+                &challenge,
+                &workspace,
+                &mut self.stderr,
+                &mut *prompt,
+            )
+            .map_err(|err| CliError::failure(err.to_string()))?;
             return write_json(&mut self.stdout, &output);
         }
         let mut prompt = self.make_prompt()?;
-        let output = run_grant(&store, &challenge, &workspace, &mut self.stderr, &mut *prompt)
-            .map_err(|err| CliError::failure(err.to_string()))?;
+        let output = run_grant(
+            &store,
+            &challenge,
+            &workspace,
+            &mut self.stderr,
+            &mut *prompt,
+        )
+        .map_err(|err| CliError::failure(err.to_string()))?;
         write_json(&mut self.stdout, &output)
     }
 
@@ -501,11 +527,14 @@ impl App {
         }
         let parsed = parse_flags(&filtered, &["workspace"])?;
         if !parsed.rest.is_empty() {
-            return Err(CliError::usage("usage: zbrain reindex [--workspace <name>] [--embed]"));
+            return Err(CliError::usage(
+                "usage: zbrain reindex [--workspace <name>] [--embed]",
+            ));
         }
         let workspace = self.resolve_workspace(parsed.single("workspace"))?;
-        let summary = rebuild_with_options(&self.paths, &workspace, RebuildOptions { embedding: embed })
-            .map_err(|err| CliError::failure(err.to_string()))?;
+        let summary =
+            rebuild_with_options(&self.paths, &workspace, RebuildOptions { embedding: embed })
+                .map_err(|err| CliError::failure(err.to_string()))?;
         #[derive(Serialize)]
         struct ReindexOutput {
             schema_version: u32,
@@ -523,7 +552,9 @@ impl App {
 
     fn run_evidence(&mut self, args: &[String]) -> Result<(), CliError> {
         if args.is_empty() {
-            return Err(CliError::usage("evidence requires a subcommand: add or check"));
+            return Err(CliError::usage(
+                "evidence requires a subcommand: add or check",
+            ));
         }
         if help_requested(args) {
             self.print_evidence_help();
@@ -535,7 +566,9 @@ impl App {
         match args[0].as_str() {
             "add" => self.run_evidence_add(&args[1..]),
             "check" => self.run_evidence_check(&args[1..]),
-            _ => Err(CliError::usage("evidence requires a subcommand: add or check")),
+            _ => Err(CliError::usage(
+                "evidence requires a subcommand: add or check",
+            )),
         }
     }
 
@@ -598,7 +631,9 @@ impl App {
         }
         let parsed = parse_flags(args, &["workspace"])?;
         if !parsed.rest.is_empty() {
-            return Err(CliError::usage("usage: zbrain evidence check [--workspace <name>]"));
+            return Err(CliError::usage(
+                "usage: zbrain evidence check [--workspace <name>]",
+            ));
         }
         let workspace = self.resolve_workspace(parsed.single("workspace"))?;
         let report = EvidenceStore::new(self.paths.clone())
@@ -638,7 +673,9 @@ impl App {
             "approve" => self.run_claim_approve(&args[1..]),
             "supersede" => self.run_claim_supersede(&args[1..]),
             "revoke" => self.run_claim_revoke(&args[1..]),
-            other => Err(CliError::failure(format!("unknown claim subcommand: {other}"))),
+            other => Err(CliError::failure(format!(
+                "unknown claim subcommand: {other}"
+            ))),
         }
     }
 
@@ -699,7 +736,9 @@ impl App {
         }
         let parsed = parse_flags(args, &["workspace"])?;
         if parsed.rest.len() != 1 {
-            return Err(CliError::usage("usage: zbrain claim approve <id> [--workspace <name>]"));
+            return Err(CliError::usage(
+                "usage: zbrain claim approve <id> [--workspace <name>]",
+            ));
         }
         let workspace = self.resolve_workspace(parsed.single("workspace"))?;
         IndexStore::new(self.paths.clone())
@@ -803,7 +842,9 @@ impl App {
         }
         let parsed = parse_flags(&args[1..], &["workspace"])?;
         if !parsed.rest.is_empty() {
-            return Err(CliError::usage("usage: zbrain migrate okf [--workspace <name>]"));
+            return Err(CliError::usage(
+                "usage: zbrain migrate okf [--workspace <name>]",
+            ));
         }
         let workspace = self.resolve_workspace(parsed.single("workspace"))?;
         let summary = ClaimStore::new(self.paths.clone())
@@ -860,7 +901,9 @@ impl App {
 
     fn run_workspace(&mut self, args: &[String]) -> Result<(), CliError> {
         if args.is_empty() {
-            return Err(CliError::usage("workspace requires a subcommand: create or current"));
+            return Err(CliError::usage(
+                "workspace requires a subcommand: create or current",
+            ));
         }
         if help_requested(args) {
             self.print_workspace_help();
@@ -902,7 +945,9 @@ impl App {
                     .map_err(|err| CliError::failure(err.to_string()))?;
                 Ok(())
             }
-            other => Err(CliError::failure(format!("unknown workspace subcommand: {other}"))),
+            other => Err(CliError::failure(format!(
+                "unknown workspace subcommand: {other}"
+            ))),
         }
     }
 
@@ -1238,14 +1283,16 @@ impl App {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::approval::{ChallengeItem, ChallengePrepare, ChallengeStore, CHALLENGE_OPERATION_APPROVE};
+    use crate::approval::{
+        ChallengeItem, ChallengePrepare, ChallengeStore, CHALLENGE_OPERATION_APPROVE,
+    };
     use crate::claims::{CLAIM_BASIS_OWNER, CLAIM_STATUS_APPROVED, OKF_CLAIM_TYPE};
     use crate::paths::Options;
     use chrono::{TimeZone, Utc};
+    use std::cell::RefCell;
     use std::io::Cursor;
     use std::path::PathBuf;
     use std::rc::Rc;
-    use std::cell::RefCell;
 
     #[derive(Clone, Default)]
     struct SharedOut(Rc<RefCell<Vec<u8>>>);
@@ -1294,7 +1341,14 @@ mod tests {
                 Utc.with_ymd_and_hms(2026, 7, 29, 0, 0, 0).unwrap(),
             )),
         };
-        (app, Fixture { _dir: dir, out, err })
+        (
+            app,
+            Fixture {
+                _dir: dir,
+                out,
+                err,
+            },
+        )
     }
 
     fn args(list: &[&str]) -> Vec<String> {
@@ -1326,7 +1380,9 @@ mod tests {
         let out = run_ok(
             app,
             fix,
-            &["claim", "draft", "--tier", "projects", "--title", title, "--basis", "owner"],
+            &[
+                "claim", "draft", "--tier", "projects", "--title", title, "--basis", "owner",
+            ],
         );
         let parsed: serde_json::Value = serde_json::from_str(&out).unwrap();
         parsed["id"].as_str().unwrap().to_string()
@@ -1375,10 +1431,14 @@ mod tests {
             &mut app,
             &fix,
             &[
-                "evidence", "add",
-                "--file", source.to_str().unwrap(),
-                "--origin", "file://source.txt",
-                "--media-type", "text/plain",
+                "evidence",
+                "add",
+                "--file",
+                source.to_str().unwrap(),
+                "--origin",
+                "file://source.txt",
+                "--media-type",
+                "text/plain",
             ],
         );
         let parsed: serde_json::Value = serde_json::from_str(&out).unwrap();
@@ -1405,16 +1465,35 @@ mod tests {
         let out = run_ok(
             &mut app,
             &fix,
-            &["claim", "supersede", &id, "--tier", "projects", "--title", "Replacement", "--basis", "owner"],
+            &[
+                "claim",
+                "supersede",
+                &id,
+                "--tier",
+                "projects",
+                "--title",
+                "Replacement",
+                "--basis",
+                "owner",
+            ],
         );
-        let replacement: String =
-            serde_json::from_str::<serde_json::Value>(&out).unwrap()["id"].as_str().unwrap().to_string();
+        let replacement: String = serde_json::from_str::<serde_json::Value>(&out).unwrap()["id"]
+            .as_str()
+            .unwrap()
+            .to_string();
         run_ok(&mut app, &fix, &["claim", "approve", &replacement]);
-        run_ok(&mut app, &fix, &["claim", "revoke", &replacement, "--reason", "withdrawn"]);
+        run_ok(
+            &mut app,
+            &fix,
+            &["claim", "revoke", &replacement, "--reason", "withdrawn"],
+        );
 
         let store = ClaimStore::new(app.paths.clone());
         assert_eq!(store.read("research", &id).unwrap().status, "superseded");
-        assert_eq!(store.read("research", &replacement).unwrap().status, "revoked");
+        assert_eq!(
+            store.read("research", &replacement).unwrap().status,
+            "revoked"
+        );
     }
 
     #[test]
@@ -1449,7 +1528,10 @@ mod tests {
         setup_research(&mut app, &fix);
         run_ok(&mut app, &fix, &["reindex"]);
         let out = run_ok(&mut app, &fix, &["doctor"]);
-        assert_eq!(serde_json::from_str::<serde_json::Value>(&out).unwrap()["status"], "healthy");
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&out).unwrap()["status"],
+            "healthy"
+        );
         draft_id(&mut app, &fix, "Dirty Probe", "dirty body\n");
         let err = run(&mut app, &fix, &["doctor"]).unwrap_err();
         assert_eq!(err.exit_code(), 2);
@@ -1478,26 +1560,42 @@ mod tests {
             )
             .unwrap();
 
-        let out = run_ok(&mut app, &fix, &["approval", "show", &prepared.challenge.id]);
+        let out = run_ok(
+            &mut app,
+            &fix,
+            &["approval", "show", &prepared.challenge.id],
+        );
         let shown: serde_json::Value = serde_json::from_str(&out).unwrap();
-        assert_eq!(shown["challenge_id"], serde_json::json!(prepared.challenge.id));
+        assert_eq!(
+            shown["challenge_id"],
+            serde_json::json!(prepared.challenge.id)
+        );
         assert_eq!(shown["operation"], "approve");
 
-        let suffix = crate::approval::action_digest_suffix(&prepared.challenge.action_digest).to_string();
+        let suffix =
+            crate::approval::action_digest_suffix(&prepared.challenge.action_digest).to_string();
         app.prompt = PromptSource::Scripted(vec![suffix]);
-        let out = run_ok(&mut app, &fix, &["approval", "grant", &prepared.challenge.id]);
+        let out = run_ok(
+            &mut app,
+            &fix,
+            &["approval", "grant", &prepared.challenge.id],
+        );
         let granted: serde_json::Value = serde_json::from_str(&out).unwrap();
         let token = granted["token"].as_str().unwrap().to_string();
         assert!(!token.is_empty());
 
         let approved = store
-            .apply_challenge("research", &prepared.challenge.id, &token, Default::default())
+            .apply_challenge(
+                "research",
+                &prepared.challenge.id,
+                &token,
+                Default::default(),
+            )
             .unwrap();
         assert_eq!(approved.status, CLAIM_STATUS_APPROVED);
 
         app.prompt = PromptSource::Scripted(vec!["0000000000000000".to_string()]);
-        let challenge_store =
-            ChallengeStore::with_clock(app.paths.clone(), app.clock.clone());
+        let challenge_store = ChallengeStore::with_clock(app.paths.clone(), app.clock.clone());
         let second = challenge_store
             .prepare(
                 "research",
@@ -1518,8 +1616,12 @@ mod tests {
         let (mut app, fix) = fixture();
         setup_research(&mut app, &fix);
         app.prompt = PromptSource::Stdin;
-        let err = run(&mut app, &fix, &["approval", "grant", "chg_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"])
-            .unwrap_err();
+        let err = run(
+            &mut app,
+            &fix,
+            &["approval", "grant", "chg_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"],
+        )
+        .unwrap_err();
         // Either the challenge is missing or stdin is not a TTY; a piped test
         // process must never reach an interactive read.
         assert!(
@@ -1542,20 +1644,29 @@ mod tests {
             .prepare_batch_challenge(
                 "research",
                 ids.iter()
-                    .map(|id| ChallengeItem { claim_id: id.clone(), ..ChallengeItem::default() })
+                    .map(|id| ChallengeItem {
+                        claim_id: id.clone(),
+                        ..ChallengeItem::default()
+                    })
                     .collect(),
             )
             .unwrap();
         let suffix_of = |claim_id: &str| {
             store
                 .canonical_digest("research", claim_id)
-                .map(|(_, digest)| {
-                    crate::approval::action_digest_suffix(&digest).to_string()
-                })
+                .map(|(_, digest)| crate::approval::action_digest_suffix(&digest).to_string())
                 .unwrap()
         };
-        app.prompt = PromptSource::Scripted(vec![suffix_of(&ids[0]), "skip".to_string(), suffix_of(&ids[2])]);
-        let out = run_ok(&mut app, &fix, &["approval", "grant", &prepared.challenge.id]);
+        app.prompt = PromptSource::Scripted(vec![
+            suffix_of(&ids[0]),
+            "skip".to_string(),
+            suffix_of(&ids[2]),
+        ]);
+        let out = run_ok(
+            &mut app,
+            &fix,
+            &["approval", "grant", &prepared.challenge.id],
+        );
         let granted: serde_json::Value = serde_json::from_str(&out).unwrap();
         assert!(!granted["token"].as_str().unwrap().is_empty());
         assert_eq!(granted["granted_items"].as_array().unwrap().len(), 2);
@@ -1568,13 +1679,21 @@ mod tests {
         let skip_prepared = store
             .prepare_batch_challenge(
                 "research",
-                skip_ids.iter()
-                    .map(|id| ChallengeItem { claim_id: id.clone(), ..ChallengeItem::default() })
+                skip_ids
+                    .iter()
+                    .map(|id| ChallengeItem {
+                        claim_id: id.clone(),
+                        ..ChallengeItem::default()
+                    })
                     .collect(),
             )
             .unwrap();
         app.prompt = PromptSource::Scripted(vec!["skip".to_string(), "skip".to_string()]);
-        let out = run_ok(&mut app, &fix, &["approval", "grant", &skip_prepared.challenge.id]);
+        let out = run_ok(
+            &mut app,
+            &fix,
+            &["approval", "grant", &skip_prepared.challenge.id],
+        );
         let skipped: serde_json::Value = serde_json::from_str(&out).unwrap();
         assert!(skipped.get("token").is_none() || skipped["token"].is_null());
         assert_eq!(skipped["skipped_items"].as_array().unwrap().len(), 2);
@@ -1609,7 +1728,11 @@ mod tests {
         assert_eq!(code(run(&mut app, &fix, &["mcp"])), 2);
         let (mut app, fix) = fresh();
         assert_eq!(
-            code(run(&mut app, &fix, &["claim", "approve", "clm_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"])),
+            code(run(
+                &mut app,
+                &fix,
+                &["claim", "approve", "clm_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"]
+            )),
             1
         );
         let (mut app, fix) = fresh();
@@ -1654,9 +1777,10 @@ mod tests {
                 },
             )
             .unwrap();
-        let challenge_store =
-            ChallengeStore::with_clock(app.paths.clone(), app.clock.clone());
-        let granted = challenge_store.grant("research", &prepared.challenge.id).unwrap();
+        let challenge_store = ChallengeStore::with_clock(app.paths.clone(), app.clock.clone());
+        let granted = challenge_store
+            .grant("research", &prepared.challenge.id)
+            .unwrap();
         assert!(!granted.token.is_empty());
     }
 }

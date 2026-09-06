@@ -52,10 +52,15 @@ impl std::fmt::Display for LockError {
             Self::Boundary(source) => write!(f, "{source}"),
             Self::Io(operation, source) => write!(f, "{operation}: {source}"),
             Self::NotRegularFile(path) => {
-                write!(f, "validate coordination lock: {path:?} is not a regular file")
+                write!(
+                    f,
+                    "validate coordination lock: {path:?} is not a regular file"
+                )
             }
             Self::Symlink(path) => write!(f, "{path:?} must not be a symlink"),
-            Self::OutsideWorkspace => write!(f, "workspace control directory resolves outside workspace"),
+            Self::OutsideWorkspace => {
+                write!(f, "workspace control directory resolves outside workspace")
+            }
         }
     }
 }
@@ -90,15 +95,18 @@ pub fn acquire_workspace_lock(
     }
 
     let c_path = CString::new(lock_path.as_os_str().as_encoded_bytes()).map_err(|source| {
-        LockError::Io("open coordination lock".into(), std::io::Error::new(
-            std::io::ErrorKind::InvalidInput,
-            source,
-        ))
+        LockError::Io(
+            "open coordination lock".into(),
+            std::io::Error::new(std::io::ErrorKind::InvalidInput, source),
+        )
     })?;
     let flags = libc::O_RDWR | libc::O_CREAT | libc::O_CLOEXEC | libc::O_NOFOLLOW;
     let fd = unsafe { libc::open(c_path.as_ptr(), flags, 0o600) };
     if fd < 0 {
-        return Err(LockError::Io("open coordination lock".into(), std::io::Error::last_os_error()));
+        return Err(LockError::Io(
+            "open coordination lock".into(),
+            std::io::Error::last_os_error(),
+        ));
     }
     let close_on_error = |fd: i32| unsafe { libc::close(fd) };
     let is_regular = fd_is_regular_file(fd);
@@ -112,13 +120,23 @@ pub fn acquire_workspace_lock(
     }
     if let Err(source) = set_permissions(&lock_path, 0o600) {
         close_on_error(fd);
-        return Err(LockError::Io("set coordination lock permissions".into(), source));
+        return Err(LockError::Io(
+            "set coordination lock permissions".into(),
+            source,
+        ));
     }
-    let mode = if exclusive { libc::LOCK_EX } else { libc::LOCK_SH };
+    let mode = if exclusive {
+        libc::LOCK_EX
+    } else {
+        libc::LOCK_SH
+    };
     let rc = unsafe { libc::flock(fd, mode) };
     if rc != 0 {
         close_on_error(fd);
-        return Err(LockError::Io("acquire coordination lock".into(), std::io::Error::last_os_error()));
+        return Err(LockError::Io(
+            "acquire coordination lock".into(),
+            std::io::Error::last_os_error(),
+        ));
     }
     let file = wrap_raw_fd(fd);
     Ok(WorkspaceLock { file })
@@ -174,9 +192,8 @@ fn workspace_control_path(
         }
     }
     let path = control_directory.join(name);
-    validate_workspace_control_file(&path).map_err(|err| {
-        BoundaryError::Io(std::io::Error::other(err.to_string()))
-    })?;
+    validate_workspace_control_file(&path)
+        .map_err(|err| BoundaryError::Io(std::io::Error::other(err.to_string())))?;
     Ok(path)
 }
 
@@ -244,10 +261,14 @@ fn validate_workspace_control_directory(
     }
     let info = std::fs::symlink_metadata(directory).map_err(ControlValidationError::Io)?;
     if info.file_type().is_symlink() {
-        return Err(ControlValidationError::Symlink(directory.display().to_string()));
+        return Err(ControlValidationError::Symlink(
+            directory.display().to_string(),
+        ));
     }
     if !info.is_dir() {
-        return Err(ControlValidationError::NotRegularFile(directory.display().to_string()));
+        return Err(ControlValidationError::NotRegularFile(
+            directory.display().to_string(),
+        ));
     }
     let resolved = std::fs::canonicalize(directory).map_err(ControlValidationError::Io)?;
     if !path_within(root, &resolved) {
@@ -266,7 +287,9 @@ fn validate_workspace_control_file(path: &Path) -> Result<(), ControlValidationE
         return Err(ControlValidationError::Symlink(path.display().to_string()));
     }
     if !info.is_file() {
-        return Err(ControlValidationError::NotRegularFile(path.display().to_string()));
+        return Err(ControlValidationError::NotRegularFile(
+            path.display().to_string(),
+        ));
     }
     let resolved = std::fs::canonicalize(path).map_err(ControlValidationError::Io)?;
     let absolute = crate::paths::absolute(path).map_err(ControlValidationError::Io)?;
@@ -296,10 +319,16 @@ impl std::fmt::Display for GenerationError {
             Self::CurrentRequired => write!(f, "generation state current is required"),
             Self::PublishedRequired => write!(f, "generation state published is required"),
             Self::ExtraFields => {
-                write!(f, "generation state must contain only current and published")
+                write!(
+                    f,
+                    "generation state must contain only current and published"
+                )
             }
             Self::PublishedNewer { published, current } => {
-                write!(f, "generation published {published} is newer than current {current}")
+                write!(
+                    f,
+                    "generation published {published} is newer than current {current}"
+                )
             }
             Self::Exhausted => write!(f, "workspace generation exhausted"),
             Self::Boundary(source) => write!(f, "{source}"),
@@ -331,8 +360,8 @@ pub fn read_workspace_generation(
 
 fn read_generation_file(path: &Path) -> Result<WorkspaceGeneration, GenerationError> {
     let contents = std::fs::read(path)?;
-    let value: serde_json::Map<String, serde_json::Value> =
-        serde_json::from_slice(&contents).map_err(|source| GenerationError::Decode(source.to_string()))?;
+    let value: serde_json::Map<String, serde_json::Value> = serde_json::from_slice(&contents)
+        .map_err(|source| GenerationError::Decode(source.to_string()))?;
     if value.len() != 2 {
         return Err(GenerationError::ExtraFields);
     }
@@ -365,36 +394,47 @@ pub fn write_workspace_generation(
 ) -> Result<(), GenerationError> {
     let root = validate_workspace(paths, workspace)?;
     let control_directory = root.join(WORKSPACE_CONTROL_DIRECTORY_NAME);
-    ensure_workspace_control_directory(&root, &control_directory).map_err(|err| {
-        GenerationError::Io(std::io::Error::other(err.to_string()))
-    })?;
+    ensure_workspace_control_directory(&root, &control_directory)
+        .map_err(|err| GenerationError::Io(std::io::Error::other(err.to_string())))?;
     let path = control_directory.join(GENERATION_FILE_NAME);
     write_generation_file(&path, state)
 }
 
-pub fn write_generation_file(path: &Path, state: WorkspaceGeneration) -> Result<(), GenerationError> {
+pub fn write_generation_file(
+    path: &Path,
+    state: WorkspaceGeneration,
+) -> Result<(), GenerationError> {
     if state.published > state.current {
         return Err(GenerationError::PublishedNewer {
             published: state.published,
             current: state.current,
         });
     }
-    validate_workspace_control_file(path).map_err(|err| {
-        GenerationError::Io(std::io::Error::other(err.to_string()))
-    })?;
-    let mut encoded =
-        serde_json::to_vec(&state).map_err(|source| GenerationError::Decode(format!("marshal generation state: {source}")))?;
+    validate_workspace_control_file(path)
+        .map_err(|err| GenerationError::Io(std::io::Error::other(err.to_string())))?;
+    let mut encoded = serde_json::to_vec(&state)
+        .map_err(|source| GenerationError::Decode(format!("marshal generation state: {source}")))?;
     encoded.push(b'\n');
-    let (temporary_path, mut temporary) = tempfile_in(path.parent().expect("generation file has parent"))?;
+    let (temporary_path, mut temporary) =
+        tempfile_in(path.parent().expect("generation file has parent"))?;
     let result = (|| -> Result<(), GenerationError> {
         temporary.write_all(&encoded).map_err(|source| {
-            GenerationError::Io(std::io::Error::new(source.kind(), format!("write generation state: {source}")))
+            GenerationError::Io(std::io::Error::new(
+                source.kind(),
+                format!("write generation state: {source}"),
+            ))
         })?;
         temporary.sync_all().map_err(|source| {
-            GenerationError::Io(std::io::Error::new(source.kind(), format!("sync generation state: {source}")))
+            GenerationError::Io(std::io::Error::new(
+                source.kind(),
+                format!("sync generation state: {source}"),
+            ))
         })?;
         std::fs::rename(&temporary_path, path).map_err(|source| {
-            GenerationError::Io(std::io::Error::new(source.kind(), format!("publish generation state: {source}")))
+            GenerationError::Io(std::io::Error::new(
+                source.kind(),
+                format!("publish generation state: {source}"),
+            ))
         })?;
         Ok(())
     })();
@@ -407,8 +447,16 @@ pub fn write_generation_file(path: &Path, state: WorkspaceGeneration) -> Result<
 fn tempfile_in(dir: &Path) -> Result<(PathBuf, File), GenerationError> {
     use std::os::unix::fs::OpenOptionsExt;
     for attempt in 0..64 {
-        let path = dir.join(format!(".generation.json.{}.{}.tmp", std::process::id(), attempt));
-        let open = std::fs::OpenOptions::new().write(true).create_new(true).mode(0o600).open(&path);
+        let path = dir.join(format!(
+            ".generation.json.{}.{}.tmp",
+            std::process::id(),
+            attempt
+        ));
+        let open = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .open(&path);
         match open {
             Ok(file) => return Ok((path, file)),
             Err(source) if source.kind() == std::io::ErrorKind::AlreadyExists => continue,
@@ -472,11 +520,9 @@ pub const WORKSPACE_GENERATION_HOOK_BEFORE_CANONICAL_WRITE: &str = "before-canon
 pub const WORKSPACE_GENERATION_HOOK_REBUILD_AFTER_SCAN: &str = "rebuild-after-scan";
 pub const WORKSPACE_GENERATION_HOOK_REBUILD_BEFORE_FRESHNESS_CAPTURE: &str =
     "rebuild-before-freshness-capture";
-pub const WORKSPACE_GENERATION_HOOK_REBUILD_BEFORE_PUBLICATION: &str =
-    "rebuild-before-publication";
+pub const WORKSPACE_GENERATION_HOOK_REBUILD_BEFORE_PUBLICATION: &str = "rebuild-before-publication";
 pub const WORKSPACE_GENERATION_HOOK_TRUSTED_QUERY_AFTER_LOCKING: &str =
     "trusted-query-after-locking";
-
 
 // ---------------------------------------------------------------------------
 // Canonical mutation barrier (port of beginCanonicalMutationUnlocked and the
@@ -560,18 +606,24 @@ fn validate_index_boundary_path(path: &Path, directory: bool) -> Result<(), std:
 pub(crate) fn validated_index_paths(paths: &Paths, workspace: &str) -> Result<(), GenerationError> {
     validate_workspace(paths, workspace)?;
     validate_index_boundary_path(&paths.indexes_dir, true).map_err(|err| {
-        GenerationError::Io(std::io::Error::other(format!("validate index directory: {err}")))
+        GenerationError::Io(std::io::Error::other(format!(
+            "validate index directory: {err}"
+        )))
     })?;
     for name in [format!("{workspace}.sqlite"), format!("{workspace}.dirty")] {
         validate_index_boundary_path(&paths.indexes_dir.join(&name), false).map_err(|err| {
-            GenerationError::Io(std::io::Error::other(format!("validate index path {:?}: {err}", name)))
+            GenerationError::Io(std::io::Error::other(format!(
+                "validate index path {:?}: {err}",
+                name
+            )))
         })?;
     }
     Ok(())
 }
 
 pub(crate) fn mark_dirty_unlocked(paths: &Paths, workspace: &str) -> Result<(), MutationError> {
-    validated_index_paths(paths, workspace).map_err(|err| MutationError::Message(err.to_string()))?;
+    validated_index_paths(paths, workspace)
+        .map_err(|err| MutationError::Message(err.to_string()))?;
     crate::paths::ensure_directory_mode(&paths.indexes_dir, crate::paths::RUNTIME_DIRECTORY_MODE)?;
     let dirty_path = paths.indexes_dir.join(format!("{workspace}.dirty"));
     std::fs::write(&dirty_path, b"dirty\n")?;
@@ -586,14 +638,17 @@ pub fn begin_canonical_mutation_unlocked(
     paths: &Paths,
     workspace: &str,
 ) -> Result<WorkspaceGeneration, MutationError> {
-    validated_index_paths(paths, workspace).map_err(|err| MutationError::Message(err.to_string()))?;
+    validated_index_paths(paths, workspace)
+        .map_err(|err| MutationError::Message(err.to_string()))?;
     let state = match read_workspace_generation(paths, workspace) {
         Ok(state) => state,
         Err(GenerationError::Io(source)) if source.kind() == std::io::ErrorKind::NotFound => {
             WorkspaceGeneration::default()
         }
         Err(GenerationError::Io(source)) => {
-            return Err(MutationError::Message(format!("read workspace generation: {source}")));
+            return Err(MutationError::Message(format!(
+                "read workspace generation: {source}"
+            )));
         }
         Err(err) => return Err(MutationError::Message(err.to_string())),
     };
@@ -607,9 +662,8 @@ pub fn begin_canonical_mutation_unlocked(
         current: state.current + 1,
         published: state.published,
     };
-    write_workspace_generation(paths, workspace, state).map_err(|err| {
-        MutationError::Message(format!("advance workspace generation: {err}"))
-    })?;
+    write_workspace_generation(paths, workspace, state)
+        .map_err(|err| MutationError::Message(format!("advance workspace generation: {err}")))?;
     Ok(state)
 }
 
@@ -675,11 +729,27 @@ mod tests {
         let script = format!(
             "import fcntl,sys\nf=open({lock_path:?},'r')\ntry:\n    fcntl.flock(f.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)\nexcept Exception:\n    sys.exit(3)\nsys.exit(0)\n"
         );
-        let blocked = std::process::Command::new("python3").arg("-c").arg(&script).output().unwrap();
-        assert_eq!(blocked.status.code(), Some(3), "child must be blocked while lock held");
+        let blocked = std::process::Command::new("python3")
+            .arg("-c")
+            .arg(&script)
+            .output()
+            .unwrap();
+        assert_eq!(
+            blocked.status.code(),
+            Some(3),
+            "child must be blocked while lock held"
+        );
         drop(holder);
-        let free = std::process::Command::new("python3").arg("-c").arg(&script).output().unwrap();
-        assert_eq!(free.status.code(), Some(0), "child takes lock after release");
+        let free = std::process::Command::new("python3")
+            .arg("-c")
+            .arg(&script)
+            .output()
+            .unwrap();
+        assert_eq!(
+            free.status.code(),
+            Some(0),
+            "child takes lock after release"
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -705,7 +775,8 @@ mod tests {
         std::os::unix::fs::symlink(&outside, root.join(WORKSPACE_CONTROL_DIRECTORY_NAME)).unwrap();
         let err = acquire_workspace_lock(&paths, "research", true).unwrap_err();
         assert!(
-            matches!(err, LockError::Symlink(_)) || matches!(err, LockError::Io(ref op, _) if op.contains("validate")),
+            matches!(err, LockError::Symlink(_))
+                || matches!(err, LockError::Io(ref op, _) if op.contains("validate")),
             "unexpected error: {err:?}"
         );
         let _ = std::fs::remove_dir_all(&dir);
@@ -719,7 +790,10 @@ mod tests {
         write_workspace_generation(
             &paths,
             "research",
-            WorkspaceGeneration { current: 5, published: 4 },
+            WorkspaceGeneration {
+                current: 5,
+                published: 4,
+            },
         )
         .unwrap();
         let read = read_workspace_generation(&paths, "research").unwrap();
@@ -728,7 +802,10 @@ mod tests {
         let err = write_workspace_generation(
             &paths,
             "research",
-            WorkspaceGeneration { current: 1, published: 2 },
+            WorkspaceGeneration {
+                current: 1,
+                published: 2,
+            },
         )
         .unwrap_err();
         assert!(matches!(err, GenerationError::PublishedNewer { .. }));

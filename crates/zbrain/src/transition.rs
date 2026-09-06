@@ -9,7 +9,8 @@ use sha2::{Digest as _, Sha256};
 
 use crate::boundary::{safe_relative_path, validate_workspace, BoundaryError};
 use crate::coordination::{
-    begin_canonical_mutation_unlocked, PENDING_TRANSITION_FILE_NAME, WORKSPACE_CONTROL_DIRECTORY_NAME,
+    begin_canonical_mutation_unlocked, PENDING_TRANSITION_FILE_NAME,
+    WORKSPACE_CONTROL_DIRECTORY_NAME,
 };
 use crate::paths::{ensure_file_mode, Paths, RUNTIME_METADATA_MODE};
 
@@ -116,8 +117,8 @@ pub fn write_pending_transition(
     workspace: &str,
     pending: PendingTransition,
 ) -> Result<(), TransitionError> {
-    let _lock = crate::coordination::acquire_workspace_lock(paths, workspace, true)
-        .map_err(message)?;
+    let _lock =
+        crate::coordination::acquire_workspace_lock(paths, workspace, true).map_err(message)?;
     write_pending_transition_unlocked(paths, workspace, pending)
 }
 
@@ -171,7 +172,9 @@ pub fn write_pending_transition_unlocked(
         }
     }
     let Some(temporary_path) = temporary_path else {
-        return Err(message("create pending transition temporary file: exhausted attempts"));
+        return Err(message(
+            "create pending transition temporary file: exhausted attempts",
+        ));
     };
     let result = (|| -> Result<(), TransitionError> {
         // os.Link fails when the destination exists, which makes the journal
@@ -190,8 +193,8 @@ pub fn read_pending_transition(
     paths: &Paths,
     workspace: &str,
 ) -> Result<PendingTransition, TransitionError> {
-    let _lock = crate::coordination::acquire_workspace_lock(paths, workspace, false)
-        .map_err(message)?;
+    let _lock =
+        crate::coordination::acquire_workspace_lock(paths, workspace, false).map_err(message)?;
     read_pending_transition_unlocked(paths, workspace)
 }
 
@@ -215,8 +218,8 @@ pub fn read_pending_transition_unlocked(
 
 /// CheckPendingTransition is read-only and blocks trust while a journal exists.
 pub fn check_pending_transition(paths: &Paths, workspace: &str) -> Result<(), TransitionError> {
-    let _lock = crate::coordination::acquire_workspace_lock(paths, workspace, false)
-        .map_err(message)?;
+    let _lock =
+        crate::coordination::acquire_workspace_lock(paths, workspace, false).map_err(message)?;
     check_pending_transition_unlocked(paths, workspace)
 }
 
@@ -241,8 +244,8 @@ pub fn recover_pending_transition_for_mutation(
     paths: &Paths,
     workspace: &str,
 ) -> Result<(), TransitionError> {
-    let _lock = crate::coordination::acquire_workspace_lock(paths, workspace, true)
-        .map_err(message)?;
+    let _lock =
+        crate::coordination::acquire_workspace_lock(paths, workspace, true).map_err(message)?;
     recover_pending_transition_for_mutation_unlocked(paths, workspace)
 }
 
@@ -273,8 +276,8 @@ pub fn recover_pending_transition_for_mutation_unlocked(
 }
 
 pub fn recover_pending_transition(paths: &Paths, workspace: &str) -> Result<(), TransitionError> {
-    let _lock = crate::coordination::acquire_workspace_lock(paths, workspace, true)
-        .map_err(message)?;
+    let _lock =
+        crate::coordination::acquire_workspace_lock(paths, workspace, true).map_err(message)?;
     recover_pending_transition_unlocked(paths, workspace)
 }
 
@@ -329,12 +332,14 @@ pub fn recover_pending_transition_unlocked(
         if !states[index].apply {
             continue;
         }
-        write_transition_bytes_atomic(&states[index].path, &target.target_bytes).map_err(|err| {
-            message(format!(
-                "apply pending transition target {:?}: {err}",
-                target.path
-            ))
-        })?;
+        write_transition_bytes_atomic(&states[index].path, &target.target_bytes).map_err(
+            |err| {
+                message(format!(
+                    "apply pending transition target {:?}: {err}",
+                    target.path
+                ))
+            },
+        )?;
     }
     for (index, target) in pending.targets.iter().enumerate() {
         let contents = std::fs::read(&states[index].path).map_err(|err| {
@@ -352,7 +357,9 @@ pub fn recover_pending_transition_unlocked(
         }
     }
     std::fs::remove_file(&journal_path).map_err(|err| {
-        message(format!("remove completed pending transition journal: {err}"))
+        message(format!(
+            "remove completed pending transition journal: {err}"
+        ))
     })?;
     Ok(())
 }
@@ -362,8 +369,11 @@ fn resolve_target_path(
     workspace: &str,
     relative: &str,
 ) -> Result<PathBuf, TransitionError> {
-    crate::boundary::resolve_workspace_path(paths, workspace, relative)
-        .map_err(|err| message(format!("resolve pending transition target {relative:?}: {err}")))
+    crate::boundary::resolve_workspace_path(paths, workspace, relative).map_err(|err| {
+        message(format!(
+            "resolve pending transition target {relative:?}: {err}"
+        ))
+    })
 }
 
 pub fn validate_pending_transition(
@@ -379,7 +389,9 @@ fn normalize_pending_transition(
 ) -> Result<PendingTransition, TransitionError> {
     validate_pending_transition_inner(workspace, &pending, false)?;
     let mut normalized = pending;
-    normalized.targets.sort_by(|left, right| left.path.cmp(&right.path));
+    normalized
+        .targets
+        .sort_by(|left, right| left.path.cmp(&right.path));
     Ok(normalized)
 }
 
@@ -417,7 +429,10 @@ fn validate_pending_transition_inner(
                 target.path
             )));
         }
-        if Path::new(&target.path).components().collect::<PathBuf>().to_string_lossy()
+        if Path::new(&target.path)
+            .components()
+            .collect::<PathBuf>()
+            .to_string_lossy()
             != target.path
         {
             return Err(message(format!(
@@ -472,7 +487,9 @@ fn validate_pending_transition_directory(
         Err(source) => return Err(source.into()),
     };
     if info.file_type().is_symlink() {
-        return Err(message("pending transition directory must not be a symlink"));
+        return Err(message(
+            "pending transition directory must not be a symlink",
+        ));
     }
     if !info.is_dir() {
         return Err(message("pending transition directory is not a directory"));
@@ -480,7 +497,9 @@ fn validate_pending_transition_directory(
     let resolved = std::fs::canonicalize(directory)
         .map_err(|err| message(format!("resolve pending transition directory: {err}")))?;
     if !crate::boundary::path_within(root, &resolved) {
-        return Err(message("pending transition directory resolves outside workspace"));
+        return Err(message(
+            "pending transition directory resolves outside workspace",
+        ));
     }
     Ok(())
 }
@@ -489,7 +508,10 @@ pub fn is_transition_sha256(value: &str) -> bool {
     let Some(hex) = value.strip_prefix("sha256:") else {
         return false;
     };
-    hex.len() == 64 && hex.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+    hex.len() == 64
+        && hex
+            .bytes()
+            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
 }
 
 pub fn transition_sha256(contents: &[u8]) -> String {
@@ -499,7 +521,9 @@ pub fn transition_sha256(contents: &[u8]) -> String {
 }
 
 pub fn write_transition_bytes_atomic(path: &Path, contents: &[u8]) -> Result<(), TransitionError> {
-    let dir = path.parent().ok_or_else(|| message("target path has no parent"))?;
+    let dir = path
+        .parent()
+        .ok_or_else(|| message("target path has no parent"))?;
     let file_name = path
         .file_name()
         .map(|name| name.to_string_lossy().to_string())
@@ -531,7 +555,9 @@ pub fn write_transition_bytes_atomic(path: &Path, contents: &[u8]) -> Result<(),
         }
     }
     let Some(temporary_path) = temporary_path else {
-        return Err(message("create transition temporary file: exhausted attempts"));
+        return Err(message(
+            "create transition temporary file: exhausted attempts",
+        ));
     };
     let result = (|| -> Result<(), TransitionError> {
         std::fs::rename(&temporary_path, path)?;
@@ -632,7 +658,8 @@ mod tests {
     use chrono::{TimeZone, Utc};
 
     fn fixture(name: &str) -> (PathBuf, Paths) {
-        let dir = std::env::temp_dir().join(format!("zbrain-transition-{}-{name}", std::process::id()));
+        let dir =
+            std::env::temp_dir().join(format!("zbrain-transition-{}-{name}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         let paths = Paths::resolve(Options {
@@ -671,8 +698,16 @@ mod tests {
         let (dir, paths) = fixture("journal-path");
         let journal_path = pending_transition_path(&paths, "research").unwrap();
         let workspace_root = crate::boundary::validate_workspace(&paths, "research").unwrap();
-        assert_eq!(journal_path, workspace_root.join(".zbrain").join(PENDING_TRANSITION_FILE_NAME));
-        assert!(!journal_path.parent().unwrap().exists(), "journal directory must not be created by path resolution");
+        assert_eq!(
+            journal_path,
+            workspace_root
+                .join(".zbrain")
+                .join(PENDING_TRANSITION_FILE_NAME)
+        );
+        assert!(
+            !journal_path.parent().unwrap().exists(),
+            "journal directory must not be created by path resolution"
+        );
         assert!(pending_transition_path(&paths, "../outside").is_err());
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -681,7 +716,9 @@ mod tests {
     fn transition_journal() {
         let (dir, paths) = fixture("journal");
         let first_path = paths.workspaces_dir.join("research/wiki/projects/first.md");
-        let second_path = paths.workspaces_dir.join("research/wiki/projects/second.md");
+        let second_path = paths
+            .workspaces_dir
+            .join("research/wiki/projects/second.md");
         std::fs::write(&first_path, b"first before\n").unwrap();
         std::fs::write(&second_path, b"second before\n").unwrap();
         let pending = PendingTransition {
@@ -689,8 +726,16 @@ mod tests {
             kind: "supersede".into(),
             workspace: "research".into(),
             targets: vec![
-                pending_target("wiki/projects/second.md", b"second before\n", b"second after\n"),
-                pending_target("wiki/projects/first.md", b"first before\n", b"first after\n"),
+                pending_target(
+                    "wiki/projects/second.md",
+                    b"second before\n",
+                    b"second after\n",
+                ),
+                pending_target(
+                    "wiki/projects/first.md",
+                    b"first before\n",
+                    b"first after\n",
+                ),
             ],
         };
         write_pending_transition(&paths, "research", pending.clone()).unwrap();
@@ -709,7 +754,9 @@ mod tests {
     fn transition_recovery() {
         let (dir, paths) = fixture("recovery");
         let first_path = paths.workspaces_dir.join("research/wiki/projects/first.md");
-        let second_path = paths.workspaces_dir.join("research/wiki/projects/second.md");
+        let second_path = paths
+            .workspaces_dir
+            .join("research/wiki/projects/second.md");
         std::fs::write(&first_path, b"first before\n").unwrap();
         std::fs::write(&second_path, b"second before\n").unwrap();
         write_pending_transition(
@@ -720,8 +767,16 @@ mod tests {
                 kind: "supersede".into(),
                 workspace: "research".into(),
                 targets: vec![
-                    pending_target("wiki/projects/first.md", b"first before\n", b"first after\n"),
-                    pending_target("wiki/projects/second.md", b"second before\n", b"second after\n"),
+                    pending_target(
+                        "wiki/projects/first.md",
+                        b"first before\n",
+                        b"first after\n",
+                    ),
+                    pending_target(
+                        "wiki/projects/second.md",
+                        b"second before\n",
+                        b"second after\n",
+                    ),
                 ],
             },
         )
@@ -740,11 +795,20 @@ mod tests {
         for interruption in 0..=2 {
             let (dir, paths) = fixture(&format!("each-{interruption}"));
             let files = [
-                ("wiki/projects/first.md", &b"first before\n"[..], &b"first after\n"[..]),
-                ("wiki/projects/second.md", &b"second before\n"[..], &b"second after\n"[..]),
+                (
+                    "wiki/projects/first.md",
+                    &b"first before\n"[..],
+                    &b"first after\n"[..],
+                ),
+                (
+                    "wiki/projects/second.md",
+                    &b"second before\n"[..],
+                    &b"second after\n"[..],
+                ),
             ];
             for (relative, before, _target) in files {
-                std::fs::write(paths.workspaces_dir.join("research").join(relative), before).unwrap();
+                std::fs::write(paths.workspaces_dir.join("research").join(relative), before)
+                    .unwrap();
             }
             write_pending_transition(
                 &paths,
@@ -765,7 +829,10 @@ mod tests {
             }
             recover_pending_transition(&paths, "research").unwrap();
             for (relative, _before, target) in files {
-                assert_file_bytes(&paths.workspaces_dir.join("research").join(relative), target);
+                assert_file_bytes(
+                    &paths.workspaces_dir.join("research").join(relative),
+                    target,
+                );
             }
             assert_no_pending_transition(&paths, "research");
             let _ = std::fs::remove_dir_all(&dir);
@@ -784,7 +851,11 @@ mod tests {
                 operation_id: "txn_idempotent".into(),
                 kind: "supersede".into(),
                 workspace: "research".into(),
-                targets: vec![pending_target("wiki/projects/claim.md", b"before\n", b"target\n")],
+                targets: vec![pending_target(
+                    "wiki/projects/claim.md",
+                    b"before\n",
+                    b"target\n",
+                )],
             },
         )
         .unwrap();
@@ -798,7 +869,9 @@ mod tests {
     fn transition_preimage_mismatch() {
         let (dir, paths) = fixture("mismatch");
         let first_path = paths.workspaces_dir.join("research/wiki/projects/first.md");
-        let second_path = paths.workspaces_dir.join("research/wiki/projects/second.md");
+        let second_path = paths
+            .workspaces_dir
+            .join("research/wiki/projects/second.md");
         std::fs::write(&first_path, b"first before\n").unwrap();
         std::fs::write(&second_path, b"unexpected\n").unwrap();
         write_pending_transition(
@@ -809,13 +882,23 @@ mod tests {
                 kind: "supersede".into(),
                 workspace: "research".into(),
                 targets: vec![
-                    pending_target("wiki/projects/first.md", b"first before\n", b"first after\n"),
-                    pending_target("wiki/projects/second.md", b"second before\n", b"second after\n"),
+                    pending_target(
+                        "wiki/projects/first.md",
+                        b"first before\n",
+                        b"first after\n",
+                    ),
+                    pending_target(
+                        "wiki/projects/second.md",
+                        b"second before\n",
+                        b"second after\n",
+                    ),
                 ],
             },
         )
         .unwrap();
-        let err = recover_pending_transition(&paths, "research").unwrap_err().to_string();
+        let err = recover_pending_transition(&paths, "research")
+            .unwrap_err()
+            .to_string();
         assert!(err.contains("preimage mismatch"), "{err}");
         assert_file_bytes(&first_path, b"first before\n");
         assert_file_bytes(&second_path, b"unexpected\n");
@@ -830,7 +913,11 @@ mod tests {
             operation_id: "txn_invalid".into(),
             kind: "supersede".into(),
             workspace: "research".into(),
-            targets: vec![pending_target("wiki/projects/claim.md", b"before\n", b"target\n")],
+            targets: vec![pending_target(
+                "wiki/projects/claim.md",
+                b"before\n",
+                b"target\n",
+            )],
         };
         struct Case {
             name: &'static str,
@@ -878,7 +965,14 @@ mod tests {
         write_transition_bytes_atomic(&success_path, b"hello\n").unwrap();
         assert_eq!(std::fs::read(&success_path).unwrap(), b"hello\n");
         use std::os::unix::fs::PermissionsExt;
-        assert_eq!(std::fs::metadata(&success_path).unwrap().permissions().mode() & 0o777, 0o600);
+        assert_eq!(
+            std::fs::metadata(&success_path)
+                .unwrap()
+                .permissions()
+                .mode()
+                & 0o777,
+            0o600
+        );
 
         // CreateTemp failure: parent is a file, not a directory.
         let blocker = tmp.join("blocker");
@@ -902,17 +996,29 @@ mod tests {
                 operation_id: "txn_check".into(),
                 kind: "supersede".into(),
                 workspace: "research".into(),
-                targets: vec![pending_target("wiki/projects/check.md", b"before\n", b"after\n")],
+                targets: vec![pending_target(
+                    "wiki/projects/check.md",
+                    b"before\n",
+                    b"after\n",
+                )],
             },
         )
         .unwrap();
         std::fs::create_dir_all(paths.workspaces_dir.join("research/wiki/projects")).unwrap();
-        std::fs::write(paths.workspaces_dir.join("research/wiki/projects/check.md"), b"before\n").unwrap();
-        let err = check_pending_transition(&paths, "research").unwrap_err().to_string();
+        std::fs::write(
+            paths.workspaces_dir.join("research/wiki/projects/check.md"),
+            b"before\n",
+        )
+        .unwrap();
+        let err = check_pending_transition(&paths, "research")
+            .unwrap_err()
+            .to_string();
         assert!(err.contains("pending transition"), "{err}");
         let journal_path = pending_transition_path(&paths, "research").unwrap();
         std::fs::write(&journal_path, b"not json").unwrap();
-        let err = check_pending_transition(&paths, "research").unwrap_err().to_string();
+        let err = check_pending_transition(&paths, "research")
+            .unwrap_err()
+            .to_string();
         assert!(err.contains("invalid"), "{err}");
         assert!(check_pending_transition(&paths, "../outside").is_err());
         let _ = std::fs::remove_dir_all(&dir);
@@ -924,7 +1030,11 @@ mod tests {
             operation_id: "txn_valid".into(),
             kind: "approve".into(),
             workspace: "research".into(),
-            targets: vec![pending_target("wiki/projects/valid.md", b"before\n", b"after\n")],
+            targets: vec![pending_target(
+                "wiki/projects/valid.md",
+                b"before\n",
+                b"after\n",
+            )],
         };
         validate_pending_transition("research", &valid).unwrap();
 

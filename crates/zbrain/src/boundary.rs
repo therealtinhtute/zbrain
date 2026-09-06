@@ -8,15 +8,26 @@ pub enum BoundaryError {
     WorkspaceMissing(String),
     WorkspaceSymlink(String),
     WorkspaceNotDirectory(String),
-    Stat { name: String, source: std::io::Error },
-    Resolve { name: String, source: std::io::Error },
+    Stat {
+        name: String,
+        source: std::io::Error,
+    },
+    Resolve {
+        name: String,
+        source: std::io::Error,
+    },
     OutsideRoot(String),
-    WorkspacesRoot { source: std::io::Error },
+    WorkspacesRoot {
+        source: std::io::Error,
+    },
     RootSymlink(String),
     RootNotDirectory(String),
     EmptyPath,
     UnsafePath(String),
-    TargetOutsideWorkspace { relative: String, workspace: String },
+    TargetOutsideWorkspace {
+        relative: String,
+        workspace: String,
+    },
     NotRegularFile(String),
     NoWorkspaceAncestor,
     Io(std::io::Error),
@@ -42,8 +53,14 @@ impl std::fmt::Display for BoundaryError {
             Self::RootNotDirectory(path) => write!(f, "{path:?} is not a directory"),
             Self::EmptyPath => write!(f, "workspace path must not be empty"),
             Self::UnsafePath(path) => write!(f, "workspace path {path:?} is not safe"),
-            Self::TargetOutsideWorkspace { relative, workspace } => {
-                write!(f, "workspace path {relative:?} is outside workspace {workspace:?}")
+            Self::TargetOutsideWorkspace {
+                relative,
+                workspace,
+            } => {
+                write!(
+                    f,
+                    "workspace path {relative:?} is outside workspace {workspace:?}"
+                )
             }
             Self::NotRegularFile(path) => write!(f, "{path:?} is not a regular file"),
             Self::NoWorkspaceAncestor => write!(f, "path has no existing workspace ancestor"),
@@ -76,8 +93,8 @@ pub fn validate_workspace(paths: &Paths, name: &str) -> Result<PathBuf, Boundary
     if !is_safe_workspace_name(name) {
         return Err(BoundaryError::UnsafeName);
     }
-    let workspaces_root = canonical_existing_directory(&paths.workspaces_dir)
-        .map_err(|err| match err {
+    let workspaces_root =
+        canonical_existing_directory(&paths.workspaces_dir).map_err(|err| match err {
             BoundaryError::RootSymlink(p) => BoundaryError::RootSymlink(p),
             BoundaryError::RootNotDirectory(p) => BoundaryError::RootNotDirectory(p),
             BoundaryError::Io(source) => BoundaryError::WorkspacesRoot { source },
@@ -167,7 +184,12 @@ pub fn safe_relative_path(path: &str) -> Result<PathBuf, BoundaryError> {
     {
         return Err(unsafe_path());
     }
-    if clean.components().any(|c| matches!(c, Component::ParentDir | Component::RootDir | Component::Prefix(_))) {
+    if clean.components().any(|c| {
+        matches!(
+            c,
+            Component::ParentDir | Component::RootDir | Component::Prefix(_)
+        )
+    }) {
         return Err(unsafe_path());
     }
     Ok(clean)
@@ -229,14 +251,15 @@ pub fn path_within(root: &Path, target: &Path) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::clock::FixedClock;
     use crate::config::ensure_config;
     use crate::paths::{Options, Paths};
     use crate::workspace::create_workspace;
-    use crate::clock::FixedClock;
     use chrono::{TimeZone, Utc};
 
     fn fixture(name: &str) -> (PathBuf, Paths) {
-        let dir = std::env::temp_dir().join(format!("zbrain-boundary-{}-{name}", std::process::id()));
+        let dir =
+            std::env::temp_dir().join(format!("zbrain-boundary-{}-{name}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         let paths = Paths::resolve(Options {
@@ -246,7 +269,12 @@ mod tests {
         })
         .unwrap();
         ensure_config(&paths.config_file).unwrap();
-        create_workspace(&paths, "research", &FixedClock::new(Utc.with_ymd_and_hms(2026, 7, 30, 10, 0, 0).unwrap())).unwrap();
+        create_workspace(
+            &paths,
+            "research",
+            &FixedClock::new(Utc.with_ymd_and_hms(2026, 7, 30, 10, 0, 0).unwrap()),
+        )
+        .unwrap();
         (dir, paths)
     }
 
@@ -254,7 +282,10 @@ mod tests {
     fn validate_returns_resolved_root() {
         let (dir, paths) = fixture("resolved");
         let root = validate_workspace(&paths, "research").unwrap();
-        assert_eq!(root, std::fs::canonicalize(paths.workspaces_dir.join("research")).unwrap());
+        assert_eq!(
+            root,
+            std::fs::canonicalize(paths.workspaces_dir.join("research")).unwrap()
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -265,12 +296,12 @@ mod tests {
             validate_workspace(&paths, "missing"),
             Err(BoundaryError::WorkspaceMissing(_))
         ));
-        assert!(matches!(validate_workspace(&paths, "../outside"), Err(BoundaryError::UnsafeName)));
-        std::os::unix::fs::symlink(
-            std::env::temp_dir(),
-            paths.workspaces_dir.join("linked"),
-        )
-        .unwrap();
+        assert!(matches!(
+            validate_workspace(&paths, "../outside"),
+            Err(BoundaryError::UnsafeName)
+        ));
+        std::os::unix::fs::symlink(std::env::temp_dir(), paths.workspaces_dir.join("linked"))
+            .unwrap();
         assert!(matches!(
             validate_workspace(&paths, "linked"),
             Err(BoundaryError::WorkspaceSymlink(_))

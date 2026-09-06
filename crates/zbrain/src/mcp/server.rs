@@ -8,10 +8,10 @@ use serde_json::{json, Value};
 
 use crate::mcp::protocol::{
     error_response, negotiated_version, success_response, success_response_raw,
-    validate_request_meta, CallToolResult, DiscoverResult, InitializeParams, InitializeResult,
-    Implementation, McpError, OrderedJson, ReadResourceResult,
-    ResultMeta, RpcRequest, ServerCapabilities, SuccessPayload, ToolEntry, ValidatedMeta,
-    PROTOCOL_VERSION_20260728, SERVER_NAME, SUPPORTED_PROTOCOL_VERSIONS,
+    validate_request_meta, CallToolResult, DiscoverResult, Implementation, InitializeParams,
+    InitializeResult, McpError, OrderedJson, ReadResourceResult, ResultMeta, RpcRequest,
+    ServerCapabilities, SuccessPayload, ToolEntry, ValidatedMeta, PROTOCOL_VERSION_20260728,
+    SERVER_NAME, SUPPORTED_PROTOCOL_VERSIONS,
 };
 use crate::mcp::transport::{SafeStderr, Transport};
 
@@ -63,7 +63,10 @@ fn method_info(method: &str) -> Option<MethodInfo> {
         "tools/list" => (false, true),
         _ => return None,
     };
-    Some(MethodInfo { notification, missing_params_ok })
+    Some(MethodInfo {
+        notification,
+        missing_params_ok,
+    })
 }
 
 /// Tool/resource surface the W2 implementations register into. The server
@@ -74,7 +77,11 @@ pub trait ToolRegistry {
     }
 
     /// Runs a tool; `None` arguments means JSON-null/absent arguments.
-    fn call_tool(&self, _name: &str, _arguments: Option<&Value>) -> Result<CallToolResult, McpError> {
+    fn call_tool(
+        &self,
+        _name: &str,
+        _arguments: Option<&Value>,
+    ) -> Result<CallToolResult, McpError> {
         Err(McpError::unknown_tool(_name))
     }
 
@@ -154,7 +161,10 @@ impl<R: ToolRegistry> Server<R> {
     }
 
     fn server_info(&self) -> Implementation {
-        Implementation { name: SERVER_NAME.to_string(), version: self.options.version.clone() }
+        Implementation {
+            name: SERVER_NAME.to_string(),
+            version: self.options.version.clone(),
+        }
     }
 
     /// Advertised capabilities: logging always, plus tools/resources when
@@ -165,11 +175,14 @@ impl<R: ToolRegistry> Server<R> {
             ..Default::default()
         };
         if !self.registry.tools().is_empty() {
-            capabilities.tools = Some(crate::mcp::protocol::ToolCapabilities { list_changed: true });
+            capabilities.tools =
+                Some(crate::mcp::protocol::ToolCapabilities { list_changed: true });
         }
         if !self.registry.resources().is_empty() || !self.registry.resource_templates().is_empty() {
-            capabilities.resources =
-                Some(crate::mcp::protocol::ResourceCapabilities { list_changed: true, subscribe: false });
+            capabilities.resources = Some(crate::mcp::protocol::ResourceCapabilities {
+                list_changed: true,
+                subscribe: false,
+            });
         }
         capabilities
     }
@@ -236,9 +249,9 @@ impl<R: ToolRegistry> Server<R> {
                     Some(error_response(id, error.to_wire(method)))
                 } else {
                     // Notification errors are logged, never answered.
-                    self.options.stderr.log(&format!(
-                        "notification {method} failed: {error}"
-                    ));
+                    self.options
+                        .stderr
+                        .log(&format!("notification {method} failed: {error}"));
                     None
                 }
             }
@@ -319,13 +332,16 @@ impl<R: ToolRegistry> Server<R> {
         method: &str,
     ) -> Result<SuccessPayload, McpError> {
         match method {
-            "initialize" => self.handle_initialize(state, request).map(SuccessPayload::Json),
+            "initialize" => self
+                .handle_initialize(state, request)
+                .map(SuccessPayload::Json),
             "ping" => Ok(json!({}).into()),
             "logging/setLevel" => Ok(json!({}).into()),
-            "notifications/initialized" => {
-                self.handle_initialized_notification(state).map(SuccessPayload::Json)
-            }
-            "notifications/cancelled" | "notifications/progress"
+            "notifications/initialized" => self
+                .handle_initialized_notification(state)
+                .map(SuccessPayload::Json),
+            "notifications/cancelled"
+            | "notifications/progress"
             | "notifications/roots/list_changed" => Ok(json!({}).into()),
             "server/discover" => self.handle_discover().map(SuccessPayload::Json),
             "tools/list" => Ok(self.list_result_raw(
@@ -334,9 +350,11 @@ impl<R: ToolRegistry> Server<R> {
                 OrderedJson::Array(self.registry.tools().iter().map(tool_entry_json).collect()),
             )),
             "tools/call" => self.handle_call_tool(state, request, meta),
-            "resources/list" => {
-                Ok(self.list_result_raw(meta, "resources", values_json(&self.registry.resources())))
-            }
+            "resources/list" => Ok(self.list_result_raw(
+                meta,
+                "resources",
+                values_json(&self.registry.resources()),
+            )),
             "resources/templates/list" => Ok(self.list_result_raw(
                 meta,
                 "resourceTemplates",
@@ -371,7 +389,9 @@ impl<R: ToolRegistry> Server<R> {
         request: &RpcRequest,
     ) -> Result<Value, McpError> {
         if state.initialize_params.is_some() {
-            return Err(McpError::Plain("duplicate \"initialize\" received".to_string()));
+            return Err(McpError::Plain(
+                "duplicate \"initialize\" received".to_string(),
+            ));
         }
         // go-sdk initializeMethodInfo: JSON-null params decode to nil and
         // surface as a plain (code 0) error; absent params already failed
@@ -422,12 +442,18 @@ impl<R: ToolRegistry> Server<R> {
         Ok(json!({}))
     }
 
-    fn handle_discover(&self) -> Result<Value, McpError> {        let result = DiscoverResult {
+    fn handle_discover(&self) -> Result<Value, McpError> {
+        let result = DiscoverResult {
             result_type: RESULT_TYPE_COMPLETE,
-            meta: ResultMeta { server_info: Some(self.server_info()) },
+            meta: ResultMeta {
+                server_info: Some(self.server_info()),
+            },
             ttl_ms: TTL_MS_ZERO,
             cache_scope: CACHE_SCOPE_PUBLIC,
-            supported_versions: SUPPORTED_PROTOCOL_VERSIONS.iter().map(|v| v.to_string()).collect(),
+            supported_versions: SUPPORTED_PROTOCOL_VERSIONS
+                .iter()
+                .map(|v| v.to_string())
+                .collect(),
             capabilities: self.capabilities(),
             instructions: None,
         };
@@ -479,13 +505,15 @@ impl<R: ToolRegistry> Server<R> {
         // Lifecycle transition provenance records the calling client
         // (`mcpClientName` in Go): the per-request `_meta` identity wins on
         // the stateless path, else the handshake's clientInfo.
-        let client_info = meta
-            .client_info
-            .as_ref()
-            .or_else(|| state.initialize_params.as_ref().and_then(|p| p.client_info.as_ref()));
-        let mut result = self
-            .registry
-            .call_tool_with_client(&name, arguments, &mcp_client_name(client_info))?;
+        let client_info = meta.client_info.as_ref().or_else(|| {
+            state
+                .initialize_params
+                .as_ref()
+                .and_then(|p| p.client_info.as_ref())
+        });
+        let mut result =
+            self.registry
+                .call_tool_with_client(&name, arguments, &mcp_client_name(client_info))?;
         if Self::client_supports_multi_round_trip(state) {
             result.result_type = Some(RESULT_TYPE_COMPLETE);
         }
@@ -535,10 +563,14 @@ impl<R: ToolRegistry> Server<R> {
         request: &RpcRequest,
         meta: &ValidatedMeta,
     ) -> Result<SuccessPayload, McpError> {
-        let params = request.params.as_ref().ok_or_else(|| {
-            McpError::invalid_params("missing required \"params\"")
-        })?;
-        let uri = params.get("uri").and_then(Value::as_str).unwrap_or_default();
+        let params = request
+            .params
+            .as_ref()
+            .ok_or_else(|| McpError::invalid_params("missing required \"params\""))?;
+        let uri = params
+            .get("uri")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
         let result = self
             .registry
             .read_resource(uri)
@@ -624,7 +656,9 @@ fn values_json(values: &[Value]) -> OrderedJson {
         values
             .iter()
             .map(|value| {
-                OrderedJson::Raw(serde_json::to_string(value).unwrap_or_else(|_| "null".to_string()))
+                OrderedJson::Raw(
+                    serde_json::to_string(value).unwrap_or_else(|_| "null".to_string()),
+                )
             })
             .collect(),
     )
@@ -667,8 +701,7 @@ mod tests {
 
     #[test]
     fn legacy_negotiates_20250618() {
-        let (responses, outcome) =
-            run_session(&format!("{}\n", initialize_frame(1, "2025-06-18")));
+        let (responses, outcome) = run_session(&format!("{}\n", initialize_frame(1, "2025-06-18")));
         outcome.unwrap();
         assert_eq!(responses.len(), 1);
         assert_eq!(result_field(&responses[0], "protocolVersion"), "2025-06-18");
@@ -680,16 +713,14 @@ mod tests {
 
     #[test]
     fn legacy_caps_at_20251125() {
-        let (responses, outcome) =
-            run_session(&format!("{}\n", initialize_frame(1, "2025-11-25")));
+        let (responses, outcome) = run_session(&format!("{}\n", initialize_frame(1, "2025-11-25")));
         outcome.unwrap();
         assert_eq!(result_field(&responses[0], "protocolVersion"), "2025-11-25");
     }
 
     #[test]
     fn legacy_negotiates_unsupported_to_20251125() {
-        let (responses, outcome) =
-            run_session(&format!("{}\n", initialize_frame(1, "1999-01-01")));
+        let (responses, outcome) = run_session(&format!("{}\n", initialize_frame(1, "1999-01-01")));
         outcome.unwrap();
         assert_eq!(result_field(&responses[0], "protocolVersion"), "2025-11-25");
     }
@@ -697,8 +728,7 @@ mod tests {
     #[test]
     fn legacy_negotiates_all_supported_versions() {
         for version in ["2024-11-05", "2025-03-26"] {
-            let (responses, outcome) =
-                run_session(&format!("{}\n", initialize_frame(1, version)));
+            let (responses, outcome) = run_session(&format!("{}\n", initialize_frame(1, version)));
             outcome.unwrap();
             assert_eq!(result_field(&responses[0], "protocolVersion"), version);
         }
@@ -711,7 +741,11 @@ mod tests {
         outcome.unwrap();
         let versions = result_field(&responses[0], "supportedVersions");
         assert_eq!(versions[0], "2026-07-28");
-        assert!(versions.as_array().unwrap().iter().any(|v| v == "2026-07-28"));
+        assert!(versions
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|v| v == "2026-07-28"));
         assert!(result_field(&responses[0], "capabilities").is_object());
         assert_eq!(result_field(&responses[0], "resultType"), "complete");
     }
@@ -733,10 +767,22 @@ mod tests {
         let request = r#"{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{"_meta":{"io.modelcontextprotocol/protocolVersion":"2999-01-01","io.modelcontextprotocol/clientCapabilities":{}}}}"#;
         let (responses, outcome) = run_session(&format!("{request}\n"));
         outcome.unwrap();
-        assert_eq!(error_field(&responses[0], "code"), CODE_UNSUPPORTED_PROTOCOL_VERSION);
-        assert_eq!(error_field(&responses[0], "message"), "unsupported protocol version");
-        assert_eq!(error_field(&responses[0], "data")["requested"], "2999-01-01");
-        assert_eq!(error_field(&responses[0], "data")["supported"][0], "2026-07-28");
+        assert_eq!(
+            error_field(&responses[0], "code"),
+            CODE_UNSUPPORTED_PROTOCOL_VERSION
+        );
+        assert_eq!(
+            error_field(&responses[0], "message"),
+            "unsupported protocol version"
+        );
+        assert_eq!(
+            error_field(&responses[0], "data")["requested"],
+            "2999-01-01"
+        );
+        assert_eq!(
+            error_field(&responses[0], "data")["supported"][0],
+            "2026-07-28"
+        );
     }
 
     #[test]
@@ -757,7 +803,10 @@ mod tests {
         let (responses, outcome) = run_session(&format!("{request}\n"));
         outcome.unwrap();
         assert_eq!(error_field(&responses[0], "code"), -32601);
-        assert_eq!(error_field(&responses[0], "message"), "method not found: \"ping\"");
+        assert_eq!(
+            error_field(&responses[0], "message"),
+            "method not found: \"ping\""
+        );
     }
 
     // --- Core method behaviors (ports the W1-relevant mcp_test.go cases) ---
@@ -779,12 +828,10 @@ mod tests {
 
     #[test]
     fn ping_returns_empty_result() {
-        let (responses, outcome) = run_session(
-            &format!(
-                "{}\n{{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"ping\"}}\n",
-                initialize_frame(1, "2025-06-18")
-            ),
-        );
+        let (responses, outcome) = run_session(&format!(
+            "{}\n{{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"ping\"}}\n",
+            initialize_frame(1, "2025-06-18")
+        ));
         outcome.unwrap();
         assert_eq!(responses[1]["result"], json!({}));
     }
@@ -902,7 +949,10 @@ mod tests {
         outcome.unwrap();
         assert_eq!(error_field(&responses[1], "code"), -32602);
         assert_eq!(error_field(&responses[1], "message"), "Resource not found");
-        assert_eq!(error_field(&responses[1], "data")["uri"], "claims://current");
+        assert_eq!(
+            error_field(&responses[1], "data")["uri"],
+            "claims://current"
+        );
     }
 
     #[test]
@@ -1027,6 +1077,9 @@ mod tests {
             initialize_frame(1, "2025-06-18")
         ));
         outcome.unwrap();
-        assert_eq!(error_field(&responses[1], "message"), "unknown tool \"workspace_current\"");
+        assert_eq!(
+            error_field(&responses[1], "message"),
+            "unknown tool \"workspace_current\""
+        );
     }
 }

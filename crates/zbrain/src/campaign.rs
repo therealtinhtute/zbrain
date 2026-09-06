@@ -42,7 +42,11 @@ pub struct CampaignSpec {
     pub evidence_ids: Vec<String>,
     #[serde(default, rename = "support", skip_serializing_if = "Vec::is_empty")]
     pub supporting_claim_ids: Vec<String>,
-    #[serde(default, rename = "conflicts_with", skip_serializing_if = "Vec::is_empty")]
+    #[serde(
+        default,
+        rename = "conflicts_with",
+        skip_serializing_if = "Vec::is_empty"
+    )]
     pub conflicts_with: Vec<String>,
 }
 
@@ -118,7 +122,10 @@ fn is_campaign_run_id(value: &str) -> bool {
     let Some(rest) = value.strip_prefix("cmp_") else {
         return false;
     };
-    rest.len() == 32 && rest.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+    rest.len() == 32
+        && rest
+            .bytes()
+            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
 }
 
 impl CampaignStore {
@@ -172,7 +179,8 @@ impl CampaignStore {
             updated_at: now,
             drafts,
         };
-        let _lock = acquire_workspace_lock(&self.paths, workspace, true).map_err(campaign_message)?;
+        let _lock =
+            acquire_workspace_lock(&self.paths, workspace, true).map_err(campaign_message)?;
         self.write_campaign_run_unlocked(workspace, &run)?;
         Ok(run)
     }
@@ -205,7 +213,8 @@ impl CampaignStore {
         index: i64,
         body: &str,
     ) -> Result<CampaignSubmission, ClaimError> {
-        let _lock = acquire_workspace_lock(&self.paths, workspace, true).map_err(campaign_message)?;
+        let _lock =
+            acquire_workspace_lock(&self.paths, workspace, true).map_err(campaign_message)?;
         let mut run = self.read_campaign_run_unlocked(workspace, run_id)?;
         if run.phase != CAMPAIGN_PHASE_DRAFTING {
             return Err(message(format!(
@@ -283,7 +292,8 @@ impl CampaignStore {
         workspace: &str,
         run_id: &str,
     ) -> Result<CampaignRun, ClaimError> {
-        let _lock = acquire_workspace_lock(&self.paths, workspace, true).map_err(campaign_message)?;
+        let _lock =
+            acquire_workspace_lock(&self.paths, workspace, true).map_err(campaign_message)?;
         let mut run = self.read_campaign_run_unlocked(workspace, run_id)?;
         for (index, draft) in run.drafts.iter().enumerate() {
             if draft.status == CAMPAIGN_DRAFT_STATUS_PENDING {
@@ -336,8 +346,8 @@ impl CampaignStore {
                 path.display()
             ))
         };
-        let run: CampaignRun = serde_json::from_slice(&contents)
-            .map_err(|err| malformed(err.to_string()))?;
+        let run: CampaignRun =
+            serde_json::from_slice(&contents).map_err(|err| malformed(err.to_string()))?;
         validate_campaign_run_file(&run, run_id).map_err(|err| malformed(err.to_string()))?;
         Ok(run)
     }
@@ -405,7 +415,10 @@ fn campaign_state_from_run(run: &CampaignRun) -> CampaignState {
     state
 }
 
-fn validate_campaign_directory(root: &std::path::Path, directory: &std::path::Path) -> Result<(), ClaimError> {
+fn validate_campaign_directory(
+    root: &std::path::Path,
+    directory: &std::path::Path,
+) -> Result<(), ClaimError> {
     let info = match std::fs::symlink_metadata(directory) {
         Ok(info) => info,
         Err(source) if source.kind() == std::io::ErrorKind::NotFound => return Ok(()),
@@ -468,8 +481,9 @@ fn validate_campaign_run_file(run: &CampaignRun, expected_run_id: &str) -> Resul
                         draft.status
                     )));
                 }
-                parse_rfc3339(&draft.submitted_at)
-                    .map_err(|err| message(format!("draft {index} submitted_at must be RFC3339: {err}")))?;
+                parse_rfc3339(&draft.submitted_at).map_err(|err| {
+                    message(format!("draft {index} submitted_at must be RFC3339: {err}"))
+                })?;
                 if !seen_claims.insert(&draft.claim_id) {
                     return Err(message(format!(
                         "claim id {} is recorded by more than one draft",
@@ -515,7 +529,8 @@ mod tests {
     }
 
     fn fixture(name: &str) -> (PathBuf, Paths, FixedClock) {
-        let dir = std::env::temp_dir().join(format!("zbrain-campaign-{}-{name}", std::process::id()));
+        let dir =
+            std::env::temp_dir().join(format!("zbrain-campaign-{}-{name}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         let paths = Paths::resolve(Options {
@@ -553,13 +568,22 @@ mod tests {
     }
 
     fn campaign_run_file_path(paths: &Paths, run_id: &str) -> PathBuf {
-        paths.workspaces_dir.join("research/campaigns").join(format!("{run_id}.json"))
+        paths
+            .workspaces_dir
+            .join("research/campaigns")
+            .join(format!("{run_id}.json"))
     }
 
     fn require_draft_exists(paths: &Paths, submission: &CampaignSubmission) {
-        let claim = ClaimStore::new(paths.clone()).read("research", &submission.claim_id).unwrap();
+        let claim = ClaimStore::new(paths.clone())
+            .read("research", &submission.claim_id)
+            .unwrap();
         assert_eq!(claim.status, crate::claims::CLAIM_STATUS_DRAFT);
-        assert!(claim.verified_at.is_empty() && claim.verified_by.is_empty() && claim.verified_digest.is_empty());
+        assert!(
+            claim.verified_at.is_empty()
+                && claim.verified_by.is_empty()
+                && claim.verified_digest.is_empty()
+        );
         assert!(claim.transitions.is_empty());
         assert_eq!(claim.path, submission.claim_path);
     }
@@ -579,7 +603,10 @@ mod tests {
         assert_eq!(run.drafts.len(), 2);
         for (index, draft) in run.drafts.iter().enumerate() {
             assert_eq!(draft.status, CAMPAIGN_DRAFT_STATUS_PENDING, "draft {index}");
-            assert!(draft.claim_id.is_empty() && draft.submitted_at.is_empty(), "draft {index}");
+            assert!(
+                draft.claim_id.is_empty() && draft.submitted_at.is_empty(),
+                "draft {index}"
+            );
         }
         assert_eq!(run.created_at, rfc3339(fixed_now()));
         assert_eq!(run.updated_at, run.created_at);
@@ -599,14 +626,46 @@ mod tests {
         let (dir, paths, clock) = fixture("beginvalid");
         let store = store(&paths, &clock);
         let invalid = [
-            CampaignSpec { tier: "not-a-tier".to_string(), title: "Bad Tier".to_string(), basis: "owner".to_string(), ..Default::default() },
-            CampaignSpec { tier: "projects".to_string(), title: "Bad Basis".to_string(), basis: "guessed".to_string(), ..Default::default() },
-            CampaignSpec { tier: "projects".to_string(), title: "Bad Evidence".to_string(), basis: "evidence".to_string(), evidence_ids: vec!["evd_ZZZ".to_string()], ..Default::default() },
-            CampaignSpec { tier: "projects".to_string(), title: "Bad Support".to_string(), basis: "derived".to_string(), supporting_claim_ids: vec!["clm_ZZZ".to_string()], ..Default::default() },
-            CampaignSpec { tier: "projects".to_string(), title: String::new(), basis: "owner".to_string(), ..Default::default() },
+            CampaignSpec {
+                tier: "not-a-tier".to_string(),
+                title: "Bad Tier".to_string(),
+                basis: "owner".to_string(),
+                ..Default::default()
+            },
+            CampaignSpec {
+                tier: "projects".to_string(),
+                title: "Bad Basis".to_string(),
+                basis: "guessed".to_string(),
+                ..Default::default()
+            },
+            CampaignSpec {
+                tier: "projects".to_string(),
+                title: "Bad Evidence".to_string(),
+                basis: "evidence".to_string(),
+                evidence_ids: vec!["evd_ZZZ".to_string()],
+                ..Default::default()
+            },
+            CampaignSpec {
+                tier: "projects".to_string(),
+                title: "Bad Support".to_string(),
+                basis: "derived".to_string(),
+                supporting_claim_ids: vec!["clm_ZZZ".to_string()],
+                ..Default::default()
+            },
+            CampaignSpec {
+                tier: "projects".to_string(),
+                title: String::new(),
+                basis: "owner".to_string(),
+                ..Default::default()
+            },
         ];
         for (index, spec) in invalid.iter().enumerate() {
-            assert!(store.begin_campaign("research", std::slice::from_ref(spec)).is_err(), "spec {index}");
+            assert!(
+                store
+                    .begin_campaign("research", std::slice::from_ref(spec))
+                    .is_err(),
+                "spec {index}"
+            );
         }
         assert!(store.begin_campaign("research", &[]).is_err());
         assert!(store.begin_campaign("missing", &campaign_specs()).is_err());
@@ -656,7 +715,8 @@ mod tests {
             .unwrap();
         assert_eq!(submission.claim_status, crate::claims::CLAIM_STATUS_DRAFT);
         require_draft_exists(&paths, &submission);
-        let generation_after = crate::coordination::read_workspace_generation(&paths, "research").unwrap();
+        let generation_after =
+            crate::coordination::read_workspace_generation(&paths, "research").unwrap();
         assert_eq!(
             generation_after.published, generation_before.published,
             "campaign submission published the generation"
@@ -675,7 +735,10 @@ mod tests {
         );
 
         let run_on_disk = read_run_from_disk(&paths, &run.run_id);
-        assert_eq!(run_on_disk.drafts[0].status, CAMPAIGN_DRAFT_STATUS_SUBMITTED);
+        assert_eq!(
+            run_on_disk.drafts[0].status,
+            CAMPAIGN_DRAFT_STATUS_SUBMITTED
+        );
         assert_eq!(run_on_disk.drafts[0].claim_id, submission.claim_id);
         parse_rfc3339(&run_on_disk.drafts[0].submitted_at).unwrap();
         assert_eq!(run_on_disk.drafts[1].status, CAMPAIGN_DRAFT_STATUS_PENDING);
@@ -703,14 +766,21 @@ mod tests {
             .submit_campaign_draft("research", &run.run_id, 2, "body\n")
             .is_err());
         assert!(store
-            .submit_campaign_draft("research", "cmp_00000000000000000000000000000000", 0, "body\n")
+            .submit_campaign_draft(
+                "research",
+                "cmp_00000000000000000000000000000000",
+                0,
+                "body\n"
+            )
             .is_err());
         assert!(store
             .submit_campaign_draft("research", "not-a-run-id", 0, "body\n")
             .is_err());
         let after = std::fs::read(campaign_run_file_path(&paths, &run.run_id)).unwrap();
         assert_eq!(before, after, "failed submissions mutated the run file");
-        let claims = ClaimStore::new(paths.clone()).scan_workspace("research").unwrap();
+        let claims = ClaimStore::new(paths.clone())
+            .scan_workspace("research")
+            .unwrap();
         let draft_count = claims
             .claims
             .iter()
@@ -776,38 +846,65 @@ mod tests {
 
         let corruptions: Vec<(&str, Vec<u8>)> = vec![
             ("bad json", b"{not json".to_vec()),
-            ("wrong schema", must_json(&serde_json::json!({
-                "schema": "zbrain.campaign/v0", "run_id": run.run_id, "phase": run.phase,
-                "created_at": run.created_at, "updated_at": run.updated_at, "drafts": run.drafts,
-            }))),
-            ("bad phase", must_json(&serde_json::json!({
-                "schema": CAMPAIGN_SCHEMA_VERSION, "run_id": run.run_id, "phase": "paused",
-                "created_at": run.created_at, "updated_at": run.updated_at, "drafts": run.drafts,
-            }))),
-            ("bad draft status", must_json(&serde_json::json!({
-                "schema": CAMPAIGN_SCHEMA_VERSION, "run_id": run.run_id, "phase": CAMPAIGN_PHASE_DRAFTING,
-                "created_at": run.created_at, "updated_at": run.updated_at,
-                "drafts": [{"spec": run.drafts[0].spec, "status": "approved"}],
-            }))),
-            ("pending with claim", must_json(&serde_json::json!({
-                "schema": CAMPAIGN_SCHEMA_VERSION, "run_id": run.run_id, "phase": CAMPAIGN_PHASE_DRAFTING,
-                "created_at": run.created_at, "updated_at": run.updated_at,
-                "drafts": [{"spec": run.drafts[0].spec, "status": CAMPAIGN_DRAFT_STATUS_PENDING,
-                            "claim_id": "clm_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}],
-            }))),
-            ("empty drafts", must_json(&serde_json::json!({
-                "schema": CAMPAIGN_SCHEMA_VERSION, "run_id": run.run_id, "phase": CAMPAIGN_PHASE_DRAFTING,
-                "created_at": run.created_at, "updated_at": run.updated_at, "drafts": serde_json::Value::Null,
-            }))),
+            (
+                "wrong schema",
+                must_json(&serde_json::json!({
+                    "schema": "zbrain.campaign/v0", "run_id": run.run_id, "phase": run.phase,
+                    "created_at": run.created_at, "updated_at": run.updated_at, "drafts": run.drafts,
+                })),
+            ),
+            (
+                "bad phase",
+                must_json(&serde_json::json!({
+                    "schema": CAMPAIGN_SCHEMA_VERSION, "run_id": run.run_id, "phase": "paused",
+                    "created_at": run.created_at, "updated_at": run.updated_at, "drafts": run.drafts,
+                })),
+            ),
+            (
+                "bad draft status",
+                must_json(&serde_json::json!({
+                    "schema": CAMPAIGN_SCHEMA_VERSION, "run_id": run.run_id, "phase": CAMPAIGN_PHASE_DRAFTING,
+                    "created_at": run.created_at, "updated_at": run.updated_at,
+                    "drafts": [{"spec": run.drafts[0].spec, "status": "approved"}],
+                })),
+            ),
+            (
+                "pending with claim",
+                must_json(&serde_json::json!({
+                    "schema": CAMPAIGN_SCHEMA_VERSION, "run_id": run.run_id, "phase": CAMPAIGN_PHASE_DRAFTING,
+                    "created_at": run.created_at, "updated_at": run.updated_at,
+                    "drafts": [{"spec": run.drafts[0].spec, "status": CAMPAIGN_DRAFT_STATUS_PENDING,
+                                "claim_id": "clm_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}],
+                })),
+            ),
+            (
+                "empty drafts",
+                must_json(&serde_json::json!({
+                    "schema": CAMPAIGN_SCHEMA_VERSION, "run_id": run.run_id, "phase": CAMPAIGN_PHASE_DRAFTING,
+                    "created_at": run.created_at, "updated_at": run.updated_at, "drafts": serde_json::Value::Null,
+                })),
+            ),
         ];
         for (name, contents) in &corruptions {
             std::fs::write(&path, contents).unwrap();
-            assert!(store.resume_campaign("research", &run.run_id).is_err(), "{name}");
-            assert!(store.next_campaign_draft("research", &run.run_id).is_err(), "{name}");
-            assert!(store
-                .submit_campaign_draft("research", &run.run_id, 0, "body\n")
-                .is_err(), "{name}");
-            assert!(store.finish_campaign("research", &run.run_id).is_err(), "{name}");
+            assert!(
+                store.resume_campaign("research", &run.run_id).is_err(),
+                "{name}"
+            );
+            assert!(
+                store.next_campaign_draft("research", &run.run_id).is_err(),
+                "{name}"
+            );
+            assert!(
+                store
+                    .submit_campaign_draft("research", &run.run_id, 0, "body\n")
+                    .is_err(),
+                "{name}"
+            );
+            assert!(
+                store.finish_campaign("research", &run.run_id).is_err(),
+                "{name}"
+            );
             let after = std::fs::read(&path).unwrap();
             assert_eq!(&after, contents, "{name}: run file was mutated or reset");
         }
@@ -866,9 +963,26 @@ mod tests {
             crate::coordination::ensure_workspace_generation(&paths, "research").unwrap();
 
         let specs = vec![
-            CampaignSpec { tier: "projects".to_string(), title: "Adversarial Owner".to_string(), basis: "owner".to_string(), ..Default::default() },
-            CampaignSpec { tier: "projects".to_string(), title: "Adversarial Conflicts".to_string(), basis: "owner".to_string(), conflicts_with: vec![approved.id.clone()], ..Default::default() },
-            CampaignSpec { tier: "projects".to_string(), title: "Adversarial Support".to_string(), basis: "derived".to_string(), supporting_claim_ids: vec![approved.id.clone()], ..Default::default() },
+            CampaignSpec {
+                tier: "projects".to_string(),
+                title: "Adversarial Owner".to_string(),
+                basis: "owner".to_string(),
+                ..Default::default()
+            },
+            CampaignSpec {
+                tier: "projects".to_string(),
+                title: "Adversarial Conflicts".to_string(),
+                basis: "owner".to_string(),
+                conflicts_with: vec![approved.id.clone()],
+                ..Default::default()
+            },
+            CampaignSpec {
+                tier: "projects".to_string(),
+                title: "Adversarial Support".to_string(),
+                basis: "derived".to_string(),
+                supporting_claim_ids: vec![approved.id.clone()],
+                ..Default::default()
+            },
         ];
         let run = store.begin_campaign("research", &specs).unwrap();
         store.next_campaign_draft("research", &run.run_id).unwrap();
@@ -895,14 +1009,23 @@ mod tests {
                 assert_eq!(claim.verified_digest, approved.verified_digest);
                 crate::claims::verify_claim_digest(claim).unwrap();
                 assert_eq!(claim.transitions.len(), 1);
-                assert_eq!(claim.transitions[0].kind, crate::claims::CLAIM_TRANSITION_APPROVE);
+                assert_eq!(
+                    claim.transitions[0].kind,
+                    crate::claims::CLAIM_TRANSITION_APPROVE
+                );
             } else {
-                assert_eq!(claim.status, crate::claims::CLAIM_STATUS_DRAFT, "{}", claim.id);
+                assert_eq!(
+                    claim.status,
+                    crate::claims::CLAIM_STATUS_DRAFT,
+                    "{}",
+                    claim.id
+                );
             }
         }
         assert_eq!(approved_count, 1);
         assert_eq!(scan.claims.len(), 4, "workspace claim count");
-        let generation_after = crate::coordination::read_workspace_generation(&paths, "research").unwrap();
+        let generation_after =
+            crate::coordination::read_workspace_generation(&paths, "research").unwrap();
         assert_eq!(
             generation_after.published, generation_before.published,
             "campaign published the generation"
@@ -938,7 +1061,10 @@ mod tests {
             "Rebuild(",
             "VerifiedDigest",
         ] {
-            assert!(!source.contains(forbidden), "campaign.rs must not reference {forbidden:?}");
+            assert!(
+                !source.contains(forbidden),
+                "campaign.rs must not reference {forbidden:?}"
+            );
         }
         let _ = std::fs::remove_dir_all(&dir);
     }

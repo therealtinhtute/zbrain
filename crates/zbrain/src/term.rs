@@ -86,6 +86,9 @@ mod tests {
         assert_eq!(prompt.read_confirmation().unwrap(), "abcd");
         assert_eq!(prompt.read_confirmation().unwrap(), "skip");
         let err = prompt.read_confirmation().unwrap_err();
-        assert!(err.to_string().contains("requires the confirmation input"), "{err}");
+        assert!(
+            err.to_string().contains("requires the confirmation input"),
+            "{err}"
+        );
     }
 }

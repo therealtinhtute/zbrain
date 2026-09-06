@@ -61,7 +61,11 @@ pub struct ParseTimestampError {
 
 impl fmt::Display for ParseTimestampError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "invalid rfc3339 timestamp {:?}: {}", self.value, self.source)
+        write!(
+            f,
+            "invalid rfc3339 timestamp {:?}: {}",
+            self.value, self.source
+        )
     }
 }
 

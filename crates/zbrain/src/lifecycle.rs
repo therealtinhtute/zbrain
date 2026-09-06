@@ -10,11 +10,11 @@ use serde::Serialize;
 use crate::boundary::validate_workspace;
 use crate::claims::{
     append_unique_claim_id, claim_verification_digest, message, render_claim_markdown,
-    validate_claim_approval, validate_claim_transition_authorization, verify_claim_digest, write_claim_atomic,
-    Claim, ClaimError, ClaimSource, ClaimStore, ClaimTransition, ClaimTransitionAuthorization,
-    OKF_CLAIM_TYPE, CLAIM_SCHEMA_VERSION, CLAIM_STATUS_APPROVED, CLAIM_STATUS_DRAFT,
+    validate_claim_approval, validate_claim_transition_authorization, verify_claim_digest,
+    write_claim_atomic, Claim, ClaimError, ClaimSource, ClaimStore, ClaimTransition,
+    ClaimTransitionAuthorization, CLAIM_SCHEMA_VERSION, CLAIM_STATUS_APPROVED, CLAIM_STATUS_DRAFT,
     CLAIM_STATUS_REVOKED, CLAIM_STATUS_SUPERSEDED, CLAIM_TRANSITION_APPROVE,
-    CLAIM_TRANSITION_REVOKE, CLAIM_TRANSITION_SUPERSEDE,
+    CLAIM_TRANSITION_REVOKE, CLAIM_TRANSITION_SUPERSEDE, OKF_CLAIM_TYPE,
 };
 use crate::clock::rfc3339;
 use crate::coordination::{
@@ -100,7 +100,8 @@ impl ClaimStore {
         }
         validate_claim_approval(&claim)?;
         let mut evidence_validator = self.validate_approval_references(workspace, &claim)?;
-        let sources = self.claim_sources(workspace, &claim.evidence_ids, &mut evidence_validator)?;
+        let sources =
+            self.claim_sources(workspace, &claim.evidence_ids, &mut evidence_validator)?;
 
         let mut seen_old_ids = std::collections::HashSet::new();
         let mut old_claims: Vec<Claim> = Vec::with_capacity(claim.supersedes.len());
@@ -430,7 +431,11 @@ impl ClaimStore {
 
     /// Digest of the current canonical claim after resolving it under the
     /// workspace read lock.
-    pub fn canonical_digest(&self, workspace: &str, id: &str) -> Result<(Claim, String), ClaimError> {
+    pub fn canonical_digest(
+        &self,
+        workspace: &str,
+        id: &str,
+    ) -> Result<(Claim, String), ClaimError> {
         let _lock = crate::coordination::acquire_workspace_lock(&self.paths, workspace, false)
             .map_err(claim_message)?;
         self.canonical_digest_unlocked(workspace, id)
@@ -483,12 +488,12 @@ pub struct ClaimMigrationSummary {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::claims::{CLAIM_BASIS_DERIVED, CLAIM_BASIS_EVIDENCE, CLAIM_BASIS_OWNER};
     use crate::clock::FixedClock;
     use crate::config::ensure_config;
     use crate::evidence::{evidence_snapshot_digest, Evidence};
-    use crate::claims::{CLAIM_BASIS_DERIVED, CLAIM_BASIS_EVIDENCE, CLAIM_BASIS_OWNER};
-    use crate::paths::Paths;
     use crate::paths::Options;
+    use crate::paths::Paths;
     use chrono::{TimeZone, Utc};
     use std::os::unix::fs::PermissionsExt;
     use std::path::{Path, PathBuf};
@@ -499,7 +504,8 @@ mod tests {
     }
 
     fn fixture(name: &str) -> (PathBuf, Paths, FixedClock) {
-        let dir = std::env::temp_dir().join(format!("zbrain-lifecycle-{}-{name}", std::process::id()));
+        let dir =
+            std::env::temp_dir().join(format!("zbrain-lifecycle-{}-{name}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         let paths = Paths::resolve(Options {
@@ -573,7 +579,13 @@ mod tests {
         std::fs::write(&source, body).unwrap();
         let store = crate::evidence::EvidenceStore::new(paths.clone());
         store
-            .add_file("research", &source, "file://source.txt", "text/plain", clock)
+            .add_file(
+                "research",
+                &source,
+                "file://source.txt",
+                "text/plain",
+                clock,
+            )
             .unwrap()
     }
 
@@ -604,7 +616,10 @@ mod tests {
         let draft = valid_store_claim("clm_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", CLAIM_BASIS_OWNER);
         let created = store.write_draft("research", draft.clone()).unwrap();
         assert_eq!(created.status, CLAIM_STATUS_DRAFT);
-        assert_eq!(created.path, "projects/clm_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.md");
+        assert_eq!(
+            created.path,
+            "projects/clm_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.md"
+        );
 
         let approved = store.approve("research", &draft.id).unwrap();
         assert_eq!(approved.status, CLAIM_STATUS_APPROVED);
@@ -612,7 +627,8 @@ mod tests {
         assert_eq!(approved.verified_by, "owner");
         assert!(approved.verified_digest.starts_with("sha256:"));
 
-        let mut replacement = valid_store_claim("clm_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", CLAIM_BASIS_OWNER);
+        let mut replacement =
+            valid_store_claim("clm_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", CLAIM_BASIS_OWNER);
         replacement.body = "Replacement body\n".to_string();
         let superseding = store
             .write_superseding_draft("research", &approved.id, replacement.clone())
@@ -654,19 +670,27 @@ mod tests {
     fn supersede_transition_graph() {
         let (dir, paths, clock) = fixture("supersede");
         let store = store(&paths, &clock);
-        let old_claim = valid_store_claim("clm_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", CLAIM_BASIS_OWNER);
+        let old_claim =
+            valid_store_claim("clm_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", CLAIM_BASIS_OWNER);
         store.write_draft("research", old_claim.clone()).unwrap();
         let old_approved = store.approve("research", &old_claim.id).unwrap();
 
-        let mut replacement = valid_store_claim("clm_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", CLAIM_BASIS_OWNER);
+        let mut replacement =
+            valid_store_claim("clm_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", CLAIM_BASIS_OWNER);
         replacement.body = "Replacement body\n".to_string();
         let draft = store
             .write_superseding_draft("research", &old_approved.id, replacement.clone())
             .unwrap();
         let approved_replacement = store.approve("research", &draft.id).unwrap();
         assert_eq!(approved_replacement.transitions.len(), 1);
-        assert_eq!(approved_replacement.transitions[0].kind, CLAIM_TRANSITION_SUPERSEDE);
-        assert_eq!(approved_replacement.transitions[0].related_claim_ids, vec![old_approved.id.clone()]);
+        assert_eq!(
+            approved_replacement.transitions[0].kind,
+            CLAIM_TRANSITION_SUPERSEDE
+        );
+        assert_eq!(
+            approved_replacement.transitions[0].related_claim_ids,
+            vec![old_approved.id.clone()]
+        );
 
         let old = store.read("research", &old_approved.id).unwrap();
         assert_eq!(old.status, CLAIM_STATUS_SUPERSEDED);
@@ -676,8 +700,14 @@ mod tests {
         assert_eq!(old.verified_digest, old_approved.verified_digest);
         assert_eq!(old.transitions.len(), 2);
         assert_eq!(old.transitions[1].kind, CLAIM_TRANSITION_SUPERSEDE);
-        assert_eq!(old.transitions[1].prior_verification_digest, old_approved.verified_digest);
-        assert_eq!(old.transitions[1].related_claim_ids[0], approved_replacement.id);
+        assert_eq!(
+            old.transitions[1].prior_verification_digest,
+            old_approved.verified_digest
+        );
+        assert_eq!(
+            old.transitions[1].related_claim_ids[0],
+            approved_replacement.id
+        );
         assert!(store.revoke("research", &old.id, "obsolete").is_err());
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -705,7 +735,8 @@ mod tests {
     fn lifecycle_history_preserved() {
         let (dir, paths, clock) = fixture("history");
         let store = store(&paths, &clock);
-        let mut claim = valid_store_claim("clm_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", CLAIM_BASIS_OWNER);
+        let mut claim =
+            valid_store_claim("clm_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", CLAIM_BASIS_OWNER);
         claim.body = "Original body\n".to_string();
         store.write_draft("research", claim.clone()).unwrap();
         let approved = store.approve("research", &claim.id).unwrap();
@@ -713,14 +744,19 @@ mod tests {
         let before_at = approved.verified_at.clone();
         let before_by = approved.verified_by.clone();
         let before_digest = approved.verified_digest.clone();
-        store.revoke("research", &approved.id, "owner withdrew claim").unwrap();
+        store
+            .revoke("research", &approved.id, "owner withdrew claim")
+            .unwrap();
         let revoked = store.read("research", &approved.id).unwrap();
         assert_eq!(revoked.body, before_body);
         assert_eq!(revoked.verified_at, before_at);
         assert_eq!(revoked.verified_by, before_by);
         assert_eq!(revoked.verified_digest, before_digest);
         assert_eq!(revoked.transitions.len(), 2);
-        assert_eq!(revoked.transitions[1].prior_verification_digest, before_digest);
+        assert_eq!(
+            revoked.transitions[1].prior_verification_digest,
+            before_digest
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -729,7 +765,8 @@ mod tests {
         let (dir, paths, clock) = fixture("evapprove");
         let evidence = add_store_evidence(&paths, &clock, b"source bytes");
         let store = store(&paths, &clock);
-        let mut claim = valid_store_claim("clm_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", CLAIM_BASIS_EVIDENCE);
+        let mut claim =
+            valid_store_claim("clm_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", CLAIM_BASIS_EVIDENCE);
         claim.evidence_ids = vec![evidence.id.clone()];
         store.write_draft("research", claim.clone()).unwrap();
         let approved = store.approve("research", &claim.id).unwrap();
@@ -748,7 +785,10 @@ mod tests {
             .join("research/wiki/projects")
             .join(format!("{}.md", claim.id));
         let contents = String::from_utf8(std::fs::read(&claim_path).unwrap()).unwrap();
-        assert!(contents.contains("sources:") && contents.contains("verified:"), "{contents}");
+        assert!(
+            contents.contains("sources:") && contents.contains("verified:"),
+            "{contents}"
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -760,7 +800,8 @@ mod tests {
         std::fs::set_permissions(&raw, std::fs::Permissions::from_mode(0o644)).unwrap();
         std::fs::write(&raw, b"tampered").unwrap();
         let store = store(&paths, &clock);
-        let mut claim = valid_store_claim("clm_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", CLAIM_BASIS_EVIDENCE);
+        let mut claim =
+            valid_store_claim("clm_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", CLAIM_BASIS_EVIDENCE);
         claim.evidence_ids = vec![evidence.id.clone()];
         store.write_draft("research", claim.clone()).unwrap();
         assert!(store.approve("research", &claim.id).is_err());
@@ -773,10 +814,13 @@ mod tests {
         let store = store(&paths, &clock);
         let support = valid_store_claim("clm_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", CLAIM_BASIS_OWNER);
         store.write_draft("research", support.clone()).unwrap();
-        let mut derived = valid_store_claim("clm_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", CLAIM_BASIS_DERIVED);
+        let mut derived =
+            valid_store_claim("clm_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", CLAIM_BASIS_DERIVED);
         derived.supporting_claim_ids = vec![support.id.clone()];
         store.write_draft("research", derived).unwrap();
-        assert!(store.approve("research", "clm_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb").is_err());
+        assert!(store
+            .approve("research", "clm_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")
+            .is_err());
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -793,7 +837,10 @@ mod tests {
     #[test]
     fn claim_store_approve_deep_support() {
         let (dir, paths, clock) = fixture("deep");
-        let leaf = finalize_approved_claim(&valid_store_claim(&approval_test_claim_id(1), CLAIM_BASIS_OWNER));
+        let leaf = finalize_approved_claim(&valid_store_claim(
+            &approval_test_claim_id(1),
+            CLAIM_BASIS_OWNER,
+        ));
         write_canonical_claim(&paths, &leaf);
         let mut current = leaf;
         for number in 2..=96u32 {
@@ -815,14 +862,21 @@ mod tests {
     #[test]
     fn claim_store_approve_invalid_digest() {
         let (dir, paths, clock) = fixture("baddigest");
-        let support = finalize_approved_claim(&valid_store_claim(&approval_test_claim_id(1), CLAIM_BASIS_OWNER));
+        let support = finalize_approved_claim(&valid_store_claim(
+            &approval_test_claim_id(1),
+            CLAIM_BASIS_OWNER,
+        ));
         write_canonical_claim(&paths, &support);
         let support_path = paths
             .workspaces_dir
             .join("research/wiki/projects")
             .join(format!("{}.md", support.id));
         let contents = String::from_utf8(std::fs::read(&support_path).unwrap()).unwrap();
-        std::fs::write(&support_path, contents.replacen("Store body", "Tampered body", 1)).unwrap();
+        std::fs::write(
+            &support_path,
+            contents.replacen("Store body", "Tampered body", 1),
+        )
+        .unwrap();
 
         let mut root = valid_store_claim(&approval_test_claim_id(2), CLAIM_BASIS_DERIVED);
         root.supporting_claim_ids = vec![support.id.clone()];
@@ -833,10 +887,7 @@ mod tests {
             .join("research/wiki/projects")
             .join(format!("{}.md", root.id));
         let before = sha256_file(&root_path);
-        let err = store
-            .approve("research", &root.id)
-            .unwrap_err()
-            .to_string();
+        let err = store.approve("research", &root.id).unwrap_err().to_string();
         assert!(err.contains("verification digest mismatch"), "{err}");
         assert_eq!(sha256_file(&root_path), before);
         let unchanged = store.read("research", &root.id).unwrap();
@@ -897,7 +948,10 @@ mod tests {
             .join("research/wiki/projects")
             .join(format!("{}.md", claim.id));
         let before = sha256_file(&claim_path);
-        let err = store.approve("research", &claim.id).unwrap_err().to_string();
+        let err = store
+            .approve("research", &claim.id)
+            .unwrap_err()
+            .to_string();
         assert!(err.contains("source.yaml"), "{err}");
         assert_eq!(sha256_file(&claim_path), before);
         let _ = std::fs::remove_dir_all(&dir);
@@ -919,7 +973,10 @@ mod tests {
             .join("research/wiki/projects")
             .join(format!("{}.md", claim.id));
         let before = sha256_file(&claim_path);
-        let err = store.approve("research", &claim.id).unwrap_err().to_string();
+        let err = store
+            .approve("research", &claim.id)
+            .unwrap_err()
+            .to_string();
         assert!(err.contains("sha256"), "{err}");
         assert_eq!(sha256_file(&claim_path), before);
         let _ = std::fs::remove_dir_all(&dir);
@@ -949,7 +1006,10 @@ mod tests {
             .approve("research", &dependent.id)
             .unwrap_err()
             .to_string();
-        assert!(err.contains(&evidence.id) && err.contains("sha256"), "{err}");
+        assert!(
+            err.contains(&evidence.id) && err.contains("sha256"),
+            "{err}"
+        );
         assert_eq!(sha256_file(&claim_path), before);
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -995,7 +1055,8 @@ mod tests {
         assert_eq!(got.method, "claim_lifecycle.apply");
         assert_eq!(got.mcp_client, "mcp-client/1.0");
 
-        let mut replacement = valid_store_claim("clm_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", CLAIM_BASIS_OWNER);
+        let mut replacement =
+            valid_store_claim("clm_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", CLAIM_BASIS_OWNER);
         replacement.body = "Replacement body\n".to_string();
         store
             .write_superseding_draft("research", &approved.id, replacement.clone())
@@ -1030,7 +1091,13 @@ mod tests {
             )
             .unwrap();
         assert_eq!(revoked.verified_by, "owner:mcp");
-        let got = revoked.transitions.last().unwrap().authorization.as_ref().unwrap();
+        let got = revoked
+            .transitions
+            .last()
+            .unwrap()
+            .authorization
+            .as_ref()
+            .unwrap();
         assert_eq!(got.challenge_id, "chg_cccccccccccccccccccccccccccccccc");
         verify_claim_digest(&revoked).unwrap();
         let _ = std::fs::remove_dir_all(&dir);
@@ -1039,7 +1106,9 @@ mod tests {
     #[test]
     fn mutation_recovers_pending_transition() {
         let (dir, paths, clock) = fixture("recovermutation");
-        let recovery_path = paths.workspaces_dir.join("research/wiki/projects/recovery.md");
+        let recovery_path = paths
+            .workspaces_dir
+            .join("research/wiki/projects/recovery.md");
         std::fs::create_dir_all(recovery_path.parent().unwrap()).unwrap();
         let before = &b"before mutation\n"[..];
         let target = &b"recovered mutation\n"[..];
@@ -1088,7 +1157,10 @@ mod tests {
         let contents = String::from_utf8(std::fs::read(&claim_path).unwrap()).unwrap();
         assert!(!contents.contains("schema: zbrain.claim/v1"));
         assert!(contents.contains("type: zbrain.claim"));
-        assert!(contents.contains("profile: zbrain.trusted-memory/v1"), "{contents}");
+        assert!(
+            contents.contains("profile: zbrain.trusted-memory/v1"),
+            "{contents}"
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -1218,24 +1290,40 @@ mod tests {
         flat_mutated.body = "mutated flat duplicate\n".to_string();
         expect_duplicate(
             "WriteDraft(flat)",
-            store.write_draft("research", flat_mutated).unwrap_err().to_string(),
+            store
+                .write_draft("research", flat_mutated)
+                .unwrap_err()
+                .to_string(),
         );
         let mut nested_mutated = nested.clone();
         nested_mutated.body = "mutated nested duplicate\n".to_string();
         expect_duplicate(
             "WriteDraft(nested)",
-            store.write_draft("research", nested_mutated).unwrap_err().to_string(),
+            store
+                .write_draft("research", nested_mutated)
+                .unwrap_err()
+                .to_string(),
         );
-        expect_duplicate("Approve", store.approve("research", id).unwrap_err().to_string());
+        expect_duplicate(
+            "Approve",
+            store.approve("research", id).unwrap_err().to_string(),
+        );
         expect_duplicate(
             "Revoke",
-            store.revoke("research", id, "ambiguous").unwrap_err().to_string(),
+            store
+                .revoke("research", id, "ambiguous")
+                .unwrap_err()
+                .to_string(),
         );
         let replacement_id = "clm_66666666666666666666666666666666";
         expect_duplicate(
             "WriteSupersedingDraft",
             store
-                .write_superseding_draft("research", id, valid_store_claim(replacement_id, CLAIM_BASIS_OWNER))
+                .write_superseding_draft(
+                    "research",
+                    id,
+                    valid_store_claim(replacement_id, CLAIM_BASIS_OWNER),
+                )
                 .unwrap_err()
                 .to_string(),
         );
@@ -1285,7 +1373,9 @@ mod tests {
         // Companion to TestMutationRecoversPendingTransition: approve also
         // recovers the journal before mutating canonical bytes.
         let (dir, paths, clock) = fixture("recoverapprove");
-        let recovery_path = paths.workspaces_dir.join("research/wiki/projects/recovery.md");
+        let recovery_path = paths
+            .workspaces_dir
+            .join("research/wiki/projects/recovery.md");
         std::fs::create_dir_all(recovery_path.parent().unwrap()).unwrap();
         std::fs::write(&recovery_path, b"before mutation\n").unwrap();
         write_pending_transition_unlocked(
@@ -1308,9 +1398,11 @@ mod tests {
         let claim = valid_store_claim("clm_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", CLAIM_BASIS_OWNER);
         store.write_draft("research", claim.clone()).unwrap();
         store.approve("research", &claim.id).unwrap();
-        assert_eq!(std::fs::read(&recovery_path).unwrap(), b"recovered approve\n");
+        assert_eq!(
+            std::fs::read(&recovery_path).unwrap(),
+            b"recovered approve\n"
+        );
         assert!(!pending_transition_path(&paths).exists());
         let _ = std::fs::remove_dir_all(&dir);
     }
-
 }

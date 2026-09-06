@@ -3,8 +3,8 @@ use std::path::PathBuf;
 use crate::clock::Clock;
 use crate::config::{read_config, write_config};
 use crate::paths::{
-    ensure_directory_mode, is_safe_workspace_name, write_file, Paths,
-    RUNTIME_DIRECTORY_MODE, RUNTIME_METADATA_MODE,
+    ensure_directory_mode, is_safe_workspace_name, write_file, Paths, RUNTIME_DIRECTORY_MODE,
+    RUNTIME_METADATA_MODE,
 };
 
 pub const WIKI_TIERS: [&str; 4] = ["axioms", "mental-models", "projects", "decisions"];
@@ -97,8 +97,15 @@ pub fn create_workspace(
         ensure_directory_mode(&root.join(dir), RUNTIME_DIRECTORY_MODE)?;
     }
 
-    let readme = format!("# {name}\n\nCreated: {}\n", crate::clock::rfc3339(clock.now()));
-    write_file(&root.join("workspace.md"), readme.as_bytes(), RUNTIME_METADATA_MODE)?;
+    let readme = format!(
+        "# {name}\n\nCreated: {}\n",
+        crate::clock::rfc3339(clock.now())
+    );
+    write_file(
+        &root.join("workspace.md"),
+        readme.as_bytes(),
+        RUNTIME_METADATA_MODE,
+    )?;
     write_file(
         &root.join("evidence/_index.md"),
         b"# Evidence Index\n",
@@ -137,7 +144,7 @@ pub fn marshal_current(current: &WorkspaceCurrent) -> Result<Vec<u8>, serde_json
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::clock::{FixedClock, rfc3339};
+    use crate::clock::{rfc3339, FixedClock};
     use crate::paths::{Options, Paths, EVIDENCE_FILE_MODE, RUNTIME_METADATA_MODE};
     use chrono::{TimeZone, Utc};
     use std::os::unix::fs::PermissionsExt;
@@ -164,7 +171,14 @@ mod tests {
         for tier in WIKI_TIERS {
             assert!(root.join("wiki").join(tier).is_dir(), "tier {tier} missing");
         }
-        for sub in ["agents", "evidence/sources", "evidence/analysis", "evidence/qa", "evidence/applied", "evidence/archive"] {
+        for sub in [
+            "agents",
+            "evidence/sources",
+            "evidence/analysis",
+            "evidence/qa",
+            "evidence/applied",
+            "evidence/archive",
+        ] {
             assert!(root.join(sub).is_dir(), "{sub} missing");
         }
         let readme = std::fs::read_to_string(root.join("workspace.md")).unwrap();
@@ -172,10 +186,19 @@ mod tests {
             readme,
             format!("# research\n\nCreated: {}\n", rfc3339(clock.now()))
         );
-        assert_eq!(std::fs::read(root.join("evidence/_index.md")).unwrap(), b"# Evidence Index\n");
-        let mode = std::fs::metadata(root.join("workspace.md")).unwrap().permissions().mode();
+        assert_eq!(
+            std::fs::read(root.join("evidence/_index.md")).unwrap(),
+            b"# Evidence Index\n"
+        );
+        let mode = std::fs::metadata(root.join("workspace.md"))
+            .unwrap()
+            .permissions()
+            .mode();
         assert_eq!(mode & 0o777, RUNTIME_METADATA_MODE);
-        let dir_mode = std::fs::metadata(root.join("wiki/axioms")).unwrap().permissions().mode();
+        let dir_mode = std::fs::metadata(root.join("wiki/axioms"))
+            .unwrap()
+            .permissions()
+            .mode();
         assert_eq!(dir_mode & 0o777, 0o700);
         let evidence_dir = root.join("evidence/sources");
         std::fs::write(evidence_dir.join("probe"), b"x").unwrap();

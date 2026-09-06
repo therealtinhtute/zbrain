@@ -51,7 +51,9 @@ fn capture() {
     };
     let index = IndexStore::new(paths.clone());
     index.mark_dirty("research").unwrap();
-    let created = ClaimStore::new(paths.clone()).write_draft("research", claim).unwrap();
+    let created = ClaimStore::new(paths.clone())
+        .write_draft("research", claim)
+        .unwrap();
     ClaimStore::with_clock(paths.clone(), Arc::new(FixedClock::new(clock.now())))
         .approve("research", &created.id)
         .unwrap();
@@ -71,15 +73,30 @@ fn capture() {
         tool(5, "memory_ask", r#"{"query":"zzz-unmatchable"}"#),
         tool(6, "memory_status", "{}"),
         tool(7, "memory_reindex", "{}"),
-        tool(8, "claim_draft", r#"{"tier":"projects","title":"Captured Draft","basis":"evidence","body":"captured draft body"}"#),
+        tool(
+            8,
+            "claim_draft",
+            r#"{"tier":"projects","title":"Captured Draft","basis":"evidence","body":"captured draft body"}"#
+        ),
         tool(9, "memory_status", "{}"),
         tool(10, "memory_ask", "{}"),
-        tool(11, "memory_ask", r#"{"query":"x","workspace":"nonexistent"}"#),
-        tool(12, "claim_draft", r#"{"tier":"projects","title":"t","basis":"weird","body":"b"}"#),
+        tool(
+            11,
+            "memory_ask",
+            r#"{"query":"x","workspace":"nonexistent"}"#
+        ),
+        tool(
+            12,
+            "claim_draft",
+            r#"{"tier":"projects","title":"t","basis":"weird","body":"b"}"#
+        ),
         tool(13, "memory_ask", r#"{"query":"x","after":"bad-timestamp"}"#),
     );
     let registry = ZbrainRegistry::new(paths.clone(), Box::new(FixedClock::new(clock.now())));
-    let options = McpOptions { version: "test".to_string(), ..Default::default() };
+    let options = McpOptions {
+        version: "test".to_string(),
+        ..Default::default()
+    };
     let mut server = Server::new(registry, options);
     let mut transport = MemoryTransport::with_requests(requests.into_bytes());
     server.run(&mut transport).unwrap();

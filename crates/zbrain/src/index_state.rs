@@ -7,7 +7,7 @@ use rusqlite::Connection;
 use serde::Serialize;
 
 use crate::index::IndexError;
-use crate::manifest::{TrustInput, TrustInputManifest, trust_input_manifest_digest};
+use crate::manifest::{trust_input_manifest_digest, TrustInput, TrustInputManifest};
 
 pub const INDEX_SCHEMA_VERSION: i64 = 3;
 pub const INDEX_STATE_SINGLETON: i64 = 1;
@@ -44,9 +44,7 @@ pub fn write_index_state(
             "insert into trust_inputs(path, kind, byte_length, sha256) values (?, ?, ?, ?)",
             rusqlite::params![entry.path, entry.kind, entry.byte_length, entry.sha256],
         )
-        .map_err(|err| {
-            IndexError::Message(format!("write trust input {:?}: {err}", entry.path))
-        })?;
+        .map_err(|err| IndexError::Message(format!("write trust input {:?}: {err}", entry.path)))?;
     }
     tx.execute("delete from rebuild_state", [])
         .map_err(|err| IndexError::Message(format!("clear rebuild state: {err}")))?;
@@ -69,8 +67,8 @@ pub fn read_index_state(
     conn: &Connection,
 ) -> Result<(TrustInputManifest, RebuildState), IndexError> {
     validate_index_state_schema(conn)?;
-    let manifest = read_trust_input_manifest(conn)
-        .map_err(|err| IndexError::Message(format!("{err}")))?;
+    let manifest =
+        read_trust_input_manifest(conn).map_err(|err| IndexError::Message(format!("{err}")))?;
     let state = read_rebuild_state(conn).map_err(|err| IndexError::Message(format!("{err}")))?;
     validate_rebuild_state(&state, &manifest.digest)
         .map_err(|err| IndexError::Message(format!("validate rebuild state: {err}")))?;
@@ -114,9 +112,7 @@ fn validate_index_state_schema(conn: &Connection) -> Result<(), IndexError> {
             ("change_token", "integer"),
         ],
     )
-    .map_err(|err| {
-        IndexError::Message(format!("validate trust input freshness schema: {err}"))
-    })?;
+    .map_err(|err| IndexError::Message(format!("validate trust input freshness schema: {err}")))?;
     require_index_state_columns(
         conn,
         "trust_directories",
@@ -158,7 +154,10 @@ fn require_index_state_columns(
         let name: String = row.get(1)?;
         let column_type: String = row.get(2)?;
         let not_null: i64 = row.get(3)?;
-        let Some((_, want_type)) = expected.iter().find(|(expected_name, _)| *expected_name == name) else {
+        let Some((_, want_type)) = expected
+            .iter()
+            .find(|(expected_name, _)| *expected_name == name)
+        else {
             continue;
         };
         if !column_type.trim().eq_ignore_ascii_case(want_type) {
@@ -287,8 +286,7 @@ pub(crate) fn validate_trust_input(entry: &TrustInput) -> Result<(), IndexError>
             "path must be a slash-normalized relative path".into(),
         ));
     }
-    if !is_canonical_slash_path(&entry.path) || entry.path == "." || entry.path.starts_with("../")
-    {
+    if !is_canonical_slash_path(&entry.path) || entry.path == "." || entry.path.starts_with("../") {
         return Err(IndexError::Message(
             "path must be canonical and remain relative".into(),
         ));
@@ -318,7 +316,10 @@ pub(crate) fn validate_trust_input(entry: &TrustInput) -> Result<(), IndexError>
         }
         crate::manifest::TRUST_INPUT_KIND_EVIDENCE_METADATA
         | crate::manifest::TRUST_INPUT_KIND_EVIDENCE_RAW => {
-            if parts.len() != 4 || parts[0] != "evidence" || parts[1] != "sources" || parts[2].is_empty()
+            if parts.len() != 4
+                || parts[0] != "evidence"
+                || parts[1] != "sources"
+                || parts[2].is_empty()
             {
                 return Err(IndexError::Message(
                     "evidence path must be evidence/sources/<id>/<file>".into(),
@@ -348,7 +349,10 @@ pub(crate) fn validate_trust_input(entry: &TrustInput) -> Result<(), IndexError>
 // Go pathpkg.Clean(p) == p for slash paths means: no empty components, no
 // "." or ".." components, not rooted.
 fn is_canonical_slash_path(path: &str) -> bool {
-    !path.is_empty() && path.split('/').all(|part| !part.is_empty() && part != "." && part != "..")
+    !path.is_empty()
+        && path
+            .split('/')
+            .all(|part| !part.is_empty() && part != "." && part != "..")
 }
 
 pub(crate) fn validate_rebuild_state(
@@ -391,14 +395,18 @@ pub(crate) fn validate_rebuild_state(
 
 pub(crate) fn is_sha256_digest(value: &str) -> bool {
     value.len() == 64
-        && value.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+        && value
+            .bytes()
+            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::index::{create_index_schema, test_support::fixed_index_rfc3339};
-    use crate::manifest::{TRUST_INPUT_KIND_CLAIM, TRUST_INPUT_KIND_EVIDENCE_METADATA, TRUST_INPUT_KIND_EVIDENCE_RAW};
+    use crate::manifest::{
+        TRUST_INPUT_KIND_CLAIM, TRUST_INPUT_KIND_EVIDENCE_METADATA, TRUST_INPUT_KIND_EVIDENCE_RAW,
+    };
 
     fn new_index_state_test_db() -> Connection {
         let conn = Connection::open_in_memory().unwrap();
@@ -468,7 +476,10 @@ mod tests {
         write_index_state(&tx, &manifest, &clean_index_state(&manifest)).unwrap();
         read_index_state_tx(&tx).unwrap();
         tx.rollback().unwrap();
-        assert!(read_index_state(&conn).is_err(), "want missing state after rollback");
+        assert!(
+            read_index_state(&conn).is_err(),
+            "want missing state after rollback"
+        );
     }
 
     #[test]
@@ -535,15 +546,22 @@ mod tests {
         let (_, got_state) = read_index_state(&conn).unwrap();
         assert_eq!(got_state, state);
 
-        conn.execute("update rebuild_state set status = 'unknown'", []).unwrap();
+        conn.execute("update rebuild_state set status = 'unknown'", [])
+            .unwrap();
         assert!(read_index_state(&conn).is_err());
     }
 
     #[test]
     fn index_state_rejects_malformed_rows() {
         let updates = [
-            ("negative-byte-length", "update trust_inputs set byte_length = -1"),
-            ("bad-digest", "update trust_inputs set sha256 = 'not-a-digest'"),
+            (
+                "negative-byte-length",
+                "update trust_inputs set byte_length = -1",
+            ),
+            (
+                "bad-digest",
+                "update trust_inputs set sha256 = 'not-a-digest'",
+            ),
             ("unknown-kind", "update trust_inputs set kind = 'unknown'"),
         ];
         for (name, update) in updates {
@@ -556,7 +574,10 @@ mod tests {
             }]);
             write_index_state_test_state(&conn, &manifest, &clean_index_state(&manifest));
             conn.execute(update, []).unwrap();
-            assert!(read_index_state(&conn).is_err(), "{name}: want fail-closed error");
+            assert!(
+                read_index_state(&conn).is_err(),
+                "{name}: want fail-closed error"
+            );
         }
 
         let conn = new_index_state_test_db();
@@ -656,12 +677,66 @@ mod tests {
 
         let valid_digest = "a".repeat(64);
         let rebuilt_at = "2026-08-04T05:00:00Z";
-        assert!(validate_rebuild_state(&RebuildState { status: REBUILD_STATUS_CLEAN.into(), invalid_count: 0, manifest_digest: valid_digest.clone(), rebuilt_at: rebuilt_at.into() }, &valid_digest).is_ok());
-        assert!(validate_rebuild_state(&RebuildState { status: REBUILD_STATUS_CLEAN.into(), invalid_count: 1, manifest_digest: valid_digest.clone(), rebuilt_at: rebuilt_at.into() }, &valid_digest).is_err());
-        assert!(validate_rebuild_state(&RebuildState { status: REBUILD_STATUS_REJECTED.into(), invalid_count: 0, manifest_digest: valid_digest.clone(), rebuilt_at: rebuilt_at.into() }, &valid_digest).is_err());
-        assert!(validate_rebuild_state(&RebuildState { status: REBUILD_STATUS_REJECTED.into(), invalid_count: 1, manifest_digest: "bad".into(), rebuilt_at: rebuilt_at.into() }, &valid_digest).is_err());
-        assert!(validate_rebuild_state(&RebuildState { status: REBUILD_STATUS_CLEAN.into(), invalid_count: 0, manifest_digest: valid_digest.clone(), rebuilt_at: "not-rfc3339".into() }, &valid_digest).is_err());
-        assert!(validate_rebuild_state(&RebuildState { status: "unknown".into(), invalid_count: 0, manifest_digest: valid_digest.clone(), rebuilt_at: rebuilt_at.into() }, &valid_digest).is_err());
+        assert!(validate_rebuild_state(
+            &RebuildState {
+                status: REBUILD_STATUS_CLEAN.into(),
+                invalid_count: 0,
+                manifest_digest: valid_digest.clone(),
+                rebuilt_at: rebuilt_at.into()
+            },
+            &valid_digest
+        )
+        .is_ok());
+        assert!(validate_rebuild_state(
+            &RebuildState {
+                status: REBUILD_STATUS_CLEAN.into(),
+                invalid_count: 1,
+                manifest_digest: valid_digest.clone(),
+                rebuilt_at: rebuilt_at.into()
+            },
+            &valid_digest
+        )
+        .is_err());
+        assert!(validate_rebuild_state(
+            &RebuildState {
+                status: REBUILD_STATUS_REJECTED.into(),
+                invalid_count: 0,
+                manifest_digest: valid_digest.clone(),
+                rebuilt_at: rebuilt_at.into()
+            },
+            &valid_digest
+        )
+        .is_err());
+        assert!(validate_rebuild_state(
+            &RebuildState {
+                status: REBUILD_STATUS_REJECTED.into(),
+                invalid_count: 1,
+                manifest_digest: "bad".into(),
+                rebuilt_at: rebuilt_at.into()
+            },
+            &valid_digest
+        )
+        .is_err());
+        assert!(validate_rebuild_state(
+            &RebuildState {
+                status: REBUILD_STATUS_CLEAN.into(),
+                invalid_count: 0,
+                manifest_digest: valid_digest.clone(),
+                rebuilt_at: "not-rfc3339".into()
+            },
+            &valid_digest
+        )
+        .is_err());
+        assert!(validate_rebuild_state(
+            &RebuildState {
+                status: "unknown".into(),
+                invalid_count: 0,
+                manifest_digest: valid_digest.clone(),
+                rebuilt_at: rebuilt_at.into()
+            },
+            &valid_digest
+        )
+        .is_err());
 
         let empty_manifest = TrustInputManifest {
             entries: Vec::new(),
@@ -670,8 +745,18 @@ mod tests {
         assert!(validate_trust_input_manifest(&empty_manifest).is_ok());
         let bad_manifest = TrustInputManifest {
             entries: vec![
-                TrustInput { path: "wiki/projects/b.md".into(), kind: TRUST_INPUT_KIND_CLAIM.into(), byte_length: 1, sha256: "b".repeat(64) },
-                TrustInput { path: "wiki/projects/a.md".into(), kind: TRUST_INPUT_KIND_CLAIM.into(), byte_length: 1, sha256: "a".repeat(64) },
+                TrustInput {
+                    path: "wiki/projects/b.md".into(),
+                    kind: TRUST_INPUT_KIND_CLAIM.into(),
+                    byte_length: 1,
+                    sha256: "b".repeat(64),
+                },
+                TrustInput {
+                    path: "wiki/projects/a.md".into(),
+                    kind: TRUST_INPUT_KIND_CLAIM.into(),
+                    byte_length: 1,
+                    sha256: "a".repeat(64),
+                },
             ],
             digest: "bad".into(),
         };
@@ -687,7 +772,12 @@ mod tests {
         conn.execute_batch("pragma user_version = 3").unwrap();
 
         conn.execute_batch("drop table trust_inputs; create table trust_inputs (path text, kind text, byte_length integer, sha256 text)").unwrap();
-        let expected = [("path", "text"), ("kind", "text"), ("byte_length", "integer"), ("sha256", "text")];
+        let expected = [
+            ("path", "text"),
+            ("kind", "text"),
+            ("byte_length", "integer"),
+            ("sha256", "text"),
+        ];
         assert!(require_index_state_columns(&conn, "trust_inputs", &expected).is_err());
 
         let conn2 = new_index_state_test_db();
@@ -703,18 +793,38 @@ mod tests {
     fn index_state_read_errors() {
         let conn = new_index_state_test_db();
         let manifest = index_state_manifest(&[
-            TrustInput { path: "wiki/projects/a.md".into(), kind: TRUST_INPUT_KIND_CLAIM.into(), byte_length: 1, sha256: "a".repeat(64) },
-            TrustInput { path: "wiki/projects/b.md".into(), kind: TRUST_INPUT_KIND_CLAIM.into(), byte_length: 1, sha256: "b".repeat(64) },
+            TrustInput {
+                path: "wiki/projects/a.md".into(),
+                kind: TRUST_INPUT_KIND_CLAIM.into(),
+                byte_length: 1,
+                sha256: "a".repeat(64),
+            },
+            TrustInput {
+                path: "wiki/projects/b.md".into(),
+                kind: TRUST_INPUT_KIND_CLAIM.into(),
+                byte_length: 1,
+                sha256: "b".repeat(64),
+            },
         ]);
         let tx = conn.unchecked_transaction().unwrap();
         tx.execute(
             "insert into trust_inputs(path, kind, byte_length, sha256) values (?, ?, ?, ?)",
-            rusqlite::params!["wiki/projects/a.md", TRUST_INPUT_KIND_CLAIM, 1, "a".repeat(64)],
+            rusqlite::params![
+                "wiki/projects/a.md",
+                TRUST_INPUT_KIND_CLAIM,
+                1,
+                "a".repeat(64)
+            ],
         )
         .unwrap();
         tx.execute(
             "insert into trust_inputs(path, kind, byte_length, sha256) values (?, ?, ?, ?)",
-            rusqlite::params!["wiki/projects/b.md", TRUST_INPUT_KIND_CLAIM, 1, "b".repeat(64)],
+            rusqlite::params![
+                "wiki/projects/b.md",
+                TRUST_INPUT_KIND_CLAIM,
+                1,
+                "b".repeat(64)
+            ],
         )
         .unwrap();
         tx.execute(
@@ -767,8 +877,18 @@ mod tests {
         let conn = new_index_state_test_db();
         let unsorted = TrustInputManifest {
             entries: vec![
-                TrustInput { path: "wiki/projects/b.md".into(), kind: TRUST_INPUT_KIND_CLAIM.into(), byte_length: 1, sha256: "b".repeat(64) },
-                TrustInput { path: "wiki/projects/a.md".into(), kind: TRUST_INPUT_KIND_CLAIM.into(), byte_length: 1, sha256: "a".repeat(64) },
+                TrustInput {
+                    path: "wiki/projects/b.md".into(),
+                    kind: TRUST_INPUT_KIND_CLAIM.into(),
+                    byte_length: 1,
+                    sha256: "b".repeat(64),
+                },
+                TrustInput {
+                    path: "wiki/projects/a.md".into(),
+                    kind: TRUST_INPUT_KIND_CLAIM.into(),
+                    byte_length: 1,
+                    sha256: "a".repeat(64),
+                },
             ],
             digest: "a".repeat(64),
         };
@@ -790,7 +910,9 @@ mod tests {
         let conn4 = new_index_state_test_db();
         conn4.execute_batch("pragma user_version = 99").unwrap();
         let tx3 = conn4.unchecked_transaction().unwrap();
-        assert!(write_index_state(&tx3, &valid_manifest, &clean_index_state(&valid_manifest)).is_err());
+        assert!(
+            write_index_state(&tx3, &valid_manifest, &clean_index_state(&valid_manifest)).is_err()
+        );
         tx3.rollback().unwrap();
     }
 
@@ -805,23 +927,46 @@ mod tests {
         assert!(validate_index_state_schema(&conn2).is_err());
 
         let conn3 = new_index_state_test_db();
-        conn3.execute_batch("drop table trust_directories; create table trust_directories (path text not null)").unwrap();
+        conn3
+            .execute_batch(
+                "drop table trust_directories; create table trust_directories (path text not null)",
+            )
+            .unwrap();
         assert!(validate_index_state_schema(&conn3).is_err());
 
         let conn4 = new_index_state_test_db();
-        let manifest = index_state_manifest(&[TrustInput { path: "wiki/projects/a.md".into(), kind: TRUST_INPUT_KIND_CLAIM.into(), byte_length: 1, sha256: "a".repeat(64) }]);
+        let manifest = index_state_manifest(&[TrustInput {
+            path: "wiki/projects/a.md".into(),
+            kind: TRUST_INPUT_KIND_CLAIM.into(),
+            byte_length: 1,
+            sha256: "a".repeat(64),
+        }]);
         write_index_state_test_state(&conn4, &manifest, &clean_index_state(&manifest));
-        conn4.execute("update trust_inputs set sha256 = 'bad'", []).unwrap();
+        conn4
+            .execute("update trust_inputs set sha256 = 'bad'", [])
+            .unwrap();
         assert!(read_index_state(&conn4).is_err());
 
         let conn5 = new_index_state_test_db();
         write_index_state_test_state(&conn5, &manifest, &clean_index_state(&manifest));
-        conn5.execute("update rebuild_state set status = 'bad'", []).unwrap();
+        conn5
+            .execute("update rebuild_state set status = 'bad'", [])
+            .unwrap();
         assert!(read_index_state(&conn5).is_err());
 
         let dup_entries = vec![
-            TrustInput { path: "wiki/projects/a.md".into(), kind: TRUST_INPUT_KIND_CLAIM.into(), byte_length: 1, sha256: "a".repeat(64) },
-            TrustInput { path: "wiki/projects/a.md".into(), kind: TRUST_INPUT_KIND_CLAIM.into(), byte_length: 1, sha256: "a".repeat(64) },
+            TrustInput {
+                path: "wiki/projects/a.md".into(),
+                kind: TRUST_INPUT_KIND_CLAIM.into(),
+                byte_length: 1,
+                sha256: "a".repeat(64),
+            },
+            TrustInput {
+                path: "wiki/projects/a.md".into(),
+                kind: TRUST_INPUT_KIND_CLAIM.into(),
+                byte_length: 1,
+                sha256: "a".repeat(64),
+            },
         ];
         let dup_manifest = TrustInputManifest {
             entries: dup_entries.clone(),

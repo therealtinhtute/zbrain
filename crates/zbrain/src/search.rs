@@ -325,7 +325,9 @@ mod tests {
     #[test]
     fn search_workspace_parses_markdown_fields() {
         let (_dir, paths) = search_test_paths("markdown");
-        let note_path = paths.workspaces_dir.join("research/wiki/mental-models/retrieval.md");
+        let note_path = paths
+            .workspaces_dir
+            .join("research/wiki/mental-models/retrieval.md");
         let contents = "---\ntitle: Markdown Retrieval\ntags: [go, search]\n---\n\n# Query Pipeline\n\nUse [SQLite FTS5](https://sqlite.org) for local-first memory search.\n\n```go\n// noisy code should not become body text\nsecretSearchIdentifier\n```\n";
         std::fs::write(&note_path, contents).unwrap();
 
@@ -341,8 +343,14 @@ mod tests {
     #[test]
     fn search_workspace_supports_unicode_query_tokens() {
         let (_dir, paths) = search_test_paths("unicode");
-        let note_path = paths.workspaces_dir.join("research/wiki/projects/tieng-viet.md");
-        std::fs::write(&note_path, "# Ghi nhớ tiếng Việt\n\nAgent cần tìm kiếm tri thức nội bộ.").unwrap();
+        let note_path = paths
+            .workspaces_dir
+            .join("research/wiki/projects/tieng-viet.md");
+        std::fs::write(
+            &note_path,
+            "# Ghi nhớ tiếng Việt\n\nAgent cần tìm kiếm tri thức nội bộ.",
+        )
+        .unwrap();
         let results = search_workspace(&paths, "research", "tìm kiếm", 10).unwrap();
         assert_eq!(results.len(), 1);
         let _ = std::fs::remove_dir_all(&_dir);
@@ -351,7 +359,9 @@ mod tests {
     #[test]
     fn search_workspace_searches_only_wiki() {
         let (_dir, paths) = search_test_paths("wiki-only");
-        let evidence_path = paths.workspaces_dir.join("research/evidence/sources/raw.md");
+        let evidence_path = paths
+            .workspaces_dir
+            .join("research/evidence/sources/raw.md");
         std::fs::write(&evidence_path, "poison-token should never be retrieved").unwrap();
         let results = search_workspace(&paths, "research", "poison-token", 10).unwrap();
         assert_eq!(results.len(), 0);
@@ -366,10 +376,18 @@ mod tests {
             ("wildcard keep", "foo*", "foo*"),
             ("wildcard case lower", "Foo*", "foo*"),
             ("phrase not split", "\"exact phrase\"", "\"exact phrase\""),
-            ("mixed phrase wildcard", "hello \"exact phrase\" foo*", "\"hello\" \"exact phrase\" foo*"),
+            (
+                "mixed phrase wildcard",
+                "hello \"exact phrase\" foo*",
+                "\"hello\" \"exact phrase\" foo*",
+            ),
             ("near reject upper", "foo NEAR bar", ""),
             ("near reject lower", "foo near bar", ""),
-            ("near inside phrase allowed", "\"foo NEAR bar\"", "\"foo near bar\""),
+            (
+                "near inside phrase allowed",
+                "\"foo NEAR bar\"",
+                "\"foo near bar\"",
+            ),
             ("dedup", "hello hello", "\"hello\""),
             ("single token", "hello", "\"hello\""),
             ("empty", "   ", ""),
@@ -387,35 +405,38 @@ mod tests {
         let idx = IndexStore::new(paths.clone());
         idx.rebuild("research").unwrap();
         // NEAR should be rejected as query is required.
-        assert!(idx.search(
-            "research",
-            SearchOptions {
-                query: "foo NEAR bar".into(),
-                statuses: vec![CLAIM_STATUS_APPROVED.into()],
-                limit: 10,
-            },
-        )
-        .is_err());
+        assert!(idx
+            .search(
+                "research",
+                SearchOptions {
+                    query: "foo NEAR bar".into(),
+                    statuses: vec![CLAIM_STATUS_APPROVED.into()],
+                    limit: 10,
+                },
+            )
+            .is_err());
         // Phrase should succeed (no error, even if no results).
-        assert!(idx.search(
-            "research",
-            SearchOptions {
-                query: "\"hello world\"".into(),
-                statuses: vec![CLAIM_STATUS_APPROVED.into()],
-                limit: 10,
-            },
-        )
-        .is_ok());
+        assert!(idx
+            .search(
+                "research",
+                SearchOptions {
+                    query: "\"hello world\"".into(),
+                    statuses: vec![CLAIM_STATUS_APPROVED.into()],
+                    limit: 10,
+                },
+            )
+            .is_ok());
         // Wildcard should succeed.
-        assert!(idx.search(
-            "research",
-            SearchOptions {
-                query: "hell*".into(),
-                statuses: vec![CLAIM_STATUS_APPROVED.into()],
-                limit: 10,
-            },
-        )
-        .is_ok());
+        assert!(idx
+            .search(
+                "research",
+                SearchOptions {
+                    query: "hell*".into(),
+                    statuses: vec![CLAIM_STATUS_APPROVED.into()],
+                    limit: 10,
+                },
+            )
+            .is_ok());
         let _ = std::fs::remove_dir_all(&_dir);
     }
 }

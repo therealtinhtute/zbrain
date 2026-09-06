@@ -8,8 +8,8 @@ use std::path::PathBuf;
 use rusqlite::Connection;
 use sha2::{Digest as _, Sha256};
 
-use crate::index::{create_temp_file, EmbeddingSummary, IndexStore, IndexError};
-use crate::paths::{set_permissions, DERIVED_INDEX_MODE, Paths};
+use crate::index::{create_temp_file, EmbeddingSummary, IndexError, IndexStore};
+use crate::paths::{set_permissions, Paths, DERIVED_INDEX_MODE};
 
 pub const LOOPBACK_MODEL: &str = "zbrain/loopback-v1";
 pub const DEFAULT_EMBEDDING_DIMENSION: usize = 384;
@@ -41,11 +41,11 @@ impl LoopbackEmbedder {
         let mut vec = vec![0.0f32; self.dimension];
         for token in loopback_tokens(text) {
             let hash = Sha256::digest(token.as_bytes());
-            let idx = u32::from_le_bytes([hash[0], hash[1], hash[2], hash[3]]) as usize
-                % self.dimension;
+            let idx =
+                u32::from_le_bytes([hash[0], hash[1], hash[2], hash[3]]) as usize % self.dimension;
             vec[idx] += 1.0;
-            let idx2 = u32::from_le_bytes([hash[4], hash[5], hash[6], hash[7]]) as usize
-                % self.dimension;
+            let idx2 =
+                u32::from_le_bytes([hash[4], hash[5], hash[6], hash[7]]) as usize % self.dimension;
             vec[idx2] += 0.5;
         }
         let mut norm: f64 = vec.iter().map(|v| (*v as f64) * (*v as f64)).sum();
@@ -116,7 +116,11 @@ impl EmbeddingStore {
 
     /// StoreVectors writes embedding vectors for the given claims, replacing
     /// any existing embeddings atomically via rename.
-    pub fn store_vectors(&self, workspace: &str, records: &[EmbeddingRecord]) -> Result<(), IndexError> {
+    pub fn store_vectors(
+        &self,
+        workspace: &str,
+        records: &[EmbeddingRecord],
+    ) -> Result<(), IndexError> {
         if records.is_empty() {
             return self.close(workspace);
         }
@@ -146,10 +150,7 @@ impl EmbeddingStore {
                     rusqlite::params![record.claim_id, bytes, record.dimension as i64],
                 )
                 .map_err(|err| {
-                    IndexError::Message(format!(
-                        "store embedding for {:?}: {err}",
-                        record.claim_id
-                    ))
+                    IndexError::Message(format!("store embedding for {:?}: {err}", record.claim_id))
                 })?;
             }
             tx.commit()?;
@@ -201,7 +202,14 @@ impl EmbeddingStore {
                 )));
             }
             let vector: Vec<f32> = (0..dim as usize)
-                .map(|i| f32::from_le_bytes([blob[4 * i], blob[4 * i + 1], blob[4 * i + 2], blob[4 * i + 3]]))
+                .map(|i| {
+                    f32::from_le_bytes([
+                        blob[4 * i],
+                        blob[4 * i + 1],
+                        blob[4 * i + 2],
+                        blob[4 * i + 3],
+                    ])
+                })
                 .collect();
             stored.push(StoredVector { claim_id, vector });
         }
@@ -312,9 +320,8 @@ fn embed_indexed_claims(
     let store = IndexStore::new(paths.clone());
     let database_path = store.database_path(workspace)?;
     let conn = Connection::open(&database_path)?;
-    let mut statement = conn.prepare(
-        "select id, title, description, tags, body from claims where status = ?",
-    )?;
+    let mut statement =
+        conn.prepare("select id, title, description, tags, body from claims where status = ?")?;
     let mut rows = statement.query(rusqlite::params![crate::claims::CLAIM_STATUS_APPROVED])?;
     struct ClaimText {
         id: String,
@@ -435,11 +442,17 @@ mod tests {
         assert_eq!(ids[0], records[0].claim_id);
 
         // Missing database falls back to None.
-        assert!(store.search_vectors("missing", "quantum", 10).unwrap().is_none());
+        assert!(store
+            .search_vectors("missing", "quantum", 10)
+            .unwrap()
+            .is_none());
 
         // Empty store falls back to None.
         store.close("research").unwrap();
-        assert!(store.search_vectors("research", "quantum", 10).unwrap().is_none());
+        assert!(store
+            .search_vectors("research", "quantum", 10)
+            .unwrap()
+            .is_none());
         let _ = std::fs::remove_dir_all(&_dir);
     }
 
@@ -492,7 +505,11 @@ mod tests {
             paths.clone(),
             std::sync::Arc::new(FixedClock::new(fixed_index_now())),
         );
-        let claim = index_claim("clm_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "Loopback Embedding Memory", crate::claims::CLAIM_BASIS_OWNER);
+        let claim = index_claim(
+            "clm_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "Loopback Embedding Memory",
+            crate::claims::CLAIM_BASIS_OWNER,
+        );
         claim_store.write_draft("research", claim).unwrap();
         claim_store
             .approve("research", "clm_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
@@ -500,7 +517,8 @@ mod tests {
         let store = EmbeddingStore::new(paths.clone());
 
         // Rebuild without --embed must not produce embeddings.
-        let summary = rebuild_with_options(&paths, "research", RebuildOptions { embedding: false }).unwrap();
+        let summary =
+            rebuild_with_options(&paths, "research", RebuildOptions { embedding: false }).unwrap();
         assert_eq!(summary.embedding.indexed, 0);
         assert_eq!(store.count("research").unwrap(), 0);
         let status = store.summary("research", 1);
@@ -510,7 +528,8 @@ mod tests {
         assert!(!status.degraded.is_empty());
 
         // Rebuild with --embed stores vectors for approved claims.
-        let summary = rebuild_with_options(&paths, "research", RebuildOptions { embedding: true }).unwrap();
+        let summary =
+            rebuild_with_options(&paths, "research", RebuildOptions { embedding: true }).unwrap();
         assert_eq!(summary.embedding.strategy, "loopback");
         assert_eq!(summary.embedding.indexed, 1);
         assert_eq!(summary.embedding.eligible, 1);
@@ -535,7 +554,11 @@ mod tests {
             paths.clone(),
             std::sync::Arc::new(FixedClock::new(fixed_index_now())),
         );
-        let claim = index_claim("clm_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "Loopback Schema Memory", crate::claims::CLAIM_BASIS_OWNER);
+        let claim = index_claim(
+            "clm_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "Loopback Schema Memory",
+            crate::claims::CLAIM_BASIS_OWNER,
+        );
         claim_store.write_draft("research", claim).unwrap();
         claim_store
             .approve("research", "clm_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
@@ -545,7 +568,9 @@ mod tests {
         store.check_fresh("research").unwrap();
         let database_path = store.database_path("research").unwrap();
         let conn = Connection::open(&database_path).unwrap();
-        let version: i64 = conn.query_row("pragma user_version", [], |row| row.get(0)).unwrap();
+        let version: i64 = conn
+            .query_row("pragma user_version", [], |row| row.get(0))
+            .unwrap();
         assert_eq!(version, crate::index_state::INDEX_SCHEMA_VERSION);
         let _ = std::fs::remove_dir_all(&_dir);
     }

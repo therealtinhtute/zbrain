@@ -1,6 +1,8 @@
 use std::path::Path;
 
-use crate::paths::{ensure_file_mode, ensure_parent_mode, RUNTIME_DIRECTORY_MODE, RUNTIME_METADATA_MODE};
+use crate::paths::{
+    ensure_file_mode, ensure_parent_mode, RUNTIME_DIRECTORY_MODE, RUNTIME_METADATA_MODE,
+};
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Config {
     pub default_workspace: String,
@@ -24,16 +26,23 @@ impl std::error::Error for ConfigError {}
 pub fn read_config(path: &Path) -> Result<Config, ConfigError> {
     let contents = match std::fs::read_to_string(path) {
         Ok(text) => text,
-        Err(source) if source.kind() == std::io::ErrorKind::NotFound => return Ok(Config::default()),
+        Err(source) if source.kind() == std::io::ErrorKind::NotFound => {
+            return Ok(Config::default())
+        }
         Err(source) => return Err(ConfigError::Io(source)),
     };
     let mut config = Config::default();
     for line in contents.lines() {
-        let Some((key, value)) = line.split_once(':') else { continue };
+        let Some((key, value)) = line.split_once(':') else {
+            continue;
+        };
         if key.trim() != "default_workspace" {
             continue;
         }
-        config.default_workspace = value.trim().trim_matches(|c| c == '"' || c == '\'').to_string();
+        config.default_workspace = value
+            .trim()
+            .trim_matches(|c| c == '"' || c == '\'')
+            .to_string();
     }
     Ok(config)
 }
@@ -96,7 +105,13 @@ mod tests {
     #[test]
     fn write_then_read_round_trip() {
         let (dir, path) = temp_file("round.yml");
-        write_config(&path, &Config { default_workspace: "research".into() }).unwrap();
+        write_config(
+            &path,
+            &Config {
+                default_workspace: "research".into(),
+            },
+        )
+        .unwrap();
         let config = read_config(&path).unwrap();
         assert_eq!(config.default_workspace, "research");
         use std::os::unix::fs::PermissionsExt;

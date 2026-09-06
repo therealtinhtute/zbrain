@@ -15,9 +15,9 @@ use crate::coordination::{
     acquire_workspace_lock, run_workspace_generation_test_hook,
     WORKSPACE_GENERATION_HOOK_TRUSTED_QUERY_AFTER_LOCKING,
 };
-use crate::evidence::{validate_claim_evidence, EvidenceValidator};
 use crate::embedder::EmbeddingStore;
-use crate::index::{IndexStore, IndexedClaim, IndexError, SearchOptions};
+use crate::evidence::{validate_claim_evidence, EvidenceValidator};
+use crate::index::{IndexError, IndexStore, IndexedClaim, SearchOptions};
 use crate::manifest::TrustInputManifest;
 use crate::paths::Paths;
 use crate::trust::TrustValidator;
@@ -218,7 +218,8 @@ pub fn trusted_query(
         locks.push(acquire_workspace_lock(paths, workspace, false)?);
     }
     run_workspace_generation_test_hook(WORKSPACE_GENERATION_HOOK_TRUSTED_QUERY_AFTER_LOCKING);
-    let mut manifests: HashMap<String, TrustInputManifest> = HashMap::with_capacity(workspaces.len());
+    let mut manifests: HashMap<String, TrustInputManifest> =
+        HashMap::with_capacity(workspaces.len());
     for workspace in &workspaces {
         let manifest = idx.check_fresh_unlocked_output(workspace)?;
         manifests.insert(workspace.clone(), manifest);
@@ -253,10 +254,17 @@ pub fn trusted_query(
         )?;
         let mut approved = approved;
         if options.embedding {
-            approved = merge_vector_results(paths, &idx, workspace, approved, &options.query, limit)?;
+            approved =
+                merge_vector_results(paths, &idx, workspace, approved, &options.query, limit)?;
         }
         for claim in approved {
-            validate_indexed_claim_binding_internal(paths, workspace, &claim, Some(&manifest), false)?;
+            validate_indexed_claim_binding_internal(
+                paths,
+                workspace,
+                &claim,
+                Some(&manifest),
+                false,
+            )?;
             let canonical = ClaimStore::new(paths.clone()).read(workspace, &claim.id)?;
             if !match_temporal_claim(&canonical, &temporal) {
                 continue;
@@ -294,7 +302,13 @@ pub fn trusted_query(
             false,
         )?;
         for claim in drafts {
-            validate_indexed_claim_binding_internal(paths, workspace, &claim, Some(&manifest), false)?;
+            validate_indexed_claim_binding_internal(
+                paths,
+                workspace,
+                &claim,
+                Some(&manifest),
+                false,
+            )?;
             let canonical = ClaimStore::new(paths.clone()).read(workspace, &claim.id)?;
             if !match_temporal_claim(&canonical, &temporal) {
                 continue;
@@ -332,7 +346,11 @@ pub fn trusted_query(
         response.status = QUERY_STATUS_BLOCKED.into();
         return Ok(response);
     }
-    if response.claims.as_ref().is_none_or(|claims| claims.is_empty()) {
+    if response
+        .claims
+        .as_ref()
+        .is_none_or(|claims| claims.is_empty())
+    {
         response.status = QUERY_STATUS_GAP.into();
         response.gaps = Some(vec![QueryGap {
             workspace: scopes.primary.clone(),
@@ -354,16 +372,18 @@ fn query_sources(sources: &[ClaimSource]) -> Vec<QueryClaimSource> {
             spans: if source.spans.is_empty() {
                 None
             } else {
-                Some(source
-                    .spans
-                    .iter()
-                    .map(|span| QueryEvidenceSpan {
-                        evidence_id: span.evidence_id.clone(),
-                        start_line: span.start_line,
-                        end_line: span.end_line,
-                        digest: span.digest.clone(),
-                    })
-                    .collect())
+                Some(
+                    source
+                        .spans
+                        .iter()
+                        .map(|span| QueryEvidenceSpan {
+                            evidence_id: span.evidence_id.clone(),
+                            start_line: span.start_line,
+                            end_line: span.end_line,
+                            digest: span.digest.clone(),
+                        })
+                        .collect(),
+                )
             },
         })
         .collect()
@@ -505,19 +525,17 @@ fn validate_indexed_claim_binding_internal(
     check_canonical_set: bool,
 ) -> Result<(), IndexError> {
     let canonical_relative = format!("wiki/{}", indexed.path.replace('\\', "/"));
-    let canonical_path = resolve_workspace_path(paths, workspace, &canonical_relative)
-        .map_err(|err| {
-            IndexError::Message(format!(
-                "load canonical claim {:?}: {err}",
-                indexed.id
-            ))
+    let canonical_path =
+        resolve_workspace_path(paths, workspace, &canonical_relative).map_err(|err| {
+            IndexError::Message(format!("load canonical claim {:?}: {err}", indexed.id))
         })?;
     let contents = std::fs::read(&canonical_path).map_err(|err| {
         IndexError::Message(format!("read canonical claim {:?}: {err}", indexed.id))
     })?;
-    let canonical = parse_claim_markdown(&indexed.tier, &indexed.path, &contents).map_err(|err| {
-        IndexError::Message(format!("parse canonical claim {:?}: {err}", indexed.id))
-    })?;
+    let canonical =
+        parse_claim_markdown(&indexed.tier, &indexed.path, &contents).map_err(|err| {
+            IndexError::Message(format!("parse canonical claim {:?}: {err}", indexed.id))
+        })?;
     let mut evidence_validator: Option<EvidenceValidator> = None;
     let mut trust_validator: Option<TrustValidator> = None;
     if let Some(manifest) = manifest {
@@ -535,7 +553,10 @@ fn validate_indexed_claim_binding_internal(
                     IndexError::Message(format!("load canonical claim set {:?}: {err}", indexed.id))
                 })?;
             if canonical_claims.len() > 1 {
-                return Err(duplicate_canonical_claim_error(&indexed.id, &canonical_claims));
+                return Err(duplicate_canonical_claim_error(
+                    &indexed.id,
+                    &canonical_claims,
+                ));
             }
         }
     } else {
@@ -545,7 +566,10 @@ fn validate_indexed_claim_binding_internal(
                 IndexError::Message(format!("load canonical claim set {:?}: {err}", indexed.id))
             })?;
         if canonical_claims.len() > 1 {
-            return Err(duplicate_canonical_claim_error(&indexed.id, &canonical_claims));
+            return Err(duplicate_canonical_claim_error(
+                &indexed.id,
+                &canonical_claims,
+            ));
         }
     }
     if let Some(manifest) = manifest {
@@ -595,16 +619,18 @@ fn validate_indexed_claim_binding_internal(
         return Ok(());
     }
     if evidence_validator.is_none() {
-        evidence_validator = Some(EvidenceValidator::new(paths.clone(), workspace).map_err(|err| {
-            IndexError::Message(format!(
-                "approved claim {:?} evidence validator is unavailable: {err}",
-                indexed.id
-            ))
-        })?);
+        evidence_validator = Some(EvidenceValidator::new(paths.clone(), workspace).map_err(
+            |err| {
+                IndexError::Message(format!(
+                    "approved claim {:?} evidence validator is unavailable: {err}",
+                    indexed.id
+                ))
+            },
+        )?);
     }
     if !canonical.supporting_claim_ids.is_empty() && trust_validator.is_none() {
-        let validator =
-            TrustValidator::from_store(&ClaimStore::new(paths.clone()), workspace).map_err(|err| {
+        let validator = TrustValidator::from_store(&ClaimStore::new(paths.clone()), workspace)
+            .map_err(|err| {
                 IndexError::Message(format!(
                     "approved claim {:?} trust validator is unavailable: {err}",
                     indexed.id
@@ -670,10 +696,7 @@ fn duplicate_canonical_claim_error(id: &str, claims: &[Claim]) -> IndexError {
     duplicate_canonical_claim_paths_error(id, &paths)
 }
 
-fn canonical_claim_paths_from_manifest(
-    manifest: &TrustInputManifest,
-    id: &str,
-) -> Vec<String> {
+fn canonical_claim_paths_from_manifest(manifest: &TrustInputManifest, id: &str) -> Vec<String> {
     let suffix = format!("/{id}.md");
     let mut paths: Vec<String> = manifest
         .entries
@@ -690,7 +713,10 @@ fn canonical_claim_paths_from_manifest(
 }
 
 fn trust_input_manifest_contains_claim(manifest: &TrustInputManifest, path: &str) -> bool {
-    match manifest.entries.binary_search_by(|entry| entry.path.as_str().cmp(path)) {
+    match manifest
+        .entries
+        .binary_search_by(|entry| entry.path.as_str().cmp(path))
+    {
         Ok(index) => {
             manifest.entries[index].path == path
                 && manifest.entries[index].kind == crate::manifest::TRUST_INPUT_KIND_CLAIM
@@ -756,10 +782,7 @@ fn find_query_conflicts(
             }
             let mut ids = vec![query_claim.id.clone(), other.clone()];
             ids.sort();
-            let key = format!(
-                "{}:{}:{}",
-                query_claim.workspace, ids[0], ids[1]
-            );
+            let key = format!("{}:{}:{}", query_claim.workspace, ids[0], ids[1]);
             if !seen.insert(key) {
                 continue;
             }
@@ -774,16 +797,10 @@ fn find_query_conflicts(
 
 // Go ClaimStore.readClaimPath — local re-implementation to keep the claims
 // module surface untouched.
-fn read_claim_by_path(
-    paths: &Paths,
-    workspace: &str,
-    relative: &str,
-) -> Result<Claim, IndexError> {
+fn read_claim_by_path(paths: &Paths, workspace: &str, relative: &str) -> Result<Claim, IndexError> {
     safe_relative_path(relative)?;
     let parts: Vec<&str> = relative.split('/').collect();
-    if parts.len() < 2
-        || !crate::claims::is_known_wiki_tier(parts[0])
-        || !relative.ends_with(".md")
+    if parts.len() < 2 || !crate::claims::is_known_wiki_tier(parts[0]) || !relative.ends_with(".md")
     {
         return Err(IndexError::Message(format!(
             "claim path {relative:?} is not safe"
@@ -925,8 +942,8 @@ fn parse_rfc3339_go(value: &str) -> Result<DateTime<Utc>, String> {
     if second > 59 {
         return Err(format!("parsing time {value:?}: second out of range"));
     }
-    let offset = chrono::FixedOffset::east_opt(offset_seconds)
-        .ok_or_else(|| cursor.fail("Z07:00"))?;
+    let offset =
+        chrono::FixedOffset::east_opt(offset_seconds).ok_or_else(|| cursor.fail("Z07:00"))?;
     let parsed = match chrono::TimeZone::with_ymd_and_hms(
         &offset,
         year as i32,
@@ -948,17 +965,26 @@ fn parse_temporal_options(options: &TrustedQueryOptions) -> Result<TemporalFilte
     let mut filter = TemporalFilter::default();
     if !options.after.is_empty() {
         filter.after = Some(parse_rfc3339_go(&options.after).map_err(|err| {
-            IndexError::Message(format!("invalid after timestamp {:?}: {err}", options.after))
+            IndexError::Message(format!(
+                "invalid after timestamp {:?}: {err}",
+                options.after
+            ))
         })?);
     }
     if !options.before.is_empty() {
         filter.before = Some(parse_rfc3339_go(&options.before).map_err(|err| {
-            IndexError::Message(format!("invalid before timestamp {:?}: {err}", options.before))
+            IndexError::Message(format!(
+                "invalid before timestamp {:?}: {err}",
+                options.before
+            ))
         })?);
     }
     if !options.as_of.is_empty() {
         filter.as_of = Some(parse_rfc3339_go(&options.as_of).map_err(|err| {
-            IndexError::Message(format!("invalid as_of timestamp {:?}: {err}", options.as_of))
+            IndexError::Message(format!(
+                "invalid as_of timestamp {:?}: {err}",
+                options.as_of
+            ))
         })?);
     }
     if let (Some(after), Some(before)) = (filter.after, filter.before) {
@@ -1118,9 +1144,7 @@ mod tests {
     }
 
     fn forge_trust_freshness_rows(paths: &Paths, workspace: &str) {
-        use crate::index::{
-            file_change_token, read_trust_directories, read_trust_input_mtimes,
-        };
+        use crate::index::{file_change_token, read_trust_directories, read_trust_input_mtimes};
         use std::os::unix::fs::MetadataExt as _;
         let root = validate_workspace(paths, workspace).unwrap();
         let db_path = store(paths).database_path(workspace).unwrap();
@@ -1240,7 +1264,11 @@ mod tests {
     fn trusted_query_fails_closed_when_index_is_stale() {
         let (_dir, paths) = query_test_paths("stale");
         let claim_store = query_claim_store(&paths);
-        let mut claim = query_claim("clm_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "Stale Query Claim", CLAIM_BASIS_OWNER);
+        let mut claim = query_claim(
+            "clm_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "Stale Query Claim",
+            CLAIM_BASIS_OWNER,
+        );
         claim.body = "stale query body\n".into();
         claim_store.write_draft("research", claim.clone()).unwrap();
         claim_store.approve("research", &claim.id).unwrap();
@@ -1269,7 +1297,11 @@ mod tests {
     fn trusted_query_blocks_pending_transition() {
         let (_dir, paths) = query_test_paths("pending-transition");
         let claim_store = query_claim_store(&paths);
-        let claim = query_claim("clm_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "Pending Query Claim", CLAIM_BASIS_OWNER);
+        let claim = query_claim(
+            "clm_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "Pending Query Claim",
+            CLAIM_BASIS_OWNER,
+        );
         claim_store.write_draft("research", claim.clone()).unwrap();
         claim_store.approve("research", &claim.id).unwrap();
         store(&paths).rebuild("research").unwrap();
@@ -1314,7 +1346,9 @@ mod tests {
     #[test]
     fn trusted_query_fails_closed_when_index_is_rejected() {
         let (_dir, paths) = query_test_paths("rejected");
-        let legacy_path = paths.workspaces_dir.join("research/wiki/projects/legacy.md");
+        let legacy_path = paths
+            .workspaces_dir
+            .join("research/wiki/projects/legacy.md");
         std::fs::write(&legacy_path, b"legacy rejected input\n").unwrap();
         store(&paths).rebuild("research").unwrap();
         let err = trusted_query(
@@ -1334,11 +1368,17 @@ mod tests {
     fn unrelated_valid_claim_rejected() {
         let (_dir, paths) = query_test_paths("unrelated-valid");
         let claim_store = query_claim_store(&paths);
-        let mut claim = query_claim("clm_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "Valid Unrelated Claim", CLAIM_BASIS_OWNER);
+        let mut claim = query_claim(
+            "clm_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "Valid Unrelated Claim",
+            CLAIM_BASIS_OWNER,
+        );
         claim.body = "valid unrelated trusted token\n".into();
         claim_store.write_draft("research", claim.clone()).unwrap();
         claim_store.approve("research", &claim.id).unwrap();
-        let legacy_path = paths.workspaces_dir.join("research/wiki/projects/unrelated-legacy.md");
+        let legacy_path = paths
+            .workspaces_dir
+            .join("research/wiki/projects/unrelated-legacy.md");
         std::fs::write(&legacy_path, b"unrelated invalid token\n").unwrap();
         store(&paths).rebuild("research").unwrap();
         let err = trusted_query(
@@ -1359,20 +1399,39 @@ mod tests {
         for mode in ["revoked", "superseded", "missing"] {
             let (_dir, paths) = query_test_paths(&format!("dependency-{mode}"));
             let claim_store = query_claim_store(&paths);
-            let base = query_claim("clm_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "Base Support", CLAIM_BASIS_OWNER);
-            let mut middle = query_claim("clm_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", "Middle Support", CLAIM_BASIS_DERIVED);
+            let base = query_claim(
+                "clm_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "Base Support",
+                CLAIM_BASIS_OWNER,
+            );
+            let mut middle = query_claim(
+                "clm_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+                "Middle Support",
+                CLAIM_BASIS_DERIVED,
+            );
             middle.supporting_claim_ids = vec![base.id.clone()];
-            let mut dependent = query_claim("clm_cccccccccccccccccccccccccccccccc", "Deep Dependent", CLAIM_BASIS_DERIVED);
+            let mut dependent = query_claim(
+                "clm_cccccccccccccccccccccccccccccccc",
+                "Deep Dependent",
+                CLAIM_BASIS_DERIVED,
+            );
             dependent.supporting_claim_ids = vec![middle.id.clone()];
             dependent.body = "deep dependent trusted token\n".into();
-            let mut unrelated = query_claim("clm_dddddddddddddddddddddddddddddddd", "Unrelated Trusted", CLAIM_BASIS_OWNER);
+            let mut unrelated = query_claim(
+                "clm_dddddddddddddddddddddddddddddddd",
+                "Unrelated Trusted",
+                CLAIM_BASIS_OWNER,
+            );
             unrelated.body = "unrelated trusted token\n".into();
             for claim in [&base, &middle, &dependent, &unrelated] {
                 claim_store.write_draft("research", claim.clone()).unwrap();
                 claim_store.approve("research", &claim.id).unwrap();
             }
             let initial_summary = store(&paths).rebuild("research").unwrap();
-            assert_eq!(initial_summary.rebuild_state, crate::index::REBUILD_STATUS_CLEAN);
+            assert_eq!(
+                initial_summary.rebuild_state,
+                crate::index::REBUILD_STATUS_CLEAN
+            );
             let initial = trusted_query(
                 &paths,
                 TrustedQueryOptions {
@@ -1403,14 +1462,22 @@ mod tests {
                 .join(format!("{}.md", base.id));
             match mode {
                 "revoked" => {
-                    claim_store.revoke("research", &base.id, "support withdrawn").unwrap();
+                    claim_store
+                        .revoke("research", &base.id, "support withdrawn")
+                        .unwrap();
                 }
                 "superseded" => {
-                    let replacement = query_claim("clm_eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee", "Replacement Support", CLAIM_BASIS_OWNER);
+                    let replacement = query_claim(
+                        "clm_eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+                        "Replacement Support",
+                        CLAIM_BASIS_OWNER,
+                    );
                     claim_store
                         .write_superseding_draft("research", &base.id, replacement)
                         .unwrap();
-                    claim_store.approve("research", "clm_eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee").unwrap();
+                    claim_store
+                        .approve("research", "clm_eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee")
+                        .unwrap();
                 }
                 _ => {
                     let backup_path = base_path.with_extension("md.bak");
@@ -1420,16 +1487,34 @@ mod tests {
 
             let summary = store(&paths).rebuild("research").unwrap();
             assert_eq!(
-                (summary.rebuild_state.as_str(), summary.invalid, summary.invalid_count),
+                (
+                    summary.rebuild_state.as_str(),
+                    summary.invalid,
+                    summary.invalid_count
+                ),
                 (crate::index::REBUILD_STATUS_REJECTED, 2, 2),
                 "mode={mode}"
             );
             assert_eq!(summary.invalid_claims.len(), 2);
-            assert_eq!(summary.invalid_claims[0].path, format!("projects/{}.md", middle.id));
-            assert_eq!(summary.invalid_claims[1].path, format!("projects/{}.md", dependent.id));
+            assert_eq!(
+                summary.invalid_claims[0].path,
+                format!("projects/{}.md", middle.id)
+            );
+            assert_eq!(
+                summary.invalid_claims[1].path,
+                format!("projects/{}.md", dependent.id)
+            );
             for invalid in &summary.invalid_claims {
-                assert!(invalid.error.contains(&base.id), "mode={mode}: {}", invalid.error);
-                assert!(invalid.error.contains(mode), "mode={mode}: {}", invalid.error);
+                assert!(
+                    invalid.error.contains(&base.id),
+                    "mode={mode}: {}",
+                    invalid.error
+                );
+                assert!(
+                    invalid.error.contains(mode),
+                    "mode={mode}: {}",
+                    invalid.error
+                );
             }
             let err = trusted_query(
                 &paths,
@@ -1453,13 +1538,20 @@ mod tests {
             let (_dir, paths) = query_test_paths(&format!("evidence-{mode}"));
             let evidence = add_store_evidence(&paths, "evidence repair bytes");
             let claim_store = query_claim_store(&paths);
-            let mut claim = query_claim("clm_ffffffffffffffffffffffffffffffff", "Evidence Repair", CLAIM_BASIS_EVIDENCE);
+            let mut claim = query_claim(
+                "clm_ffffffffffffffffffffffffffffffff",
+                "Evidence Repair",
+                CLAIM_BASIS_EVIDENCE,
+            );
             claim.evidence_ids = vec![evidence.id.clone()];
             claim.body = "evidence repair trusted token\n".into();
             claim_store.write_draft("research", claim.clone()).unwrap();
             claim_store.approve("research", &claim.id).unwrap();
             let initial_summary = store(&paths).rebuild("research").unwrap();
-            assert_eq!(initial_summary.rebuild_state, crate::index::REBUILD_STATUS_CLEAN);
+            assert_eq!(
+                initial_summary.rebuild_state,
+                crate::index::REBUILD_STATUS_CLEAN
+            );
             let initial = trusted_query(
                 &paths,
                 TrustedQueryOptions {
@@ -1496,7 +1588,11 @@ mod tests {
 
             let summary = store(&paths).rebuild("research").unwrap();
             assert_eq!(
-                (summary.rebuild_state.as_str(), summary.invalid, summary.invalid_count),
+                (
+                    summary.rebuild_state.as_str(),
+                    summary.invalid,
+                    summary.invalid_count
+                ),
                 (crate::index::REBUILD_STATUS_REJECTED, 1, 1)
             );
             assert!(summary.invalid_claims[0].error.contains(&evidence.id));
@@ -1519,7 +1615,11 @@ mod tests {
             }
             let repaired = store(&paths).rebuild("research").unwrap();
             assert_eq!(
-                (repaired.rebuild_state.as_str(), repaired.approved, repaired.invalid_count),
+                (
+                    repaired.rebuild_state.as_str(),
+                    repaired.approved,
+                    repaired.invalid_count
+                ),
                 (crate::index::REBUILD_STATUS_CLEAN, 1, 0)
             );
             let response = trusted_query(
@@ -1543,11 +1643,17 @@ mod tests {
         let (_dir, paths) = query_test_paths("forged-freshness");
         let evidence = add_store_evidence(&paths, "original trusted evidence");
         let claim_store = query_claim_store(&paths);
-        let mut claim = query_claim("clm_eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee", "Forged Freshness Evidence", CLAIM_BASIS_EVIDENCE);
+        let mut claim = query_claim(
+            "clm_eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+            "Forged Freshness Evidence",
+            CLAIM_BASIS_EVIDENCE,
+        );
         claim.evidence_ids = vec![evidence.id.clone()];
         claim.body = "forged freshness trusted token\n".into();
         claim_store.write_draft("research", claim).unwrap();
-        claim_store.approve("research", "clm_eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee").unwrap();
+        claim_store
+            .approve("research", "clm_eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee")
+            .unwrap();
         store(&paths).rebuild("research").unwrap();
 
         let raw_path = paths
@@ -1584,13 +1690,23 @@ mod tests {
     fn trusted_query_rejects_approved_claim_outside_published_manifest() {
         let (_dir, paths) = query_test_paths("outside-manifest");
         let claim_store = query_claim_store(&paths);
-        let mut published = query_claim("clm_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "Published Claim", CLAIM_BASIS_OWNER);
+        let mut published = query_claim(
+            "clm_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "Published Claim",
+            CLAIM_BASIS_OWNER,
+        );
         published.body = "published manifest trusted token\n".into();
         claim_store.write_draft("research", published).unwrap();
-        claim_store.approve("research", "clm_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa").unwrap();
+        claim_store
+            .approve("research", "clm_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+            .unwrap();
         store(&paths).rebuild("research").unwrap();
 
-        let mut injected = query_claim("clm_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", "Injected Claim", CLAIM_BASIS_OWNER);
+        let mut injected = query_claim(
+            "clm_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            "Injected Claim",
+            CLAIM_BASIS_OWNER,
+        );
         injected.path = format!("projects/{}.md", injected.id);
         injected.status = CLAIM_STATUS_APPROVED.into();
         injected.verified_at = rfc3339(fixed_query_now());
@@ -1604,7 +1720,10 @@ mod tests {
         injected.body = "injected manifest trusted token\n".into();
         injected.verified_digest = claim_verification_digest(&injected).unwrap();
         let contents = render_claim_markdown(&injected).unwrap();
-        let injected_path = paths.workspaces_dir.join("research/wiki").join(&injected.path);
+        let injected_path = paths
+            .workspaces_dir
+            .join("research/wiki")
+            .join(&injected.path);
         std::fs::write(&injected_path, contents).unwrap();
 
         let db_path = index_database_path(&store(&paths), "research");
@@ -1640,7 +1759,10 @@ mod tests {
             },
         )
         .unwrap_err();
-        assert!(err.to_string().contains("published trust manifest"), "{err}");
+        assert!(
+            err.to_string().contains("published trust manifest"),
+            "{err}"
+        );
         let _ = std::fs::remove_dir_all(&_dir);
     }
 
@@ -1686,11 +1808,21 @@ mod tests {
     fn trusted_query_returns_approved_claims_and_promotion_candidates_separately() {
         let (_dir, paths) = query_test_paths("separate");
         let claim_store = query_claim_store(&paths);
-        let mut approved = query_claim("clm_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "Approved Retrieval", CLAIM_BASIS_OWNER);
+        let mut approved = query_claim(
+            "clm_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "Approved Retrieval",
+            CLAIM_BASIS_OWNER,
+        );
         approved.body = "local durable memory answer\n".into();
-        claim_store.write_draft("research", approved.clone()).unwrap();
+        claim_store
+            .write_draft("research", approved.clone())
+            .unwrap();
         claim_store.approve("research", &approved.id).unwrap();
-        let mut draft = query_claim("clm_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", "Draft Retrieval", CLAIM_BASIS_OWNER);
+        let mut draft = query_claim(
+            "clm_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            "Draft Retrieval",
+            CLAIM_BASIS_OWNER,
+        );
         draft.body = "local durable memory draft candidate\n".into();
         claim_store.write_draft("research", draft.clone()).unwrap();
         store(&paths).rebuild("research").unwrap();
@@ -1728,7 +1860,10 @@ mod tests {
         claim_store.approve("research", id).unwrap();
         store(&paths).rebuild("research").unwrap();
         let indexed = store(&paths)
-            .search("research", search_opts("duplicate binding", vec![CLAIM_STATUS_APPROVED], 10))
+            .search(
+                "research",
+                search_opts("duplicate binding", vec![CLAIM_STATUS_APPROVED], 10),
+            )
             .unwrap();
         assert_eq!(indexed.len(), 1);
         assert_eq!(indexed[0].id, id);
@@ -1744,7 +1879,10 @@ mod tests {
         let err = validate_indexed_claim_binding(&paths, "research", &indexed[0], Some(&manifest))
             .unwrap_err();
         let message = err.to_string();
-        assert!(message.contains("duplicate canonical claim ID"), "{message}");
+        assert!(
+            message.contains("duplicate canonical claim ID"),
+            "{message}"
+        );
         assert!(message.contains(id), "{message}");
         assert!(message.contains(nested_path), "{message}");
         assert!(trusted_query(
@@ -1763,13 +1901,20 @@ mod tests {
     fn canonical_index_binding_rejects_approved_owner_digest_mismatch() {
         let (_dir, paths) = query_test_paths("binding-owner-digest");
         let claim_store = query_claim_store(&paths);
-        let mut claim = query_claim("clm_99999999999999999999999999999999", "Owner digest binding", CLAIM_BASIS_OWNER);
+        let mut claim = query_claim(
+            "clm_99999999999999999999999999999999",
+            "Owner digest binding",
+            CLAIM_BASIS_OWNER,
+        );
         claim.body = "owner digest binding marker\n".into();
         claim_store.write_draft("research", claim.clone()).unwrap();
         claim_store.approve("research", &claim.id).unwrap();
         store(&paths).rebuild("research").unwrap();
         let indexed = store(&paths)
-            .search("research", search_opts("owner digest", vec![CLAIM_STATUS_APPROVED], 10))
+            .search(
+                "research",
+                search_opts("owner digest", vec![CLAIM_STATUS_APPROVED], 10),
+            )
             .unwrap();
         assert_eq!(indexed.len(), 1);
         assert_eq!(indexed[0].id, claim.id);
@@ -1785,7 +1930,10 @@ mod tests {
             .unwrap_err();
         let message = err.to_string();
         assert!(message.contains("verification failed"), "{message}");
-        assert!(message.contains("verification digest mismatch"), "{message}");
+        assert!(
+            message.contains("verification digest mismatch"),
+            "{message}"
+        );
         let _ = std::fs::remove_dir_all(&_dir);
     }
 
@@ -1798,16 +1946,46 @@ mod tests {
             mutation: &'static str,
         }
         let cases = [
-            BindingCase { name: "body", approved: true, query: "sqlite-only body", mutation: "body" },
-            BindingCase { name: "status", approved: false, query: "canonical binding body", mutation: "status" },
-            BindingCase { name: "path", approved: true, query: "canonical binding body", mutation: "path" },
-            BindingCase { name: "digest", approved: true, query: "canonical binding body", mutation: "digest" },
-            BindingCase { name: "missing canonical target", approved: true, query: "canonical binding body", mutation: "id" },
+            BindingCase {
+                name: "body",
+                approved: true,
+                query: "sqlite-only body",
+                mutation: "body",
+            },
+            BindingCase {
+                name: "status",
+                approved: false,
+                query: "canonical binding body",
+                mutation: "status",
+            },
+            BindingCase {
+                name: "path",
+                approved: true,
+                query: "canonical binding body",
+                mutation: "path",
+            },
+            BindingCase {
+                name: "digest",
+                approved: true,
+                query: "canonical binding body",
+                mutation: "digest",
+            },
+            BindingCase {
+                name: "missing canonical target",
+                approved: true,
+                query: "canonical binding body",
+                mutation: "id",
+            },
         ];
         for case in cases {
-            let (_dir, paths) = query_test_paths(&format!("binding-{}", case.name.replace(' ', "-")));
+            let (_dir, paths) =
+                query_test_paths(&format!("binding-{}", case.name.replace(' ', "-")));
             let claim_store = query_claim_store(&paths);
-            let mut claim = query_claim("clm_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "Canonical Binding", CLAIM_BASIS_OWNER);
+            let mut claim = query_claim(
+                "clm_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "Canonical Binding",
+                CLAIM_BASIS_OWNER,
+            );
             claim.body = "canonical binding body marker\n".into();
             claim_store.write_draft("research", claim.clone()).unwrap();
             if case.approved {
@@ -1863,7 +2041,12 @@ mod tests {
                     ..TrustedQueryOptions::default()
                 },
             );
-            assert!(result.is_err(), "{}: want fail-closed error, got {:?}", case.name, result.ok().map(|r| r.status));
+            assert!(
+                result.is_err(),
+                "{}: want fail-closed error, got {:?}",
+                case.name,
+                result.ok().map(|r| r.status)
+            );
             assert_eq!(sha256_hex(&claim_path), before, "{}", case.name);
             let _ = std::fs::remove_dir_all(&_dir);
         }
@@ -1891,15 +2074,27 @@ mod tests {
     fn trusted_query_blocks_explicit_conflict() {
         let (_dir, paths) = query_test_paths("blocked");
         let claim_store = query_claim_store(&paths);
-        let mut first = query_claim("clm_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "Conflict A", CLAIM_BASIS_OWNER);
+        let mut first = query_claim(
+            "clm_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "Conflict A",
+            CLAIM_BASIS_OWNER,
+        );
         first.body = "conflict token shared memory\n".into();
-        let mut second = query_claim("clm_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", "Conflict B", CLAIM_BASIS_OWNER);
+        let mut second = query_claim(
+            "clm_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            "Conflict B",
+            CLAIM_BASIS_OWNER,
+        );
         second.body = "conflict token shared memory\n".into();
         second.conflicts_with = vec![first.id.clone()];
         claim_store.write_draft("research", first).unwrap();
-        claim_store.approve("research", "clm_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa").unwrap();
+        claim_store
+            .approve("research", "clm_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+            .unwrap();
         claim_store.write_draft("research", second).unwrap();
-        claim_store.approve("research", "clm_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb").unwrap();
+        claim_store
+            .approve("research", "clm_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")
+            .unwrap();
         store(&paths).rebuild("research").unwrap();
         let response = trusted_query(
             &paths,
@@ -1921,7 +2116,11 @@ mod tests {
         crate::workspace::create_workspace(&paths, "personal", &FixedClock::new(fixed_query_now()))
             .unwrap();
         let claim_store = query_claim_store(&paths);
-        let mut personal_claim = query_claim("clm_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "Personal Only", CLAIM_BASIS_OWNER);
+        let mut personal_claim = query_claim(
+            "clm_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "Personal Only",
+            CLAIM_BASIS_OWNER,
+        );
         personal_claim.body = "private omitted token\n".into();
         claim_store.write_draft("personal", personal_claim).unwrap();
         claim_store
@@ -1961,18 +2160,36 @@ mod tests {
         let (_dir, paths) = query_test_paths("contradiction");
         let claim_store = query_claim_store(&paths);
 
-        let mut approved = query_claim("clm_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "zbrain uses SQLite for indexes", CLAIM_BASIS_OWNER);
+        let mut approved = query_claim(
+            "clm_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "zbrain uses SQLite for indexes",
+            CLAIM_BASIS_OWNER,
+        );
         approved.body = "zbrain database storage uses SQLite indexes\n".into();
-        claim_store.write_draft("research", approved.clone()).unwrap();
+        claim_store
+            .write_draft("research", approved.clone())
+            .unwrap();
         claim_store.approve("research", &approved.id).unwrap();
 
-        let mut conflicting_draft = query_claim("clm_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", "zbrain uses BoltDB for indexes", CLAIM_BASIS_OWNER);
+        let mut conflicting_draft = query_claim(
+            "clm_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            "zbrain uses BoltDB for indexes",
+            CLAIM_BASIS_OWNER,
+        );
         conflicting_draft.body = "zbrain database storage uses BoltDB indexes\n".into();
-        claim_store.write_draft("research", conflicting_draft.clone()).unwrap();
+        claim_store
+            .write_draft("research", conflicting_draft.clone())
+            .unwrap();
 
-        let mut clean_draft = query_claim("clm_cccccccccccccccccccccccccccccccc", "Viewer binds loopback only", CLAIM_BASIS_OWNER);
+        let mut clean_draft = query_claim(
+            "clm_cccccccccccccccccccccccccccccccc",
+            "Viewer binds loopback only",
+            CLAIM_BASIS_OWNER,
+        );
         clean_draft.body = "zbrain loopback viewer tool\n".into();
-        claim_store.write_draft("research", clean_draft.clone()).unwrap();
+        claim_store
+            .write_draft("research", clean_draft.clone())
+            .unwrap();
 
         store(&paths).rebuild("research").unwrap();
 
@@ -2013,7 +2230,10 @@ mod tests {
         assert_eq!(candidates.len(), 1);
         assert_eq!(candidates[0].id, clean_draft.id);
         assert_eq!(candidates[0].status, CLAIM_STATUS_DRAFT);
-        assert!(candidates[0].contradicts.as_ref().is_none_or(|c| c.is_empty()));
+        assert!(candidates[0]
+            .contradicts
+            .as_ref()
+            .is_none_or(|c| c.is_empty()));
         let _ = std::fs::remove_dir_all(&_dir);
     }
 
@@ -2053,20 +2273,50 @@ mod tests {
             store.approve("research", id).unwrap();
         };
 
-        let mut claim_a = query_claim("clm_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "Claim Early", CLAIM_BASIS_OWNER);
+        let mut claim_a = query_claim(
+            "clm_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "Claim Early",
+            CLAIM_BASIS_OWNER,
+        );
         claim_a.body = "temporal corpus alpha marker\n".into();
-        query_claim_store(&paths).write_draft("research", claim_a.clone()).unwrap();
-        approve_with_time(&paths, &claim_a.id, Utc.with_ymd_and_hms(2026, 8, 1, 10, 0, 0).unwrap());
+        query_claim_store(&paths)
+            .write_draft("research", claim_a.clone())
+            .unwrap();
+        approve_with_time(
+            &paths,
+            &claim_a.id,
+            Utc.with_ymd_and_hms(2026, 8, 1, 10, 0, 0).unwrap(),
+        );
 
-        let mut claim_b = query_claim("clm_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", "Claim Mid", CLAIM_BASIS_OWNER);
+        let mut claim_b = query_claim(
+            "clm_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            "Claim Mid",
+            CLAIM_BASIS_OWNER,
+        );
         claim_b.body = "temporal corpus beta marker\n".into();
-        query_claim_store(&paths).write_draft("research", claim_b.clone()).unwrap();
-        approve_with_time(&paths, &claim_b.id, Utc.with_ymd_and_hms(2026, 8, 15, 10, 0, 0).unwrap());
+        query_claim_store(&paths)
+            .write_draft("research", claim_b.clone())
+            .unwrap();
+        approve_with_time(
+            &paths,
+            &claim_b.id,
+            Utc.with_ymd_and_hms(2026, 8, 15, 10, 0, 0).unwrap(),
+        );
 
-        let mut claim_c = query_claim("clm_cccccccccccccccccccccccccccccccc", "Claim Late", CLAIM_BASIS_OWNER);
+        let mut claim_c = query_claim(
+            "clm_cccccccccccccccccccccccccccccccc",
+            "Claim Late",
+            CLAIM_BASIS_OWNER,
+        );
         claim_c.body = "temporal corpus gamma marker\n".into();
-        query_claim_store(&paths).write_draft("research", claim_c.clone()).unwrap();
-        approve_with_time(&paths, &claim_c.id, Utc.with_ymd_and_hms(2026, 8, 28, 10, 0, 0).unwrap());
+        query_claim_store(&paths)
+            .write_draft("research", claim_c.clone())
+            .unwrap();
+        approve_with_time(
+            &paths,
+            &claim_c.id,
+            Utc.with_ymd_and_hms(2026, 8, 28, 10, 0, 0).unwrap(),
+        );
 
         store(&paths).rebuild("research").unwrap();
 
@@ -2135,27 +2385,57 @@ mod tests {
             store.approve("research", id).unwrap();
         };
 
-        let mut claim1 = query_claim("clm_11111111111111111111111111111111", "Stale Lifecycle Claim", CLAIM_BASIS_OWNER);
+        let mut claim1 = query_claim(
+            "clm_11111111111111111111111111111111",
+            "Stale Lifecycle Claim",
+            CLAIM_BASIS_OWNER,
+        );
         claim1.stale_after = "2026-08-10T00:00:00Z".into();
         claim1.body = "point in time historical memory\n".into();
-        query_claim_store(&paths).write_draft("research", claim1.clone()).unwrap();
-        approve_with_time(&paths, &claim1.id, Utc.with_ymd_and_hms(2026, 8, 1, 10, 0, 0).unwrap());
+        query_claim_store(&paths)
+            .write_draft("research", claim1.clone())
+            .unwrap();
+        approve_with_time(
+            &paths,
+            &claim1.id,
+            Utc.with_ymd_and_hms(2026, 8, 1, 10, 0, 0).unwrap(),
+        );
 
-        let mut claim2 = query_claim("clm_22222222222222222222222222222222", "Superseded Claim", CLAIM_BASIS_OWNER);
+        let mut claim2 = query_claim(
+            "clm_22222222222222222222222222222222",
+            "Superseded Claim",
+            CLAIM_BASIS_OWNER,
+        );
         claim2.body = "point in time historical memory\n".into();
-        query_claim_store(&paths).write_draft("research", claim2.clone()).unwrap();
-        approve_with_time(&paths, &claim2.id, Utc.with_ymd_and_hms(2026, 8, 5, 10, 0, 0).unwrap());
+        query_claim_store(&paths)
+            .write_draft("research", claim2.clone())
+            .unwrap();
+        approve_with_time(
+            &paths,
+            &claim2.id,
+            Utc.with_ymd_and_hms(2026, 8, 5, 10, 0, 0).unwrap(),
+        );
 
-        let mut claim3 = query_claim("clm_33333333333333333333333333333333", "Replacement Claim", CLAIM_BASIS_OWNER);
+        let mut claim3 = query_claim(
+            "clm_33333333333333333333333333333333",
+            "Replacement Claim",
+            CLAIM_BASIS_OWNER,
+        );
         claim3.body = "point in time historical memory\n".into();
         let supersede_store = ClaimStore::with_clock(
             paths.clone(),
-            Arc::new(FixedClock::new(Utc.with_ymd_and_hms(2026, 8, 20, 10, 0, 0).unwrap())),
+            Arc::new(FixedClock::new(
+                Utc.with_ymd_and_hms(2026, 8, 20, 10, 0, 0).unwrap(),
+            )),
         );
         supersede_store
             .write_superseding_draft("research", &claim2.id, claim3.clone())
             .unwrap();
-        approve_with_time(&paths, &claim3.id, Utc.with_ymd_and_hms(2026, 8, 20, 10, 0, 0).unwrap());
+        approve_with_time(
+            &paths,
+            &claim3.id,
+            Utc.with_ymd_and_hms(2026, 8, 20, 10, 0, 0).unwrap(),
+        );
         store(&paths).rebuild("research").unwrap();
 
         let early = trusted_query(
@@ -2212,21 +2492,29 @@ mod tests {
         let lexical_only_id = "clm_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
         let vector_only_id = "clm_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
 
-
         // no embedding database uses pure lexical
         {
             let (dir_holder, paths) = query_test_paths("hybrid-no-embed");
             let claim_store = query_claim_store(&paths);
-            let mut lexical_only = query_claim(lexical_only_id, "Quantum Entanglement Observer", CLAIM_BASIS_OWNER);
+            let mut lexical_only = query_claim(
+                lexical_only_id,
+                "Quantum Entanglement Observer",
+                CLAIM_BASIS_OWNER,
+            );
             lexical_only.body = "quantum entanglement observer discovery\n".into();
-            let mut vector_only = query_claim(vector_only_id, "Entangled Observer", CLAIM_BASIS_OWNER);
+            let mut vector_only =
+                query_claim(vector_only_id, "Entangled Observer", CLAIM_BASIS_OWNER);
             vector_only.body = "entanglement observer phenomena\n".into();
             for claim in [lexical_only, vector_only] {
                 claim_store.write_draft("research", claim.clone()).unwrap();
                 claim_store.approve("research", &claim.id).unwrap();
             }
-            crate::embedder::rebuild_with_options(&paths, "research", RebuildOptions { embedding: false })
-                .unwrap();
+            crate::embedder::rebuild_with_options(
+                &paths,
+                "research",
+                RebuildOptions { embedding: false },
+            )
+            .unwrap();
 
             let with_option = trusted_query(
                 &paths,
@@ -2250,7 +2538,10 @@ mod tests {
             assert_eq!(with_option.status, QUERY_STATUS_READY);
             assert_eq!(without_option.status, QUERY_STATUS_READY);
             assert_eq!(claim_ids(&with_option), vec![lexical_only_id.to_string()]);
-            assert_eq!(claim_ids(&without_option), vec![lexical_only_id.to_string()]);
+            assert_eq!(
+                claim_ids(&without_option),
+                vec![lexical_only_id.to_string()]
+            );
             let _ = std::fs::remove_dir_all(&dir_holder);
         }
 
@@ -2258,18 +2549,27 @@ mod tests {
         {
             let (dir_holder, paths) = query_test_paths("hybrid-empty-sidecar");
             let claim_store = query_claim_store(&paths);
-            let mut lexical_only = query_claim(lexical_only_id, "Quantum Entanglement Observer", CLAIM_BASIS_OWNER);
+            let mut lexical_only = query_claim(
+                lexical_only_id,
+                "Quantum Entanglement Observer",
+                CLAIM_BASIS_OWNER,
+            );
             lexical_only.body = "quantum entanglement observer discovery\n".into();
-            let mut vector_only = query_claim(vector_only_id, "Entangled Observer", CLAIM_BASIS_OWNER);
+            let mut vector_only =
+                query_claim(vector_only_id, "Entangled Observer", CLAIM_BASIS_OWNER);
             vector_only.body = "entanglement observer phenomena\n".into();
             for claim in [lexical_only, vector_only] {
                 claim_store.write_draft("research", claim.clone()).unwrap();
                 claim_store.approve("research", &claim.id).unwrap();
             }
-            crate::embedder::rebuild_with_options(&paths, "research", RebuildOptions { embedding: false })
-                .unwrap();
-            let embedding_path = crate::embedder::EmbeddingStore::new(paths.clone())
-                .database_path("research");
+            crate::embedder::rebuild_with_options(
+                &paths,
+                "research",
+                RebuildOptions { embedding: false },
+            )
+            .unwrap();
+            let embedding_path =
+                crate::embedder::EmbeddingStore::new(paths.clone()).database_path("research");
             let conn = rusqlite::Connection::open(&embedding_path).unwrap();
             conn.execute_batch(
                 "create table embeddings (\n\tclaim_id text not null primary key,\n\tvector blob not null,\n\tdimension integer not null\n)",
@@ -2295,16 +2595,25 @@ mod tests {
         {
             let (dir_holder, paths) = query_test_paths("hybrid-merge");
             let claim_store = query_claim_store(&paths);
-            let mut lexical_only = query_claim(lexical_only_id, "Quantum Entanglement Observer", CLAIM_BASIS_OWNER);
+            let mut lexical_only = query_claim(
+                lexical_only_id,
+                "Quantum Entanglement Observer",
+                CLAIM_BASIS_OWNER,
+            );
             lexical_only.body = "quantum entanglement observer discovery\n".into();
-            let mut vector_only = query_claim(vector_only_id, "Entangled Observer", CLAIM_BASIS_OWNER);
+            let mut vector_only =
+                query_claim(vector_only_id, "Entangled Observer", CLAIM_BASIS_OWNER);
             vector_only.body = "entanglement observer phenomena\n".into();
             for claim in [lexical_only, vector_only] {
                 claim_store.write_draft("research", claim.clone()).unwrap();
                 claim_store.approve("research", &claim.id).unwrap();
             }
-            crate::embedder::rebuild_with_options(&paths, "research", RebuildOptions { embedding: true })
-                .unwrap();
+            crate::embedder::rebuild_with_options(
+                &paths,
+                "research",
+                RebuildOptions { embedding: true },
+            )
+            .unwrap();
 
             let response = trusted_query(
                 &paths,
@@ -2321,7 +2630,10 @@ mod tests {
             assert!(ids.len() >= 2, "want at least 2 hybrid matches: {ids:?}");
             let mut seen = std::collections::HashSet::new();
             for id in &ids {
-                assert!(seen.insert(id.clone()), "duplicate claim ID {id} in hybrid results");
+                assert!(
+                    seen.insert(id.clone()),
+                    "duplicate claim ID {id} in hybrid results"
+                );
             }
             assert_eq!(ids[0], lexical_only_id, "lexical match must be first");
             let _ = std::fs::remove_dir_all(&dir_holder);
@@ -2331,16 +2643,25 @@ mod tests {
         {
             let (dir_holder, paths) = query_test_paths("hybrid-no-option");
             let claim_store = query_claim_store(&paths);
-            let mut lexical_only = query_claim(lexical_only_id, "Quantum Entanglement Observer", CLAIM_BASIS_OWNER);
+            let mut lexical_only = query_claim(
+                lexical_only_id,
+                "Quantum Entanglement Observer",
+                CLAIM_BASIS_OWNER,
+            );
             lexical_only.body = "quantum entanglement observer discovery\n".into();
-            let mut vector_only = query_claim(vector_only_id, "Entangled Observer", CLAIM_BASIS_OWNER);
+            let mut vector_only =
+                query_claim(vector_only_id, "Entangled Observer", CLAIM_BASIS_OWNER);
             vector_only.body = "entanglement observer phenomena\n".into();
             for claim in [lexical_only, vector_only] {
                 claim_store.write_draft("research", claim.clone()).unwrap();
                 claim_store.approve("research", &claim.id).unwrap();
             }
-            crate::embedder::rebuild_with_options(&paths, "research", RebuildOptions { embedding: true })
-                .unwrap();
+            crate::embedder::rebuild_with_options(
+                &paths,
+                "research",
+                RebuildOptions { embedding: true },
+            )
+            .unwrap();
 
             let response = trusted_query(
                 &paths,
@@ -2359,16 +2680,25 @@ mod tests {
         {
             let (dir_holder, paths) = query_test_paths("hybrid-stale");
             let claim_store = query_claim_store(&paths);
-            let mut lexical_only = query_claim(lexical_only_id, "Quantum Entanglement Observer", CLAIM_BASIS_OWNER);
+            let mut lexical_only = query_claim(
+                lexical_only_id,
+                "Quantum Entanglement Observer",
+                CLAIM_BASIS_OWNER,
+            );
             lexical_only.body = "quantum entanglement observer discovery\n".into();
-            let mut vector_only = query_claim(vector_only_id, "Entangled Observer", CLAIM_BASIS_OWNER);
+            let mut vector_only =
+                query_claim(vector_only_id, "Entangled Observer", CLAIM_BASIS_OWNER);
             vector_only.body = "entanglement observer phenomena\n".into();
             for claim in [lexical_only.clone(), vector_only] {
                 claim_store.write_draft("research", claim.clone()).unwrap();
                 claim_store.approve("research", &claim.id).unwrap();
             }
-            crate::embedder::rebuild_with_options(&paths, "research", RebuildOptions { embedding: true })
-                .unwrap();
+            crate::embedder::rebuild_with_options(
+                &paths,
+                "research",
+                RebuildOptions { embedding: true },
+            )
+            .unwrap();
 
             let claim_path = paths
                 .workspaces_dir
@@ -2400,18 +2730,38 @@ mod tests {
     #[test]
     fn interleave_claims_deduplicates_by_id() {
         let lexical = vec![
-            IndexedClaim { id: "clm_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".into(), score: 1.0, ..Default::default() },
-            IndexedClaim { id: "clm_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb".into(), score: 2.0, ..Default::default() },
+            IndexedClaim {
+                id: "clm_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".into(),
+                score: 1.0,
+                ..Default::default()
+            },
+            IndexedClaim {
+                id: "clm_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb".into(),
+                score: 2.0,
+                ..Default::default()
+            },
         ];
         let vector = vec![
-            IndexedClaim { id: "clm_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb".into(), score: 1.0, ..Default::default() },
-            IndexedClaim { id: "clm_cccccccccccccccccccccccccccccccc".into(), score: 2.0, ..Default::default() },
+            IndexedClaim {
+                id: "clm_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb".into(),
+                score: 1.0,
+                ..Default::default()
+            },
+            IndexedClaim {
+                id: "clm_cccccccccccccccccccccccccccccccc".into(),
+                score: 2.0,
+                ..Default::default()
+            },
         ];
 
         let merged = interleave_claims(lexical, vector, 10);
         let mut seen = std::collections::HashSet::new();
         for claim in &merged {
-            assert!(seen.insert(claim.id.clone()), "duplicate claim ID {}", claim.id);
+            assert!(
+                seen.insert(claim.id.clone()),
+                "duplicate claim ID {}",
+                claim.id
+            );
         }
         let want = vec![
             "clm_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
@@ -2431,12 +2781,28 @@ mod tests {
     #[test]
     fn interleave_rrf() {
         let lexical = vec![
-            IndexedClaim { id: "clm_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".into(), score: 9.0, ..Default::default() },
-            IndexedClaim { id: "clm_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb".into(), score: 9.0, ..Default::default() },
+            IndexedClaim {
+                id: "clm_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".into(),
+                score: 9.0,
+                ..Default::default()
+            },
+            IndexedClaim {
+                id: "clm_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb".into(),
+                score: 9.0,
+                ..Default::default()
+            },
         ];
         let vector = vec![
-            IndexedClaim { id: "clm_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb".into(), score: 9.0, ..Default::default() },
-            IndexedClaim { id: "clm_cccccccccccccccccccccccccccccccc".into(), score: 9.0, ..Default::default() },
+            IndexedClaim {
+                id: "clm_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb".into(),
+                score: 9.0,
+                ..Default::default()
+            },
+            IndexedClaim {
+                id: "clm_cccccccccccccccccccccccccccccccc".into(),
+                score: 9.0,
+                ..Default::default()
+            },
         ];
         let merged = interleave_claims(lexical.clone(), vector.clone(), 10);
         assert_eq!(merged.len(), 3);
@@ -2472,11 +2838,22 @@ mod tests {
         crate::workspace::create_workspace(&paths, "personal", &FixedClock::new(fixed_query_now()))
             .unwrap();
         let claim_store = query_claim_store(&paths);
-        let mut research_claim = query_claim("clm_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "Research Memory", CLAIM_BASIS_OWNER);
+        let mut research_claim = query_claim(
+            "clm_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "Research Memory",
+            CLAIM_BASIS_OWNER,
+        );
         research_claim.body = "research-only context marker\n".into();
-        let mut personal_claim = query_claim("clm_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", "Personal Memory", CLAIM_BASIS_OWNER);
+        let mut personal_claim = query_claim(
+            "clm_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            "Personal Memory",
+            CLAIM_BASIS_OWNER,
+        );
         personal_claim.body = "workspace-private hybrid marker\n".into();
-        for (workspace, claim) in [("research", research_claim.clone()), ("personal", personal_claim.clone())] {
+        for (workspace, claim) in [
+            ("research", research_claim.clone()),
+            ("personal", personal_claim.clone()),
+        ] {
             claim_store.write_draft(workspace, claim.clone()).unwrap();
             claim_store.approve(workspace, &claim.id).unwrap();
         }
@@ -2530,7 +2907,11 @@ mod tests {
                 claim
             );
         }
-        assert!(found_personal, "withInclude claims = {:?}", with_include.claims);
+        assert!(
+            found_personal,
+            "withInclude claims = {:?}",
+            with_include.claims
+        );
         let _ = std::fs::remove_dir_all(&_dir);
     }
 }

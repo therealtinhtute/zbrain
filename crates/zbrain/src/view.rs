@@ -128,7 +128,13 @@ fn route_request(raw: &[u8], paths: &Paths) -> Vec<u8> {
     let method = parts.next().unwrap_or("");
     let target = parts.next().unwrap_or("");
     if method != "GET" && method != "HEAD" {
-        return http_response(405, "Method Not Allowed", "text/plain; charset=utf-8", b"", method);
+        return http_response(
+            405,
+            "Method Not Allowed",
+            "text/plain; charset=utf-8",
+            b"",
+            method,
+        );
     }
     let head_only = method == "HEAD";
     let path = target.split('?').next().unwrap_or("/");
@@ -136,10 +142,22 @@ fn route_request(raw: &[u8], paths: &Paths) -> Vec<u8> {
     match path.as_str() {
         "/" => {
             let body = render_page(paths).unwrap_or_else(|_| b"viewer: page unavailable".to_vec());
-            http_response(200, "OK", "text/html; charset=utf-8", &body, head_flag(head_only))
+            http_response(
+                200,
+                "OK",
+                "text/html; charset=utf-8",
+                &body,
+                head_flag(head_only),
+            )
         }
-        "/style.css" => static_response("style.css", "text/css; charset=utf-8", head_flag(head_only)),
-        "/app.js" => static_response("app.js", "text/javascript; charset=utf-8", head_flag(head_only)),
+        "/style.css" => {
+            static_response("style.css", "text/css; charset=utf-8", head_flag(head_only))
+        }
+        "/app.js" => static_response(
+            "app.js",
+            "text/javascript; charset=utf-8",
+            head_flag(head_only),
+        ),
         "/api/workspace" => {
             let (status, body) = match resolve_current_workspace(paths) {
                 Err(err) => (500, json_error(&err.to_string())),
@@ -148,7 +166,11 @@ fn route_request(raw: &[u8], paths: &Paths) -> Vec<u8> {
                     format!("{{\"workspace\":{}}}\n", json_string(&current.workspace)).into_bytes(),
                 ),
             };
-            let reason = if status == 200 { "OK" } else { "Internal Server Error" };
+            let reason = if status == 200 {
+                "OK"
+            } else {
+                "Internal Server Error"
+            };
             http_response(
                 status,
                 reason,
@@ -162,7 +184,11 @@ fn route_request(raw: &[u8], paths: &Paths) -> Vec<u8> {
                 Err(err) => (500, json_error(&err.to_string())),
                 Ok(body) => (200, body),
             };
-            let reason = if status == 200 { "OK" } else { "Internal Server Error" };
+            let reason = if status == 200 {
+                "OK"
+            } else {
+                "Internal Server Error"
+            };
             http_response(
                 status,
                 reason,
@@ -187,7 +213,11 @@ fn route_request(raw: &[u8], paths: &Paths) -> Vec<u8> {
                     Err(ClaimApiError::Server(message)) => (500, json_error(&message)),
                     Ok(body) => (200, body),
                 };
-                let reason = if status == 200 { "OK" } else { status_reason(status) };
+                let reason = if status == 200 {
+                    "OK"
+                } else {
+                    status_reason(status)
+                };
                 return http_response(
                     status,
                     reason,
@@ -211,7 +241,11 @@ fn route_request(raw: &[u8], paths: &Paths) -> Vec<u8> {
                     Err(ClaimApiError::Server(message)) => (500, json_error(&message)),
                     Ok(body) => (200, body),
                 };
-                let reason = if status == 200 { "OK" } else { status_reason(status) };
+                let reason = if status == 200 {
+                    "OK"
+                } else {
+                    status_reason(status)
+                };
                 return http_response(
                     status,
                     reason,
@@ -458,7 +492,8 @@ fn approved_claims_json(paths: &Paths) -> Result<Vec<u8>, String> {
 }
 
 fn claim_json(paths: &Paths, id: &str) -> Result<Vec<u8>, ClaimApiError> {
-    let current = resolve_current_workspace(paths).map_err(|err| ClaimApiError::Server(err.to_string()))?;
+    let current =
+        resolve_current_workspace(paths).map_err(|err| ClaimApiError::Server(err.to_string()))?;
     let claim = ClaimStore::new(paths.clone())
         .read(&current.workspace, id)
         .map_err(|_| ClaimApiError::NotFound)?;
@@ -466,9 +501,12 @@ fn claim_json(paths: &Paths, id: &str) -> Result<Vec<u8>, ClaimApiError> {
 }
 
 fn evidence_json(paths: &Paths, id: &str) -> Result<Vec<u8>, ClaimApiError> {
-    let current = resolve_current_workspace(paths).map_err(|err| ClaimApiError::Server(err.to_string()))?;
+    let current =
+        resolve_current_workspace(paths).map_err(|err| ClaimApiError::Server(err.to_string()))?;
     let store = EvidenceStore::new(paths.clone());
-    let evidence = store.read(&current.workspace, id).map_err(|_| ClaimApiError::NotFound)?;
+    let evidence = store
+        .read(&current.workspace, id)
+        .map_err(|_| ClaimApiError::NotFound)?;
     let raw = store
         .read_raw(&current.workspace, id)
         .map_err(|err| ClaimApiError::Server(err.to_string()))?;
@@ -491,29 +529,65 @@ fn claim_go_json(claim: &crate::claims::Claim) -> String {
     out.push_str(&format!("\"Path\":{},", json_string(&claim.path)));
     out.push_str(&format!("\"Status\":{},", json_string(&claim.status)));
     out.push_str(&format!("\"Title\":{},", json_string(&claim.title)));
-    out.push_str(&format!("\"Description\":{},", json_string(&claim.description)));
+    out.push_str(&format!(
+        "\"Description\":{},",
+        json_string(&claim.description)
+    ));
     out.push_str(&format!("\"Resource\":{},", json_string(&claim.resource)));
     out.push_str(&format!("\"Basis\":{},", json_string(&claim.basis)));
-    out.push_str(&format!("\"CreatedAt\":{},", json_string(&claim.created_at)));
-    out.push_str(&format!("\"CreatedBy\":{},", json_string(&claim.created_by)));
-    out.push_str(&format!("\"VerifiedAt\":{},", json_string(&claim.verified_at)));
-    out.push_str(&format!("\"VerifiedBy\":{},", json_string(&claim.verified_by)));
-    out.push_str(&format!("\"VerifiedDigest\":{},", json_string(&claim.verified_digest)));
-    out.push_str(&format!("\"StaleAfter\":{},", json_string(&claim.stale_after)));
-    out.push_str(&format!("\"Sources\":{},", claim_sources_go_json(&claim.sources)));
-    out.push_str(&format!("\"EvidenceIDs\":{},", str_list_go_json(&claim.evidence_ids)));
+    out.push_str(&format!(
+        "\"CreatedAt\":{},",
+        json_string(&claim.created_at)
+    ));
+    out.push_str(&format!(
+        "\"CreatedBy\":{},",
+        json_string(&claim.created_by)
+    ));
+    out.push_str(&format!(
+        "\"VerifiedAt\":{},",
+        json_string(&claim.verified_at)
+    ));
+    out.push_str(&format!(
+        "\"VerifiedBy\":{},",
+        json_string(&claim.verified_by)
+    ));
+    out.push_str(&format!(
+        "\"VerifiedDigest\":{},",
+        json_string(&claim.verified_digest)
+    ));
+    out.push_str(&format!(
+        "\"StaleAfter\":{},",
+        json_string(&claim.stale_after)
+    ));
+    out.push_str(&format!(
+        "\"Sources\":{},",
+        claim_sources_go_json(&claim.sources)
+    ));
+    out.push_str(&format!(
+        "\"EvidenceIDs\":{},",
+        str_list_go_json(&claim.evidence_ids)
+    ));
     out.push_str(&format!(
         "\"SupportingClaimIDs\":{},",
         str_list_go_json(&claim.supporting_claim_ids)
     ));
-    out.push_str(&format!("\"Supersedes\":{},", str_list_go_json(&claim.supersedes)));
+    out.push_str(&format!(
+        "\"Supersedes\":{},",
+        str_list_go_json(&claim.supersedes)
+    ));
     out.push_str(&format!(
         "\"ConflictsWith\":{},",
         str_list_go_json(&claim.conflicts_with)
     ));
-    out.push_str(&format!("\"Contradicts\":{},", contradicts_go_json(&claim.contradicts)));
+    out.push_str(&format!(
+        "\"Contradicts\":{},",
+        contradicts_go_json(&claim.contradicts)
+    ));
     out.push_str(&format!("\"Tags\":{},", str_list_go_json(&claim.tags)));
-    out.push_str(&format!("\"Transitions\":{},", transitions_go_json(&claim.transitions)));
+    out.push_str(&format!(
+        "\"Transitions\":{},",
+        transitions_go_json(&claim.transitions)
+    ));
     out.push_str(&format!("\"Body\":{}", json_string(&claim.body)));
     out.push('}');
     out
@@ -637,7 +711,10 @@ fn transitions_go_json(values: &[crate::claims::ClaimTransition]) -> String {
                 if !auth_first {
                     out.push(',');
                 }
-                out.push_str(&format!("\"method\":{}", json_string(&authorization.method)));
+                out.push_str(&format!(
+                    "\"method\":{}",
+                    json_string(&authorization.method)
+                ));
                 auth_first = false;
             }
             if !authorization.mcp_client.is_empty() {
@@ -713,7 +790,9 @@ fn view_asset_names() -> Vec<&'static str> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::claims::{Claim, CLAIM_BASIS_EVIDENCE, CLAIM_BASIS_OWNER, CLAIM_STATUS_DRAFT, OKF_CLAIM_TYPE};
+    use crate::claims::{
+        Claim, CLAIM_BASIS_EVIDENCE, CLAIM_BASIS_OWNER, CLAIM_STATUS_DRAFT, OKF_CLAIM_TYPE,
+    };
     use crate::clock::FixedClock;
     use crate::config::ensure_config;
     use crate::evidence::EvidenceStore;
@@ -739,8 +818,11 @@ mod tests {
 
     fn request(port: u16, method: &str, path: &str) -> HttpResponse {
         let mut stream = TcpStream::connect(("127.0.0.1", port)).unwrap();
-        stream.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
-        let text = format!("{method} {path} HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n");
+        stream
+            .set_read_timeout(Some(Duration::from_secs(5)))
+            .unwrap();
+        let text =
+            format!("{method} {path} HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n");
         stream.write_all(text.as_bytes()).unwrap();
         let mut raw = Vec::new();
         stream.read_to_end(&mut raw).unwrap();
@@ -752,7 +834,12 @@ mod tests {
         let head = String::from_utf8_lossy(&raw[..split]).into_owned();
         let mut lines = head.split("\r\n");
         let status_line = lines.next().unwrap_or("");
-        let status: u16 = status_line.split_whitespace().nth(1).unwrap_or("0").parse().unwrap_or(0);
+        let status: u16 = status_line
+            .split_whitespace()
+            .nth(1)
+            .unwrap_or("0")
+            .parse()
+            .unwrap_or(0);
         let mut headers = Vec::new();
         for line in lines {
             if line.is_empty() {
@@ -762,7 +849,11 @@ mod tests {
                 headers.push((key.trim().to_string(), value.trim().to_string()));
             }
         }
-        HttpResponse { status, headers, body: raw[split..].to_vec() }
+        HttpResponse {
+            status,
+            headers,
+            body: raw[split..].to_vec(),
+        }
     }
 
     fn test_paths(name: &str) -> (std::path::PathBuf, Paths) {
@@ -804,7 +895,9 @@ mod tests {
         let response = route_request(b"GET / HTTP/1.1\r\nHost: x\r\n\r\n", &paths);
         let text = String::from_utf8(response).unwrap();
         assert!(text.starts_with("HTTP/1.1 200 OK"));
-        assert!(text.contains("Content-Security-Policy: default-src 'self'; script-src 'none'; object-src 'none'"));
+        assert!(text.contains(
+            "Content-Security-Policy: default-src 'self'; script-src 'none'; object-src 'none'"
+        ));
         assert!(text.contains("X-Content-Type-Options: nosniff"));
         assert!(!text.to_lowercase().contains("access-control-"));
     }
@@ -812,7 +905,9 @@ mod tests {
     #[test]
     fn rejects_mutation_methods() {
         let (_dir, paths) = test_paths("methods");
-        for method in ["POST", "PUT", "DELETE", "PATCH", "OPTIONS", "TRACE", "CONNECT", "BREW"] {
+        for method in [
+            "POST", "PUT", "DELETE", "PATCH", "OPTIONS", "TRACE", "CONNECT", "BREW",
+        ] {
             let raw = format!("{method} / HTTP/1.1\r\nHost: x\r\n\r\n");
             let response = route_request(raw.as_bytes(), &paths);
             let text = String::from_utf8(response).unwrap();
@@ -828,7 +923,9 @@ mod tests {
             let raw = format!("GET {path} HTTP/1.1\r\nHost: x\r\n\r\n");
             let response = route_request(raw.as_bytes(), &paths);
             assert!(
-                String::from_utf8(response).unwrap().starts_with("HTTP/1.1 404"),
+                String::from_utf8(response)
+                    .unwrap()
+                    .starts_with("HTTP/1.1 404"),
                 "{path}"
             );
         }
@@ -845,7 +942,10 @@ mod tests {
             let response = route_request(raw.as_bytes(), &paths);
             let text = String::from_utf8(response).unwrap();
             assert!(text.starts_with("HTTP/1.1 200"), "{path}: {text}");
-            assert!(text.contains(&format!("Content-Type: {content_type}")), "{path}");
+            assert!(
+                text.contains(&format!("Content-Type: {content_type}")),
+                "{path}"
+            );
         }
     }
 
@@ -874,17 +974,26 @@ mod tests {
                     created_at: "2026-07-30T09:00:00Z".to_string(),
                     created_by: "owner".to_string(),
                     evidence_ids: vec![evidence.id],
-                    body: "Safe text <script>alert('xss')</script>\n<img src=x onerror=alert(1)>".to_string(),
+                    body: "Safe text <script>alert('xss')</script>\n<img src=x onerror=alert(1)>"
+                        .to_string(),
                     ..Claim::default()
                 },
             )
             .unwrap();
-        store.approve("research", "clm_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa").unwrap();
+        store
+            .approve("research", "clm_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+            .unwrap();
 
         let page = String::from_utf8(render_page(&paths).unwrap()).unwrap();
-        assert!(page.contains("Safe text &lt;script&gt;alert(&#39;xss&#39;)&lt;/script&gt;"), "{page}");
+        assert!(
+            page.contains("Safe text &lt;script&gt;alert(&#39;xss&#39;)&lt;/script&gt;"),
+            "{page}"
+        );
         assert!(!page.contains("<script>alert('xss')</script>"));
-        assert!(page.contains("&lt;h1&gt;Evidence header&lt;/h1&gt;"), "{page}");
+        assert!(
+            page.contains("&lt;h1&gt;Evidence header&lt;/h1&gt;"),
+            "{page}"
+        );
         assert!(!page.contains("<h1>Evidence header</h1>"));
     }
 
@@ -911,7 +1020,9 @@ mod tests {
                 },
             )
             .unwrap();
-        store.approve("research", "clm_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb").unwrap();
+        store
+            .approve("research", "clm_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")
+            .unwrap();
 
         for path in [
             "/api/workspace",
@@ -923,7 +1034,10 @@ mod tests {
             let text = String::from_utf8(response).unwrap();
             assert!(text.starts_with("HTTP/1.1 200"), "{path}: {text}");
             let body = text.split("\r\n\r\n").nth(1).unwrap_or("");
-            assert!(serde_json::from_str::<serde_json::Value>(body).is_ok(), "{path}: {body}");
+            assert!(
+                serde_json::from_str::<serde_json::Value>(body).is_ok(),
+                "{path}: {body}"
+            );
         }
         let raw = "GET /api/workspace HTTP/1.1\r\nHost: x\r\n\r\n";
         let response = String::from_utf8(route_request(raw.as_bytes(), &paths)).unwrap();

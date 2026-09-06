@@ -10,7 +10,10 @@ use crate::claims::{is_evidence_id, ClaimStore, CLAIM_STATUS_APPROVED};
 use crate::evidence::EvidenceStore;
 use crate::paths::Paths;
 
-pub fn structural_findings(paths: &Paths, workspace: &str) -> Result<Vec<String>, crate::claims::ClaimError> {
+pub fn structural_findings(
+    paths: &Paths,
+    workspace: &str,
+) -> Result<Vec<String>, crate::claims::ClaimError> {
     structural_findings_at(paths, workspace, Utc::now())
 }
 
@@ -56,7 +59,10 @@ pub fn structural_findings_at(
             }
         }
         for id in &claim.evidence_ids {
-            if EvidenceStore::new(paths.clone()).read(workspace, id).is_err() {
+            if EvidenceStore::new(paths.clone())
+                .read(workspace, id)
+                .is_err()
+            {
                 findings.push(format!(
                     "claim {} evidence_ids references missing {id}",
                     claim.id
@@ -148,17 +154,16 @@ fn list_evidence_snapshots(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::path::PathBuf;
     use crate::claims::{
-        new_claim_id, validate_claim_approval, Claim, CLAIM_BASIS_DERIVED,
-        CLAIM_BASIS_EVIDENCE, CLAIM_BASIS_OWNER, CLAIM_STATUS_DRAFT,
-        OKF_CLAIM_TYPE,
+        new_claim_id, validate_claim_approval, Claim, CLAIM_BASIS_DERIVED, CLAIM_BASIS_EVIDENCE,
+        CLAIM_BASIS_OWNER, CLAIM_STATUS_DRAFT, OKF_CLAIM_TYPE,
     };
     use crate::clock::FixedClock;
     use crate::config::ensure_config;
     use crate::evidence::EvidenceStore;
     use crate::paths::Options;
     use chrono::{TimeZone, Utc};
+    use std::path::PathBuf;
 
     fn fixture(name: &str) -> (PathBuf, Paths, FixedClock) {
         let dir = std::env::temp_dir().join(format!("zbrain-lint-{}-{name}", std::process::id()));
@@ -195,7 +200,8 @@ mod tests {
         if claim.id.is_empty() {
             claim.id = new_claim_id().unwrap();
         }
-        let store = crate::claims::ClaimStore::with_clock(paths.clone(), std::sync::Arc::new(*clock));
+        let store =
+            crate::claims::ClaimStore::with_clock(paths.clone(), std::sync::Arc::new(*clock));
         store.write_draft("research", claim).unwrap()
     }
 
@@ -207,7 +213,13 @@ mod tests {
         ));
         std::fs::write(&source, body).unwrap();
         EvidenceStore::new(paths.clone())
-            .add_file("research", &source, "file://source.txt", "text/plain", clock)
+            .add_file(
+                "research",
+                &source,
+                "file://source.txt",
+                "text/plain",
+                clock,
+            )
             .unwrap()
     }
 
@@ -232,7 +244,9 @@ mod tests {
         let findings = structural_findings(&paths, "research").unwrap();
         let joined = findings.join("\n");
         assert!(
-            joined.contains(&format!("supporting_claim_ids references missing {missing}")),
+            joined.contains(&format!(
+                "supporting_claim_ids references missing {missing}"
+            )),
             "{findings:?}"
         );
         assert!(
@@ -254,11 +268,16 @@ mod tests {
         let findings = structural_findings(&paths, "research").unwrap();
         let joined = findings.join("\n");
         assert!(
-            joined.contains(&format!("evidence_ids references missing {missing_evidence}")),
+            joined.contains(&format!(
+                "evidence_ids references missing {missing_evidence}"
+            )),
             "{findings:?}"
         );
         assert!(
-            joined.contains(&format!("evidence {} is not cited by any claim", evidence.id)),
+            joined.contains(&format!(
+                "evidence {} is not cited by any claim",
+                evidence.id
+            )),
             "{findings:?}"
         );
         let _ = std::fs::remove_dir_all(&dir);
@@ -301,7 +320,8 @@ mod tests {
         let (dir, paths, clock) = fixture("stale");
         let mut claim = valid_owner_claim();
         claim.stale_after = "2020-01-01T00:00:00Z".into();
-        let store = crate::claims::ClaimStore::with_clock(paths.clone(), std::sync::Arc::new(clock));
+        let store =
+            crate::claims::ClaimStore::with_clock(paths.clone(), std::sync::Arc::new(clock));
         let draft = store.write_draft("research", claim).unwrap();
         store.approve("research", &draft.id).unwrap();
         let now = Utc.with_ymd_and_hms(2026, 8, 30, 0, 0, 0).unwrap();

@@ -1,7 +1,6 @@
 use std::os::unix::fs::DirBuilderExt as _;
 use std::path::{Component, Path, PathBuf};
 
-
 pub const RUNTIME_DIRECTORY_MODE: u32 = 0o700;
 pub const RUNTIME_METADATA_MODE: u32 = 0o600;
 pub const EVIDENCE_DIRECTORY_MODE: u32 = 0o700;
@@ -38,7 +37,11 @@ impl Paths {
                 .map_err(|_| PathsError::HomeMissing)?,
         };
         let home = absolute(&home)?;
-        let runtime_dir = match options.runtime_dir.clone().or_else(|| std::env::var("ZBRAIN_HOME").ok().map(PathBuf::from)) {
+        let runtime_dir = match options
+            .runtime_dir
+            .clone()
+            .or_else(|| std::env::var("ZBRAIN_HOME").ok().map(PathBuf::from))
+        {
             Some(path) => absolute(&path)?,
             None => home.join(".zbrain"),
         };
@@ -57,9 +60,14 @@ impl Paths {
 
 #[derive(Debug)]
 pub enum PathsError {
-    Cwd { source: std::io::Error },
+    Cwd {
+        source: std::io::Error,
+    },
     HomeMissing,
-    Absolute { path: PathBuf, source: std::io::Error },
+    Absolute {
+        path: PathBuf,
+        source: std::io::Error,
+    },
     Io(std::io::Error),
 }
 
@@ -68,7 +76,9 @@ impl std::fmt::Display for PathsError {
         match self {
             Self::Cwd { source } => write!(f, "resolve cwd: {source}"),
             Self::HomeMissing => write!(f, "home directory is not set"),
-            Self::Absolute { path, source } => write!(f, "resolve absolute path {:?}: {source}", path),
+            Self::Absolute { path, source } => {
+                write!(f, "resolve absolute path {:?}: {source}", path)
+            }
             Self::Io(source) => write!(f, "{source}"),
         }
     }
@@ -176,7 +186,13 @@ pub(crate) fn write_file(path: &Path, contents: &[u8], mode: u32) -> Result<(), 
 }
 
 pub fn is_safe_workspace_name(name: &str) -> bool {
-    if name.is_empty() || name != Path::new(name).file_name().and_then(|s| s.to_str()).unwrap_or("") {
+    if name.is_empty()
+        || name
+            != Path::new(name)
+                .file_name()
+                .and_then(|s| s.to_str())
+                .unwrap_or("")
+    {
         return false;
     }
     name.chars()
@@ -249,7 +265,15 @@ mod tests {
         for name in ["research", "a1", "w-1"] {
             assert!(is_safe_workspace_name(name), "{name} should be safe");
         }
-        for name in ["", "Research", "a_b", "../outside", "a/b", "sp ace", ".hidden"] {
+        for name in [
+            "",
+            "Research",
+            "a_b",
+            "../outside",
+            "a/b",
+            "sp ace",
+            ".hidden",
+        ] {
             assert!(!is_safe_workspace_name(name), "{name:?} should be unsafe");
         }
     }

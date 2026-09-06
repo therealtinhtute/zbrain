@@ -18,7 +18,9 @@ use std::sync::Arc;
 
 use chrono::{TimeZone, Utc};
 
-use zbrain::approval::{ChallengeItem, ChallengePrepare, ChallengeStore, CHALLENGE_OPERATION_REVOKE};
+use zbrain::approval::{
+    ChallengeItem, ChallengePrepare, ChallengeStore, CHALLENGE_OPERATION_REVOKE,
+};
 use zbrain::campaign::{CampaignSpec, CampaignStore};
 use zbrain::claims::{
     verify_claim_digest, Claim, ClaimStore, CLAIM_BASIS_OWNER, CLAIM_STATUS_APPROVED,
@@ -84,9 +86,17 @@ fn eval_claim(id: &str, title: &str, body: &str, conflicts_with: &str) -> Claim 
     }
 }
 
-fn write_eval_claim(paths: &Paths, id: &str, title: &str, body: &str, conflicts_with: &str) -> Claim {
+fn write_eval_claim(
+    paths: &Paths,
+    id: &str,
+    title: &str,
+    body: &str,
+    conflicts_with: &str,
+) -> Claim {
     let store = claim_store(paths);
-    let created = store.write_draft("research", eval_claim(id, title, body, conflicts_with)).unwrap();
+    let created = store
+        .write_draft("research", eval_claim(id, title, body, conflicts_with))
+        .unwrap();
     store.approve("research", &created.id).unwrap()
 }
 
@@ -98,7 +108,11 @@ fn write_eval_draft(paths: &Paths, id: &str, title: &str, body: &str) -> Claim {
 
 fn reindex_workspace(paths: &Paths) {
     let summary = IndexStore::new(paths.clone()).rebuild("research").unwrap();
-    assert_eq!(summary.rebuild_state, REBUILD_STATUS_CLEAN, "invalid={:?}", summary.invalid_claims);
+    assert_eq!(
+        summary.rebuild_state, REBUILD_STATUS_CLEAN,
+        "invalid={:?}",
+        summary.invalid_claims
+    );
 }
 
 fn revoke_eval_claim(paths: &Paths, id: &str, reason: &str) {
@@ -121,7 +135,12 @@ fn revoke_eval_claim(paths: &Paths, id: &str, reason: &str) {
         .grant("research", &prepared.challenge.id)
         .unwrap();
     store
-        .apply_challenge("research", &prepared.challenge.id, &granted.token, Default::default())
+        .apply_challenge(
+            "research",
+            &prepared.challenge.id,
+            &granted.token,
+            Default::default(),
+        )
         .unwrap();
 }
 
@@ -164,7 +183,12 @@ fn ask_cli(paths: &Paths, query: &str) -> (AskResult, String) {
         .iter()
         .map(|s| s.to_string())
         .collect();
-    let mut result = AskResult { status: String::new(), claims: Vec::new(), promo: Vec::new(), err_text: String::new() };
+    let mut result = AskResult {
+        status: String::new(),
+        claims: Vec::new(),
+        promo: Vec::new(),
+        err_text: String::new(),
+    };
     let raw = String::new();
     if let Err(err) = app.run(&argv) {
         result.err_text = err.to_string();
@@ -175,9 +199,15 @@ fn ask_cli(paths: &Paths, query: &str) -> (AskResult, String) {
     result.status = parsed["status"].as_str().unwrap_or("").to_string();
     for claim in parsed["claims"].as_array().cloned().unwrap_or_default() {
         assert_eq!(claim["status"], "approved");
-        result.claims.push(claim["id"].as_str().unwrap().to_string());
+        result
+            .claims
+            .push(claim["id"].as_str().unwrap().to_string());
     }
-    for promo in parsed["promotion_candidates"].as_array().cloned().unwrap_or_default() {
+    for promo in parsed["promotion_candidates"]
+        .as_array()
+        .cloned()
+        .unwrap_or_default()
+    {
         result.promo.push(promo["id"].as_str().unwrap().to_string());
     }
     (result, raw)
@@ -195,7 +225,10 @@ fn mcp_tool(paths: &Paths, tool: &str, args: serde_json::Value) -> (bool, String
         call,
     );
     let registry = ZbrainRegistry::new(paths.clone(), Box::new(FixedClock::new(eval_now())));
-    let options = McpOptions { version: "eval".to_string(), ..Default::default() };
+    let options = McpOptions {
+        version: "eval".to_string(),
+        ..Default::default()
+    };
     let mut server = Server::new(registry, options);
     let mut transport = MemoryTransport::with_requests(requests.into_bytes());
     server.run(&mut transport).unwrap();
@@ -208,12 +241,20 @@ fn mcp_tool(paths: &Paths, tool: &str, args: serde_json::Value) -> (bool, String
     let response: serde_json::Value = serde_json::from_str(&frames[1]).unwrap();
     let result = &response["result"];
     let is_error = result["isError"].as_bool().unwrap_or(false);
-    let text = result["content"][0]["text"].as_str().unwrap_or("").to_string();
+    let text = result["content"][0]["text"]
+        .as_str()
+        .unwrap_or("")
+        .to_string();
     (is_error, text)
 }
 
 fn ask_mcp(paths: &Paths, query: &str) -> (AskResult, String) {
-    let mut result = AskResult { status: String::new(), claims: Vec::new(), promo: Vec::new(), err_text: String::new() };
+    let mut result = AskResult {
+        status: String::new(),
+        claims: Vec::new(),
+        promo: Vec::new(),
+        err_text: String::new(),
+    };
     let (is_error, raw) = mcp_tool(
         paths,
         "memory_ask",
@@ -227,9 +268,15 @@ fn ask_mcp(paths: &Paths, query: &str) -> (AskResult, String) {
     result.status = parsed["status"].as_str().unwrap_or("").to_string();
     for claim in parsed["claims"].as_array().cloned().unwrap_or_default() {
         assert_eq!(claim["status"], "approved");
-        result.claims.push(claim["id"].as_str().unwrap().to_string());
+        result
+            .claims
+            .push(claim["id"].as_str().unwrap().to_string());
     }
-    for promo in parsed["promotion_candidates"].as_array().cloned().unwrap_or_default() {
+    for promo in parsed["promotion_candidates"]
+        .as_array()
+        .cloned()
+        .unwrap_or_default()
+    {
         result.promo.push(promo["id"].as_str().unwrap().to_string());
     }
     (result, raw)
@@ -251,54 +298,130 @@ struct TrustCase {
 }
 
 fn verify_draft_alongside(layer: &str, res: &AskResult, _raw: &str) {
-    assert_eq!(res.claims, vec!["clm_a0000000000000000000000000000001".to_string()], "{layer}");
-    assert_eq!(res.promo, vec!["clm_a0000000000000000000000000000002".to_string()], "{layer}");
+    assert_eq!(
+        res.claims,
+        vec!["clm_a0000000000000000000000000000001".to_string()],
+        "{layer}"
+    );
+    assert_eq!(
+        res.promo,
+        vec!["clm_a0000000000000000000000000000002".to_string()],
+        "{layer}"
+    );
 }
 
 fn verify_revoked(layer: &str, _res: &AskResult, raw: &str) {
-    assert!(!raw.contains("Quiescent Ledger") && !raw.contains("decommission ledger note"), "{layer} leaked revoked content");
+    assert!(
+        !raw.contains("Quiescent Ledger") && !raw.contains("decommission ledger note"),
+        "{layer} leaked revoked content"
+    );
 }
 
 fn verify_superseded(layer: &str, res: &AskResult, _raw: &str) {
-    assert_eq!(res.claims, vec!["clm_c0000000000000000000000000000002".to_string()], "{layer}");
+    assert_eq!(
+        res.claims,
+        vec!["clm_c0000000000000000000000000000002".to_string()],
+        "{layer}"
+    );
 }
 
 fn setup_draft_alongside(paths: &Paths) {
-    write_eval_claim(paths, "clm_a0000000000000000000000000000001", "Orbital Fallback Baseline", "orbital fallback protocol baseline\n", "");
-    write_eval_draft(paths, "clm_a0000000000000000000000000000002", "Orbital Fallback Draft", "orbital fallback protocol unapproved draft\n");
+    write_eval_claim(
+        paths,
+        "clm_a0000000000000000000000000000001",
+        "Orbital Fallback Baseline",
+        "orbital fallback protocol baseline\n",
+        "",
+    );
+    write_eval_draft(
+        paths,
+        "clm_a0000000000000000000000000000002",
+        "Orbital Fallback Draft",
+        "orbital fallback protocol unapproved draft\n",
+    );
     reindex_workspace(paths);
 }
 
 fn setup_revoked(paths: &Paths) {
-    let claim = write_eval_claim(paths, "clm_b0000000000000000000000000000001", "Quiescent Ledger", "quiescent decommission ledger note\n", "");
-    IndexStore::new(paths.clone()).mark_dirty("research").unwrap();
+    let claim = write_eval_claim(
+        paths,
+        "clm_b0000000000000000000000000000001",
+        "Quiescent Ledger",
+        "quiescent decommission ledger note\n",
+        "",
+    );
+    IndexStore::new(paths.clone())
+        .mark_dirty("research")
+        .unwrap();
     revoke_eval_claim(paths, &claim.id, "superseded by verified guidance");
     reindex_workspace(paths);
 }
 
 fn setup_superseded(paths: &Paths) {
-    let old = write_eval_claim(paths, "clm_c0000000000000000000000000000001", "Sync Cadence", "sync cadence guidance hourly heartbeat\n", "");
-    IndexStore::new(paths.clone()).mark_dirty("research").unwrap();
+    let old = write_eval_claim(
+        paths,
+        "clm_c0000000000000000000000000000001",
+        "Sync Cadence",
+        "sync cadence guidance hourly heartbeat\n",
+        "",
+    );
+    IndexStore::new(paths.clone())
+        .mark_dirty("research")
+        .unwrap();
     let store = claim_store(paths);
     store
-        .write_superseding_draft("research", &old.id, eval_claim("clm_c0000000000000000000000000000002", "Sync Cadence Replacement", "sync cadence guidance hourly heartbeat replacement\n", ""))
+        .write_superseding_draft(
+            "research",
+            &old.id,
+            eval_claim(
+                "clm_c0000000000000000000000000000002",
+                "Sync Cadence Replacement",
+                "sync cadence guidance hourly heartbeat replacement\n",
+                "",
+            ),
+        )
         .unwrap();
-    store.approve("research", "clm_c0000000000000000000000000000002").unwrap();
+    store
+        .approve("research", "clm_c0000000000000000000000000000002")
+        .unwrap();
     reindex_workspace(paths);
 }
 
 fn setup_conflicting(paths: &Paths) {
-    write_eval_claim(paths, "clm_d0000000000000000000000000000001", "Retention Window", "retention window verdict thirty days\n", "");
-    write_eval_claim(paths, "clm_d0000000000000000000000000000002", "Retention Window Rival", "retention window verdict ninety days\n", "clm_d0000000000000000000000000000001");
+    write_eval_claim(
+        paths,
+        "clm_d0000000000000000000000000000001",
+        "Retention Window",
+        "retention window verdict thirty days\n",
+        "",
+    );
+    write_eval_claim(
+        paths,
+        "clm_d0000000000000000000000000000002",
+        "Retention Window Rival",
+        "retention window verdict ninety days\n",
+        "clm_d0000000000000000000000000000001",
+    );
     reindex_workspace(paths);
 }
 
 fn setup_tampered(paths: &Paths) {
-    let claim = write_eval_claim(paths, "clm_e0000000000000000000000000000001", "Tamper Probe", "tamper probe trusted body\n", "");
+    let claim = write_eval_claim(
+        paths,
+        "clm_e0000000000000000000000000000001",
+        "Tamper Probe",
+        "tamper probe trusted body\n",
+        "",
+    );
     reindex_workspace(paths);
-    let path = paths.workspaces_dir.join("research/wiki/projects").join(format!("{}.md", claim.id));
+    let path = paths
+        .workspaces_dir
+        .join("research/wiki/projects")
+        .join(format!("{}.md", claim.id));
     let contents = std::fs::read_to_string(&path).unwrap();
-    let digest_index = contents.find("sha256:").expect("canonical claim has no sha256 digest");
+    let digest_index = contents
+        .find("sha256:")
+        .expect("canonical claim has no sha256 digest");
     let tampered = format!(
         "{}sha256:{}{}",
         &contents[..digest_index],
@@ -311,44 +434,165 @@ fn setup_tampered(paths: &Paths) {
 }
 
 fn setup_stale(paths: &Paths) {
-    let claim = write_eval_claim(paths, "clm_f0000000000000000000000000000001", "Stale Probe", "stale probe original body\n", "");
+    let claim = write_eval_claim(
+        paths,
+        "clm_f0000000000000000000000000000001",
+        "Stale Probe",
+        "stale probe original body\n",
+        "",
+    );
     reindex_workspace(paths);
-    let path = paths.workspaces_dir.join("research/wiki/projects").join(format!("{}.md", claim.id));
+    let path = paths
+        .workspaces_dir
+        .join("research/wiki/projects")
+        .join(format!("{}.md", claim.id));
     let contents = std::fs::read_to_string(&path).unwrap();
-    std::fs::write(&path, contents.replacen("stale probe original body", "stale probe edited body", 1)).unwrap();
+    std::fs::write(
+        &path,
+        contents.replacen("stale probe original body", "stale probe edited body", 1),
+    )
+    .unwrap();
 }
 
 fn setup_dirty(paths: &Paths) {
-    write_eval_claim(paths, "clm_10000000000000000000000000000001", "Dirty Probe", "dirty probe body\n", "");
+    write_eval_claim(
+        paths,
+        "clm_10000000000000000000000000000001",
+        "Dirty Probe",
+        "dirty probe body\n",
+        "",
+    );
     reindex_workspace(paths);
-    IndexStore::new(paths.clone()).mark_dirty("research").unwrap();
+    IndexStore::new(paths.clone())
+        .mark_dirty("research")
+        .unwrap();
 }
 
 fn setup_missing(paths: &Paths) {
-    write_eval_claim(paths, "clm_20000000000000000000000000000001", "Missing Probe", "missing probe body\n", "");
+    write_eval_claim(
+        paths,
+        "clm_20000000000000000000000000000001",
+        "Missing Probe",
+        "missing probe body\n",
+        "",
+    );
     reindex_workspace(paths);
-    let db = IndexStore::new(paths.clone()).database_path("research").unwrap();
+    let db = IndexStore::new(paths.clone())
+        .database_path("research")
+        .unwrap();
     std::fs::remove_file(db).unwrap();
 }
 
 fn setup_legacy(paths: &Paths) {
-    write_eval_claim(paths, "clm_30000000000000000000000000000001", "Indexed Probe", "indexed probe body\n", "");
+    write_eval_claim(
+        paths,
+        "clm_30000000000000000000000000000001",
+        "Indexed Probe",
+        "indexed probe body\n",
+        "",
+    );
     reindex_workspace(paths);
-    write_eval_draft(paths, "clm_30000000000000000000000000000002", "Legacy Unindexed", "legacy unindexed document body\n");
+    write_eval_draft(
+        paths,
+        "clm_30000000000000000000000000000002",
+        "Legacy Unindexed",
+        "legacy unindexed document body\n",
+    );
 }
 
 #[test]
 fn eval_trust_integrity() {
     let cases = vec![
-        TrustCase { name: "draft_alongside_approved", setup: setup_draft_alongside, query: "orbital fallback protocol", want_ready: true, want_gap: false, want_blocked: false, want_err: "", verify: Some(verify_draft_alongside) },
-        TrustCase { name: "revoked_claim", setup: setup_revoked, query: "quiescent decommission ledger", want_ready: false, want_gap: true, want_blocked: false, want_err: "", verify: Some(verify_revoked) },
-        TrustCase { name: "superseded_claim", setup: setup_superseded, query: "sync cadence guidance heartbeat", want_ready: true, want_gap: false, want_blocked: false, want_err: "", verify: Some(verify_superseded) },
-        TrustCase { name: "conflicting_approved", setup: setup_conflicting, query: "retention window verdict", want_ready: false, want_gap: false, want_blocked: true, want_err: "", verify: None },
-        TrustCase { name: "digest_tampered_approved", setup: setup_tampered, query: "tamper probe trusted body", want_ready: false, want_gap: false, want_blocked: false, want_err: "rejected", verify: None },
-        TrustCase { name: "stale_index", setup: setup_stale, query: "stale probe body", want_ready: false, want_gap: false, want_blocked: false, want_err: "stale", verify: None },
-        TrustCase { name: "dirty_index", setup: setup_dirty, query: "dirty probe body", want_ready: false, want_gap: false, want_blocked: false, want_err: "dirty", verify: None },
-        TrustCase { name: "missing_index", setup: setup_missing, query: "missing probe body", want_ready: false, want_gap: false, want_blocked: false, want_err: "index", verify: None },
-        TrustCase { name: "unindexed_legacy_doc", setup: setup_legacy, query: "legacy unindexed document body", want_ready: false, want_gap: false, want_blocked: false, want_err: "dirty", verify: None },
+        TrustCase {
+            name: "draft_alongside_approved",
+            setup: setup_draft_alongside,
+            query: "orbital fallback protocol",
+            want_ready: true,
+            want_gap: false,
+            want_blocked: false,
+            want_err: "",
+            verify: Some(verify_draft_alongside),
+        },
+        TrustCase {
+            name: "revoked_claim",
+            setup: setup_revoked,
+            query: "quiescent decommission ledger",
+            want_ready: false,
+            want_gap: true,
+            want_blocked: false,
+            want_err: "",
+            verify: Some(verify_revoked),
+        },
+        TrustCase {
+            name: "superseded_claim",
+            setup: setup_superseded,
+            query: "sync cadence guidance heartbeat",
+            want_ready: true,
+            want_gap: false,
+            want_blocked: false,
+            want_err: "",
+            verify: Some(verify_superseded),
+        },
+        TrustCase {
+            name: "conflicting_approved",
+            setup: setup_conflicting,
+            query: "retention window verdict",
+            want_ready: false,
+            want_gap: false,
+            want_blocked: true,
+            want_err: "",
+            verify: None,
+        },
+        TrustCase {
+            name: "digest_tampered_approved",
+            setup: setup_tampered,
+            query: "tamper probe trusted body",
+            want_ready: false,
+            want_gap: false,
+            want_blocked: false,
+            want_err: "rejected",
+            verify: None,
+        },
+        TrustCase {
+            name: "stale_index",
+            setup: setup_stale,
+            query: "stale probe body",
+            want_ready: false,
+            want_gap: false,
+            want_blocked: false,
+            want_err: "stale",
+            verify: None,
+        },
+        TrustCase {
+            name: "dirty_index",
+            setup: setup_dirty,
+            query: "dirty probe body",
+            want_ready: false,
+            want_gap: false,
+            want_blocked: false,
+            want_err: "dirty",
+            verify: None,
+        },
+        TrustCase {
+            name: "missing_index",
+            setup: setup_missing,
+            query: "missing probe body",
+            want_ready: false,
+            want_gap: false,
+            want_blocked: false,
+            want_err: "index",
+            verify: None,
+        },
+        TrustCase {
+            name: "unindexed_legacy_doc",
+            setup: setup_legacy,
+            query: "legacy unindexed document body",
+            want_ready: false,
+            want_gap: false,
+            want_blocked: false,
+            want_err: "dirty",
+            verify: None,
+        },
     ];
     for case in &cases {
         for layer in ["cli:zbrain ask", "mcp:memory_ask"] {
@@ -360,18 +604,48 @@ fn eval_trust_integrity() {
                 ask_mcp(&paths, case.query)
             };
             if !case.want_err.is_empty() {
-                assert!(!res.err_text.is_empty(), "{layer} {}: expected fail-closed error, got status {:?} output {raw:?}", case.name, res.status);
-                assert!(res.err_text.contains(case.want_err), "{layer} {}: error {:?} does not contain {:?}", case.name, res.err_text, case.want_err);
-                assert!(res.status.is_empty() && res.claims.is_empty(), "{layer} {}", case.name);
+                assert!(
+                    !res.err_text.is_empty(),
+                    "{layer} {}: expected fail-closed error, got status {:?} output {raw:?}",
+                    case.name,
+                    res.status
+                );
+                assert!(
+                    res.err_text.contains(case.want_err),
+                    "{layer} {}: error {:?} does not contain {:?}",
+                    case.name,
+                    res.err_text,
+                    case.want_err
+                );
+                assert!(
+                    res.status.is_empty() && res.claims.is_empty(),
+                    "{layer} {}",
+                    case.name
+                );
             } else if case.want_gap {
-                assert!(res.err_text.is_empty(), "{layer} {}: unexpected error {:?}", case.name, res.err_text);
+                assert!(
+                    res.err_text.is_empty(),
+                    "{layer} {}: unexpected error {:?}",
+                    case.name,
+                    res.err_text
+                );
                 assert_eq!(res.status, QUERY_STATUS_GAP, "{layer} {}", case.name);
                 assert!(res.claims.is_empty(), "{layer} {}", case.name);
             } else if case.want_blocked {
-                assert!(res.err_text.is_empty(), "{layer} {}: unexpected error {:?}", case.name, res.err_text);
+                assert!(
+                    res.err_text.is_empty(),
+                    "{layer} {}: unexpected error {:?}",
+                    case.name,
+                    res.err_text
+                );
                 assert_eq!(res.status, QUERY_STATUS_BLOCKED, "{layer} {}", case.name);
             } else if case.want_ready {
-                assert!(res.err_text.is_empty(), "{layer} {}: unexpected error {:?}", case.name, res.err_text);
+                assert!(
+                    res.err_text.is_empty(),
+                    "{layer} {}: unexpected error {:?}",
+                    case.name,
+                    res.err_text
+                );
                 assert_eq!(res.status, QUERY_STATUS_READY, "{layer} {}", case.name);
             }
             if let Some(verify) = case.verify {
@@ -405,13 +679,20 @@ fn cli_app(paths: &Paths, stdin_body: &str) -> (App, SharedOut) {
 fn cli_run(app: &mut App, out: &SharedOut, argv: &[&str]) -> String {
     out.0.borrow_mut().clear();
     let argv: Vec<String> = argv.iter().map(|s| s.to_string()).collect();
-    app.run(&argv).unwrap_or_else(|err| panic!("run({argv:?}) error = {err}"));
+    app.run(&argv)
+        .unwrap_or_else(|err| panic!("run({argv:?}) error = {err}"));
     String::from_utf8(out.0.borrow().clone()).unwrap()
 }
 
 fn cli_draft_id(paths: &Paths, title: &str, body: &str) -> String {
     let (mut app, out) = cli_app(paths, body);
-    let raw = cli_run(&mut app, &out, &["claim", "draft", "--tier", "projects", "--title", title, "--basis", "owner"]);
+    let raw = cli_run(
+        &mut app,
+        &out,
+        &[
+            "claim", "draft", "--tier", "projects", "--title", title, "--basis", "owner",
+        ],
+    );
     let parsed: serde_json::Value = serde_json::from_str(&raw).unwrap();
     parsed["id"].as_str().unwrap().to_string()
 }
@@ -429,8 +710,25 @@ fn eval_lifecycle_chain_cli() {
     verify_claim_digest(&original).unwrap();
 
     let (mut app, out) = cli_app(&paths, "chain replacement body\n");
-    let raw = cli_run(&mut app, &out, &["claim", "supersede", &original_id, "--tier", "projects", "--title", "Lifecycle Chain v2", "--basis", "owner"]);
-    let replacement_id: String = serde_json::from_str::<serde_json::Value>(&raw).unwrap()["id"].as_str().unwrap().to_string();
+    let raw = cli_run(
+        &mut app,
+        &out,
+        &[
+            "claim",
+            "supersede",
+            &original_id,
+            "--tier",
+            "projects",
+            "--title",
+            "Lifecycle Chain v2",
+            "--basis",
+            "owner",
+        ],
+    );
+    let replacement_id: String = serde_json::from_str::<serde_json::Value>(&raw).unwrap()["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
     let (mut app, out) = cli_app(&paths, "");
     cli_run(&mut app, &out, &["claim", "approve", &replacement_id]);
     let superseded = store.read("research", &original_id).unwrap();
@@ -439,11 +737,23 @@ fn eval_lifecycle_chain_cli() {
     assert_eq!(replacement.status, CLAIM_STATUS_APPROVED);
     verify_claim_digest(&superseded).unwrap();
     verify_claim_digest(&replacement).unwrap();
-    assert!(superseded.transitions.iter().any(|t| t.kind == "supersede"
-        && t.prior_verification_digest == original.verified_digest));
+    assert!(superseded
+        .transitions
+        .iter()
+        .any(|t| t.kind == "supersede" && t.prior_verification_digest == original.verified_digest));
 
     let (mut app, out) = cli_app(&paths, "");
-    cli_run(&mut app, &out, &["claim", "revoke", &replacement_id, "--reason", "eval chain revoke"]);
+    cli_run(
+        &mut app,
+        &out,
+        &[
+            "claim",
+            "revoke",
+            &replacement_id,
+            "--reason",
+            "eval chain revoke",
+        ],
+    );
     let revoked = store.read("research", &replacement_id).unwrap();
     assert_eq!(revoked.status, CLAIM_STATUS_REVOKED);
     verify_claim_digest(&revoked).unwrap();
@@ -455,7 +765,11 @@ fn eval_lifecycle_chain_mcp() {
     let (_dir, paths) = eval_paths("lifecycle-mcp");
     let store = claim_store(&paths);
 
-    let prepare_apply = |paths: &Paths, action: &str, claim_id: &str, extra: serde_json::Value| -> serde_json::Value {
+    let prepare_apply = |paths: &Paths,
+                         action: &str,
+                         claim_id: &str,
+                         extra: serde_json::Value|
+     -> serde_json::Value {
         let mut prepare_args = serde_json::json!({"operation": "prepare", "action": action, "workspace": "research", "claim_id": claim_id});
         for (key, value) in extra.as_object().cloned().unwrap_or_default() {
             prepare_args[key] = value;
@@ -465,9 +779,10 @@ fn eval_lifecycle_chain_mcp() {
         let prepared: serde_json::Value = serde_json::from_str(&raw).unwrap();
         let challenge_id = prepared["challenge_id"].as_str().unwrap().to_string();
         assert!(prepared.get("token").is_none());
-        let granted = ChallengeStore::with_clock(paths.clone(), Arc::new(FixedClock::new(eval_now())))
-            .grant("research", &challenge_id)
-            .unwrap();
+        let granted =
+            ChallengeStore::with_clock(paths.clone(), Arc::new(FixedClock::new(eval_now())))
+                .grant("research", &challenge_id)
+                .unwrap();
         let mut apply_args = serde_json::json!({"operation": "apply", "action": action, "challenge_id": challenge_id, "token": granted.token});
         for (key, value) in extra.as_object().cloned().unwrap_or_default() {
             apply_args[key] = value;
@@ -477,8 +792,15 @@ fn eval_lifecycle_chain_mcp() {
         serde_json::from_str(&raw).unwrap()
     };
 
-    let draft = eval_claim(&zbrain::claims::new_claim_id().unwrap(), "MCP Chain", "mcp chain original body\n", "");
-    IndexStore::new(paths.clone()).mark_dirty("research").unwrap();
+    let draft = eval_claim(
+        &zbrain::claims::new_claim_id().unwrap(),
+        "MCP Chain",
+        "mcp chain original body\n",
+        "",
+    );
+    IndexStore::new(paths.clone())
+        .mark_dirty("research")
+        .unwrap();
     let created = store.write_draft("research", draft).unwrap();
     let apply_out = prepare_apply(&paths, "approve", &created.id, serde_json::json!({}));
     assert_eq!(apply_out["status"], CLAIM_STATUS_APPROVED);
@@ -486,14 +808,31 @@ fn eval_lifecycle_chain_mcp() {
     verify_claim_digest(&approved).unwrap();
     assert_eq!(approved.verified_by, "owner:mcp");
 
-    let replacement = eval_claim(&zbrain::claims::new_claim_id().unwrap(), "MCP Chain v2", "mcp chain replacement body\n", "");
-    IndexStore::new(paths.clone()).mark_dirty("research").unwrap();
-    let superseding = store.write_superseding_draft("research", &created.id, replacement).unwrap();
+    let replacement = eval_claim(
+        &zbrain::claims::new_claim_id().unwrap(),
+        "MCP Chain v2",
+        "mcp chain replacement body\n",
+        "",
+    );
+    IndexStore::new(paths.clone())
+        .mark_dirty("research")
+        .unwrap();
+    let superseding = store
+        .write_superseding_draft("research", &created.id, replacement)
+        .unwrap();
     let apply_out = prepare_apply(&paths, "supersede", &superseding.id, serde_json::json!({}));
     assert_eq!(apply_out["status"], CLAIM_STATUS_APPROVED);
-    assert_eq!(store.read("research", &created.id).unwrap().status, CLAIM_STATUS_SUPERSEDED);
+    assert_eq!(
+        store.read("research", &created.id).unwrap().status,
+        CLAIM_STATUS_SUPERSEDED
+    );
 
-    let apply_out = prepare_apply(&paths, "revoke", &superseding.id, serde_json::json!({"revoke_reason": "eval mcp chain revoke"}));
+    let apply_out = prepare_apply(
+        &paths,
+        "revoke",
+        &superseding.id,
+        serde_json::json!({"revoke_reason": "eval mcp chain revoke"}),
+    );
     assert_eq!(apply_out["status"], CLAIM_STATUS_REVOKED);
 
     let (is_error, _) = mcp_tool(
@@ -524,22 +863,50 @@ fn eval_lifecycle_batch_edges() {
     let prepared = store
         .prepare_batch_challenge(
             "research",
-            ids.iter().map(|id| ChallengeItem { claim_id: id.clone(), ..ChallengeItem::default() }).collect(),
+            ids.iter()
+                .map(|id| ChallengeItem {
+                    claim_id: id.clone(),
+                    ..ChallengeItem::default()
+                })
+                .collect(),
         )
         .unwrap();
     let (mut app, out) = cli_app(&paths, "");
-    app.prompt = PromptSource::Scripted(vec![suffix_of(&ids[0]), "skip".to_string(), suffix_of(&ids[2])]);
-    let raw = cli_run(&mut app, &out, &["approval", "grant", &prepared.challenge.id]);
+    app.prompt = PromptSource::Scripted(vec![
+        suffix_of(&ids[0]),
+        "skip".to_string(),
+        suffix_of(&ids[2]),
+    ]);
+    let raw = cli_run(
+        &mut app,
+        &out,
+        &["approval", "grant", &prepared.challenge.id],
+    );
     let granted: serde_json::Value = serde_json::from_str(&raw).unwrap();
     let token = granted["token"].as_str().unwrap().to_string();
     assert_eq!(granted["granted_items"].as_array().unwrap().len(), 2);
     assert_eq!(granted["skipped_items"].as_array().unwrap().len(), 1);
-    let result = store.apply_challenge_batch("research", &prepared.challenge.id, &token, Default::default()).unwrap();
+    let result = store
+        .apply_challenge_batch(
+            "research",
+            &prepared.challenge.id,
+            &token,
+            Default::default(),
+        )
+        .unwrap();
     assert_eq!(result.items[0].status, "applied");
     assert_eq!(result.items[1].status, "skipped");
     assert_eq!(result.items[2].status, "applied");
-    assert!(store.apply_challenge_batch("research", &prepared.challenge.id, &token, Default::default())
-        .unwrap_err().to_string().contains("already consumed"));
+    assert!(store
+        .apply_challenge_batch(
+            "research",
+            &prepared.challenge.id,
+            &token,
+            Default::default()
+        )
+        .unwrap_err()
+        .to_string()
+        .contains("already consumed"));
 
     // Skip-all issues no token and leaves the challenge ungranted.
     let skip_ids = [
@@ -549,47 +916,100 @@ fn eval_lifecycle_batch_edges() {
     let skip_prepared = store
         .prepare_batch_challenge(
             "research",
-            skip_ids.iter().map(|id| ChallengeItem { claim_id: id.clone(), ..ChallengeItem::default() }).collect(),
+            skip_ids
+                .iter()
+                .map(|id| ChallengeItem {
+                    claim_id: id.clone(),
+                    ..ChallengeItem::default()
+                })
+                .collect(),
         )
         .unwrap();
     let (mut app, out) = cli_app(&paths, "");
     app.prompt = PromptSource::Scripted(vec!["skip".to_string(), "skip".to_string()]);
-    let raw = cli_run(&mut app, &out, &["approval", "grant", &skip_prepared.challenge.id]);
+    let raw = cli_run(
+        &mut app,
+        &out,
+        &["approval", "grant", &skip_prepared.challenge.id],
+    );
     let skipped: serde_json::Value = serde_json::from_str(&raw).unwrap();
     assert!(skipped.get("token").is_none() || skipped["token"].is_null());
-    let ungranted = ChallengeStore::with_clock(paths.clone(), Arc::new(FixedClock::new(eval_now())))
-        .read("research", &skip_prepared.challenge.id)
-        .unwrap();
+    let ungranted =
+        ChallengeStore::with_clock(paths.clone(), Arc::new(FixedClock::new(eval_now())))
+            .read("research", &skip_prepared.challenge.id)
+            .unwrap();
     assert!(!ungranted.granted && ungranted.token_sha256.is_empty());
 
     // Expiry, token expiry, and digest mismatch at the store layer.
     let late = |minutes: i64| {
-        Arc::new(FixedClock::new(eval_now() + chrono::Duration::minutes(minutes)))
-            as Arc<dyn zbrain::clock::Clock>
+        Arc::new(FixedClock::new(
+            eval_now() + chrono::Duration::minutes(minutes),
+        )) as Arc<dyn zbrain::clock::Clock>
     };
     let expiry_ids = [
-        write_eval_draft(&paths, &zbrain::claims::new_claim_id().unwrap(), "Expiry One", "expiry one body\n").id,
-        write_eval_draft(&paths, &zbrain::claims::new_claim_id().unwrap(), "Expiry Two", "expiry two body\n").id,
+        write_eval_draft(
+            &paths,
+            &zbrain::claims::new_claim_id().unwrap(),
+            "Expiry One",
+            "expiry one body\n",
+        )
+        .id,
+        write_eval_draft(
+            &paths,
+            &zbrain::claims::new_claim_id().unwrap(),
+            "Expiry Two",
+            "expiry two body\n",
+        )
+        .id,
     ];
     let expiry = store
         .prepare_batch_challenge(
             "research",
-            expiry_ids.iter().map(|id| ChallengeItem { claim_id: id.clone(), ..ChallengeItem::default() }).collect(),
+            expiry_ids
+                .iter()
+                .map(|id| ChallengeItem {
+                    claim_id: id.clone(),
+                    ..ChallengeItem::default()
+                })
+                .collect(),
         )
         .unwrap();
     let err = ChallengeStore::with_clock(paths.clone(), late(16))
-        .grant_items("research", &expiry.challenge.id, &[expiry_ids[0].clone()], &[expiry_ids[1].clone()])
+        .grant_items(
+            "research",
+            &expiry.challenge.id,
+            &[expiry_ids[0].clone()],
+            &[expiry_ids[1].clone()],
+        )
         .unwrap_err();
     assert!(err.to_string().contains("expired"), "{err}");
 
     let token_ids = vec![
-        write_eval_draft(&paths, &zbrain::claims::new_claim_id().unwrap(), "Token One", "token one body\n").id,
-        write_eval_draft(&paths, &zbrain::claims::new_claim_id().unwrap(), "Token Two", "token two body\n").id,
+        write_eval_draft(
+            &paths,
+            &zbrain::claims::new_claim_id().unwrap(),
+            "Token One",
+            "token one body\n",
+        )
+        .id,
+        write_eval_draft(
+            &paths,
+            &zbrain::claims::new_claim_id().unwrap(),
+            "Token Two",
+            "token two body\n",
+        )
+        .id,
     ];
     let token_prepared = store
         .prepare_batch_challenge(
             "research",
-            token_ids.iter().map(|id| ChallengeItem { claim_id: id.clone(), ..ChallengeItem::default() }).collect(),
+            token_ids
+                .iter()
+                .map(|id| ChallengeItem {
+                    claim_id: id.clone(),
+                    ..ChallengeItem::default()
+                })
+                .collect(),
         )
         .unwrap();
     let granted = ChallengeStore::with_clock(paths.clone(), Arc::new(FixedClock::new(eval_now())))
@@ -597,29 +1017,79 @@ fn eval_lifecycle_batch_edges() {
         .unwrap();
     let late_store = ClaimStore::with_clock(paths.clone(), late(6));
     let err = late_store
-        .apply_challenge_batch("research", &token_prepared.challenge.id, &granted.token, Default::default())
+        .apply_challenge_batch(
+            "research",
+            &token_prepared.challenge.id,
+            &granted.token,
+            Default::default(),
+        )
         .unwrap_err();
     assert!(err.to_string().contains("expired"), "{err}");
 
-    let mutated = write_eval_draft(&paths, &zbrain::claims::new_claim_id().unwrap(), "Mismatch One", "mismatch one original body\n");
-    let untouched = write_eval_draft(&paths, &zbrain::claims::new_claim_id().unwrap(), "Mismatch Two", "mismatch two body\n");
+    let mutated = write_eval_draft(
+        &paths,
+        &zbrain::claims::new_claim_id().unwrap(),
+        "Mismatch One",
+        "mismatch one original body\n",
+    );
+    let untouched = write_eval_draft(
+        &paths,
+        &zbrain::claims::new_claim_id().unwrap(),
+        "Mismatch Two",
+        "mismatch two body\n",
+    );
     let mismatch = store
         .prepare_batch_challenge(
             "research",
-            [ChallengeItem { claim_id: mutated.id.clone(), ..ChallengeItem::default() }, ChallengeItem { claim_id: untouched.id.clone(), ..ChallengeItem::default() }].to_vec(),
+            [
+                ChallengeItem {
+                    claim_id: mutated.id.clone(),
+                    ..ChallengeItem::default()
+                },
+                ChallengeItem {
+                    claim_id: untouched.id.clone(),
+                    ..ChallengeItem::default()
+                },
+            ]
+            .to_vec(),
         )
         .unwrap();
-    let mutated_path = paths.workspaces_dir.join("research/wiki/projects").join(format!("{}.md", mutated.id));
+    let mutated_path = paths
+        .workspaces_dir
+        .join("research/wiki/projects")
+        .join(format!("{}.md", mutated.id));
     let contents = std::fs::read_to_string(&mutated_path).unwrap();
-    std::fs::write(&mutated_path, contents.replacen("mismatch one original body", "mismatch one tampered body", 1)).unwrap();
+    std::fs::write(
+        &mutated_path,
+        contents.replacen(
+            "mismatch one original body",
+            "mismatch one tampered body",
+            1,
+        ),
+    )
+    .unwrap();
     let granted = ChallengeStore::with_clock(paths.clone(), Arc::new(FixedClock::new(eval_now())))
-        .grant_items("research", &mismatch.challenge.id, &[mutated.id.clone(), untouched.id.clone()], &[])
+        .grant_items(
+            "research",
+            &mismatch.challenge.id,
+            &[mutated.id.clone(), untouched.id.clone()],
+            &[],
+        )
         .unwrap();
     let result = store
-        .apply_challenge_batch("research", &mismatch.challenge.id, &granted.token, Default::default())
+        .apply_challenge_batch(
+            "research",
+            &mismatch.challenge.id,
+            &granted.token,
+            Default::default(),
+        )
         .unwrap();
     assert_eq!(result.items[0].status, "failed");
-    assert!(result.items[0].error.contains("stale"), "{:?}", result.items[0]);
+    assert!(
+        result.items[0].error.contains("stale"),
+        "{:?}",
+        result.items[0]
+    );
     assert_eq!(result.items[1].status, "applied");
 }
 
@@ -633,15 +1103,43 @@ fn eval_draft_precision_golden() {
     let dir = std::env::temp_dir().join(format!("zbrain-eval-src-{}", std::process::id()));
     let _ = std::fs::create_dir_all(&dir);
     let source = dir.join("campaign-evidence.txt");
-    std::fs::write(&source, "The ingestion pipeline flushes its buffer every 30 seconds under normal load.\n").unwrap();
+    std::fs::write(
+        &source,
+        "The ingestion pipeline flushes its buffer every 30 seconds under normal load.\n",
+    )
+    .unwrap();
     let evidence = EvidenceStore::new(paths.clone())
-        .add_file("research", &source, "file://campaign-evidence", "text/plain", &FixedClock::new(eval_now()))
+        .add_file(
+            "research",
+            &source,
+            "file://campaign-evidence",
+            "text/plain",
+            &FixedClock::new(eval_now()),
+        )
         .unwrap();
 
     let specs = vec![
-        CampaignSpec { tier: "projects".to_string(), title: "Ingestion Flush Cadence".to_string(), basis: "evidence".to_string(), evidence_ids: vec![evidence.id.clone()], ..CampaignSpec::default() },
-        CampaignSpec { tier: "projects".to_string(), title: "Flush Cadence Detail".to_string(), basis: "evidence".to_string(), evidence_ids: vec![evidence.id.clone()], ..CampaignSpec::default() },
-        CampaignSpec { tier: "projects".to_string(), title: "Flush Cadence Speculation".to_string(), basis: "evidence".to_string(), evidence_ids: vec![evidence.id.clone()], ..CampaignSpec::default() },
+        CampaignSpec {
+            tier: "projects".to_string(),
+            title: "Ingestion Flush Cadence".to_string(),
+            basis: "evidence".to_string(),
+            evidence_ids: vec![evidence.id.clone()],
+            ..CampaignSpec::default()
+        },
+        CampaignSpec {
+            tier: "projects".to_string(),
+            title: "Flush Cadence Detail".to_string(),
+            basis: "evidence".to_string(),
+            evidence_ids: vec![evidence.id.clone()],
+            ..CampaignSpec::default()
+        },
+        CampaignSpec {
+            tier: "projects".to_string(),
+            title: "Flush Cadence Speculation".to_string(),
+            basis: "evidence".to_string(),
+            evidence_ids: vec![evidence.id.clone()],
+            ..CampaignSpec::default()
+        },
     ];
     let campaign = CampaignStore::with_clock(paths.clone(), Arc::new(FixedClock::new(eval_now())));
     let run = campaign.begin_campaign("research", &specs).unwrap();
@@ -652,19 +1150,36 @@ fn eval_draft_precision_golden() {
     ];
     let mut claim_ids = Vec::new();
     for (index, body) in bodies.iter().enumerate() {
-        let submission = campaign.submit_campaign_draft("research", &run.run_id, index as i64, body).unwrap();
+        let submission = campaign
+            .submit_campaign_draft("research", &run.run_id, index as i64, body)
+            .unwrap();
         claim_ids.push(submission.claim_id);
     }
     let state = campaign.resume_campaign("research", &run.run_id).unwrap();
     assert_eq!((state.submitted, state.pending), (3, 0));
     for id in &claim_ids {
-        assert_eq!(claim_store(&paths).read("research", id).unwrap().status, CLAIM_STATUS_DRAFT);
+        assert_eq!(
+            claim_store(&paths).read("research", id).unwrap().status,
+            CLAIM_STATUS_DRAFT
+        );
     }
 
     let verdicts = [
-        ("supported", 1.0, "body restates the evidence snapshot verbatim"),
-        ("supported", 0.9, "body paraphrases the evidence flush cadence"),
-        ("unverified", 0.4, "five-minute cadence and reordering claim is not in the evidence"),
+        (
+            "supported",
+            1.0,
+            "body restates the evidence snapshot verbatim",
+        ),
+        (
+            "supported",
+            0.9,
+            "body paraphrases the evidence flush cadence",
+        ),
+        (
+            "unverified",
+            0.4,
+            "five-minute cadence and reordering claim is not in the evidence",
+        ),
     ];
     let threshold = 0.7;
     let supported = verdicts.iter().filter(|v| v.0 == "supported").count();
@@ -672,7 +1187,10 @@ fn eval_draft_precision_golden() {
     for (index, (verdict, score, _)) in verdicts.iter().enumerate() {
         assert!(*score >= 0.0 && *score <= 1.0);
         if *verdict == "supported" {
-            assert!(*score >= threshold, "verdict {index} supported below threshold");
+            assert!(
+                *score >= threshold,
+                "verdict {index} supported below threshold"
+            );
             assert!(!specs[index].evidence_ids.is_empty());
         }
     }
@@ -743,27 +1261,45 @@ fn eval_retrieval_small_corpus() {
         let relevant: Vec<String> = claims
             .iter()
             .filter(|c| {
-                let haystack = format!("{} {} {}", c.title, c.body, c.tags.join(" ")).to_lowercase();
+                let haystack =
+                    format!("{} {} {}", c.title, c.body, c.tags.join(" ")).to_lowercase();
                 text.split_whitespace().all(|tok| haystack.contains(tok))
             })
             .map(|c| c.id.clone())
             .collect();
         assert!(!relevant.is_empty(), "query {qid} has no ground truth");
         let retrieved: Vec<String> = idx
-            .search("research", SearchOptions { query: text.to_string(), statuses: vec![CLAIM_STATUS_APPROVED.to_string()], limit: 10 })
+            .search(
+                "research",
+                SearchOptions {
+                    query: text.to_string(),
+                    statuses: vec![CLAIM_STATUS_APPROVED.to_string()],
+                    limit: 10,
+                },
+            )
             .unwrap()
             .iter()
             .map(|r| r.id.clone())
             .collect();
-        per.push(zbrain::eval::score_query(qid, text, &retrieved, &relevant, 10));
+        per.push(zbrain::eval::score_query(
+            qid, text, &retrieved, &relevant, 10,
+        ));
     }
     let summary = zbrain::eval::summarize(60, 10, &per, 0, 1.0);
-    assert!(summary.precision_at_k >= 0.5, "P@10 = {}", summary.precision_at_k);
+    assert!(
+        summary.precision_at_k >= 0.5,
+        "P@10 = {}",
+        summary.precision_at_k
+    );
     assert!(summary.mrr > 0.0);
     let delta = zbrain::eval::drift_delta(&summary, &summary);
     assert_eq!(delta.precision, 0.0);
     assert!(!zbrain::eval::drift_detected(&delta, 0.05).0);
     let mc = zbrain::eval::mcnemar(&summary.queries, &summary.queries);
     assert!(!mc.feasible);
-    let _ = (CLAIM_STATUS_REVOKED, CLAIM_STATUS_SUPERSEDED, CHALLENGE_OPERATION_REVOKE);
+    let _ = (
+        CLAIM_STATUS_REVOKED,
+        CLAIM_STATUS_SUPERSEDED,
+        CHALLENGE_OPERATION_REVOKE,
+    );
 }

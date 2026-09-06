@@ -21,8 +21,8 @@ use crate::claims::{
     OKF_CLAIM_TYPE,
 };
 use crate::clock::{rfc3339, Clock};
-use crate::evidence::{Evidence, EvidenceStore};
 use crate::embedder::{rebuild_with_options, EmbeddingStore, RebuildOptions};
+use crate::evidence::{Evidence, EvidenceStore};
 use crate::index::{approved_catalog, IndexStore, IndexSummary, InvalidClaimSerde};
 use crate::lifecycle::ClaimMutationOptions;
 use crate::mcp::protocol::{
@@ -78,7 +78,11 @@ struct ToolInput {
 
 impl ZbrainRegistry {
     pub fn new(paths: Paths, clock: Box<dyn Clock>) -> Self {
-        Self { paths, clock: Arc::from(clock), stderr: SafeStderr::default() }
+        Self {
+            paths,
+            clock: Arc::from(clock),
+            stderr: SafeStderr::default(),
+        }
     }
 
     /// Ports `resolveWorkspace`: explicit name or the current workspace,
@@ -108,7 +112,9 @@ impl ZbrainRegistry {
         body: impl FnOnce(&Value) -> Result<CallToolResult, McpError>,
     ) -> Result<CallToolResult, McpError> {
         if let Err(message) = validate_arguments(arguments, input) {
-            return Ok(is_error_result(&format!("validating \"arguments\": {message}")));
+            return Ok(is_error_result(&format!(
+                "validating \"arguments\": {message}"
+            )));
         }
         if let Some(arguments) = arguments {
             let encoded = arguments.to_string();
@@ -126,14 +132,16 @@ impl ZbrainRegistry {
 
     /// Ports the evidence_capture handler body: guards, workspace
     /// resolution, then `EvidenceStore.AddFile`.
-    fn run_evidence_capture(
-        &self,
-        arguments: Option<&Value>,
-    ) -> Result<CallToolResult, McpError> {
+    fn run_evidence_capture(&self, arguments: Option<&Value>) -> Result<CallToolResult, McpError> {
         self.run_tool(arguments, &EVIDENCE_CAPTURE_INPUT, |arguments| {
-            let file = arguments.get("file").and_then(Value::as_str).unwrap_or_default();
-            let origin =
-                arguments.get("origin").and_then(Value::as_str).unwrap_or_default();
+            let file = arguments
+                .get("file")
+                .and_then(Value::as_str)
+                .unwrap_or_default();
+            let origin = arguments
+                .get("origin")
+                .and_then(Value::as_str)
+                .unwrap_or_default();
             let media_type = arguments
                 .get("media_type")
                 .and_then(Value::as_str)
@@ -145,7 +153,10 @@ impl ZbrainRegistry {
                 return Ok(is_error_result("origin is required"));
             }
             let workspace = match self.resolve_workspace(
-                arguments.get("workspace").and_then(Value::as_str).unwrap_or_default(),
+                arguments
+                    .get("workspace")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default(),
             ) {
                 Ok(workspace) => workspace,
                 Err(message) => return Ok(is_error_result(&message)),
@@ -162,7 +173,10 @@ impl ZbrainRegistry {
             };
             let out = capture_output_json(&workspace, &evidence);
             Ok(CallToolResult {
-                content: vec![ContentBlock { r#type: "text", text: out.pretty() }],
+                content: vec![ContentBlock {
+                    r#type: "text",
+                    text: out.pretty(),
+                }],
                 structured_content: Some(out),
                 ..Default::default()
             })
@@ -170,10 +184,7 @@ impl ZbrainRegistry {
     }
 
     /// Ports the workspace_current handler body: `ResolveCurrentWorkspace`.
-    fn run_workspace_current(
-        &self,
-        arguments: Option<&Value>,
-    ) -> Result<CallToolResult, McpError> {
+    fn run_workspace_current(&self, arguments: Option<&Value>) -> Result<CallToolResult, McpError> {
         self.run_tool(arguments, &WORKSPACE_CURRENT_INPUT, |_arguments| {
             let current = match crate::workspace::resolve_current_workspace(&self.paths) {
                 Ok(current) => current,
@@ -205,12 +216,18 @@ impl ZbrainRegistry {
     /// of 10, rendered as the Go `TrustedQueryResponse` JSON.
     fn run_memory_ask(&self, arguments: Option<&Value>) -> Result<CallToolResult, McpError> {
         self.run_tool(arguments, &MEMORY_ASK_INPUT, |arguments| {
-            let query = arguments.get("query").and_then(Value::as_str).unwrap_or_default();
+            let query = arguments
+                .get("query")
+                .and_then(Value::as_str)
+                .unwrap_or_default();
             if query.trim().is_empty() {
                 return Ok(is_error_result("query is required"));
             }
             let workspace = match self.resolve_workspace(
-                arguments.get("workspace").and_then(Value::as_str).unwrap_or_default(),
+                arguments
+                    .get("workspace")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default(),
             ) {
                 Ok(workspace) => workspace,
                 Err(message) => return Ok(is_error_result(&message)),
@@ -266,24 +283,29 @@ impl ZbrainRegistry {
     fn run_memory_status(&self, arguments: Option<&Value>) -> Result<CallToolResult, McpError> {
         self.run_tool(arguments, &MEMORY_STATUS_INPUT, |arguments| {
             let workspace = match self.resolve_workspace(
-                arguments.get("workspace").and_then(Value::as_str).unwrap_or_default(),
+                arguments
+                    .get("workspace")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default(),
             ) {
                 Ok(workspace) => workspace,
                 Err(message) => return Ok(is_error_result(&message)),
             };
-            let mut summary = IndexSummary { workspace: workspace.clone(), ..Default::default() };
-            if let Ok(scan) = ClaimStore::new(self.paths.clone())
-                .scan_workspace_for_trust(&workspace)
+            let mut summary = IndexSummary {
+                workspace: workspace.clone(),
+                ..Default::default()
+            };
+            if let Ok(scan) =
+                ClaimStore::new(self.paths.clone()).scan_workspace_for_trust(&workspace)
             {
                 summary.approved = scan.claims.len() as i64;
                 summary.invalid = scan.invalid.len() as i64;
                 summary.invalid_count = scan.invalid.len() as i64;
-                summary.invalid_claims =
-                    scan.invalid.iter().map(InvalidClaimSerde::from).collect();
+                summary.invalid_claims = scan.invalid.iter().map(InvalidClaimSerde::from).collect();
                 summary.catalog = Some(approved_catalog(&scan.claims));
             }
-            summary.embedding = EmbeddingStore::new(self.paths.clone())
-                .summary(&workspace, summary.approved);
+            summary.embedding =
+                EmbeddingStore::new(self.paths.clone()).summary(&workspace, summary.approved);
             if let Err(error) = IndexStore::new(self.paths.clone()).check_fresh(&workspace) {
                 summary.rebuild_state = crate::index::REBUILD_STATUS_REJECTED.to_string();
                 if summary.invalid == 0 {
@@ -301,7 +323,10 @@ impl ZbrainRegistry {
     fn run_memory_reindex(&self, arguments: Option<&Value>) -> Result<CallToolResult, McpError> {
         self.run_tool(arguments, &MEMORY_REINDEX_INPUT, |arguments| {
             let workspace = match self.resolve_workspace(
-                arguments.get("workspace").and_then(Value::as_str).unwrap_or_default(),
+                arguments
+                    .get("workspace")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default(),
             ) {
                 Ok(workspace) => workspace,
                 Err(message) => return Ok(is_error_result(&message)),
@@ -328,7 +353,10 @@ impl ZbrainRegistry {
     fn run_claim_draft(&self, arguments: Option<&Value>) -> Result<CallToolResult, McpError> {
         self.run_tool(arguments, &CLAIM_DRAFT_INPUT, |arguments| {
             let workspace = match self.resolve_workspace(
-                arguments.get("workspace").and_then(Value::as_str).unwrap_or_default(),
+                arguments
+                    .get("workspace")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default(),
             ) {
                 Ok(workspace) => workspace,
                 Err(message) => return Ok(is_error_result(&message)),
@@ -353,28 +381,38 @@ impl ZbrainRegistry {
             let claim = Claim {
                 claim_type: OKF_CLAIM_TYPE.to_string(),
                 id,
-                tier: arguments.get("tier").and_then(Value::as_str).unwrap_or_default().to_string(),
+                tier: arguments
+                    .get("tier")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+                    .to_string(),
                 title: arguments
                     .get("title")
                     .and_then(Value::as_str)
                     .unwrap_or_default()
                     .to_string(),
-                basis: arguments.get("basis").and_then(Value::as_str).unwrap_or_default().to_string(),
+                basis: arguments
+                    .get("basis")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+                    .to_string(),
                 created_at: rfc3339(self.clock.now()),
                 created_by: "owner:mcp".to_string(),
                 evidence_ids: string_list("evidence"),
                 supporting_claim_ids: string_list("support"),
                 conflicts_with: string_list("conflicts_with"),
-                body: arguments.get("body").and_then(Value::as_str).unwrap_or_default().to_string(),
+                body: arguments
+                    .get("body")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+                    .to_string(),
                 ..Default::default()
             };
             let index = IndexStore::new(self.paths.clone());
             if let Err(error) = index.mark_dirty(&workspace) {
                 return Ok(is_error_result(&error.to_string()));
             }
-            let created = match ClaimStore::new(self.paths.clone())
-                .write_draft(&workspace, claim)
-            {
+            let created = match ClaimStore::new(self.paths.clone()).write_draft(&workspace, claim) {
                 Ok(created) => created,
                 Err(error) => return Ok(is_error_result(&error.to_string())),
             };
@@ -397,21 +435,31 @@ impl ZbrainRegistry {
         arguments: Option<&Value>,
         client: &str,
     ) -> Result<CallToolResult, McpError> {
-        self.run_tool(arguments, &CLAIM_LIFECYCLE_INPUT, |arguments| {
-            match arguments.get("operation").and_then(Value::as_str).unwrap_or_default() {
+        self.run_tool(
+            arguments,
+            &CLAIM_LIFECYCLE_INPUT,
+            |arguments| match arguments
+                .get("operation")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+            {
                 "prepare" => self.prepare_lifecycle(arguments),
                 "apply" => self.apply_lifecycle(arguments, client),
-                _ => Err(McpError::invalid_params("operation must be prepare or apply")),
-            }
-        })
+                _ => Err(McpError::invalid_params(
+                    "operation must be prepare or apply",
+                )),
+            },
+        )
     }
 
     /// Ports `prepareLifecycle`: action binding against the current canonical
     /// claim, then `PrepareChallenge`. No token exists until the local owner
     /// grant ceremony releases one.
     fn prepare_lifecycle(&self, arguments: &Value) -> Result<CallToolResult, McpError> {
-        let action_text =
-            arguments.get("action").and_then(Value::as_str).unwrap_or_default();
+        let action_text = arguments
+            .get("action")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
         if action_text.trim().is_empty() {
             return Err(McpError::invalid_params("action is required for prepare"));
         }
@@ -424,7 +472,10 @@ impl ZbrainRegistry {
             }
         };
         let workspace = match self.resolve_workspace(
-            arguments.get("workspace").and_then(Value::as_str).unwrap_or_default(),
+            arguments
+                .get("workspace")
+                .and_then(Value::as_str)
+                .unwrap_or_default(),
         ) {
             Ok(workspace) => workspace,
             Err(message) => return Ok(is_error_result(&message)),
@@ -450,8 +501,10 @@ impl ZbrainRegistry {
             Ok((_, digest)) => digest,
             Err(error) => return Ok(is_error_result(&error.to_string())),
         };
-        let asserted_digest =
-            arguments.get("canonical_draft_digest").and_then(Value::as_str).unwrap_or_default();
+        let asserted_digest = arguments
+            .get("canonical_draft_digest")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
         if !asserted_digest.is_empty() && asserted_digest != canonical_digest {
             return Ok(is_error_result(
                 "canonical draft digest does not match the current claim",
@@ -497,11 +550,16 @@ impl ZbrainRegistry {
             ));
         }
 
-        let revoke_reason =
-            arguments.get("revoke_reason").and_then(Value::as_str).unwrap_or_default().to_string();
+        let revoke_reason = arguments
+            .get("revoke_reason")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string();
         if action == CHALLENGE_OPERATION_REVOKE {
             if revoke_reason.trim().is_empty() {
-                return Err(McpError::invalid_params("revoke_reason is required for revoke"));
+                return Err(McpError::invalid_params(
+                    "revoke_reason is required for revoke",
+                ));
             }
         } else if !revoke_reason.is_empty() {
             return Ok(is_error_result("revoke_reason is only valid for revoke"));
@@ -530,11 +588,7 @@ impl ZbrainRegistry {
     /// challenge, then `ApplyChallenge` with the MCP caller provenance. The
     /// challenge snapshot predates apply, so `token_expires_at` reports the
     /// grant even after the token is consumed.
-    fn apply_lifecycle(
-        &self,
-        arguments: &Value,
-        client: &str,
-    ) -> Result<CallToolResult, McpError> {
+    fn apply_lifecycle(&self, arguments: &Value, client: &str) -> Result<CallToolResult, McpError> {
         let challenge_id = arguments
             .get("challenge_id")
             .and_then(Value::as_str)
@@ -542,10 +596,15 @@ impl ZbrainRegistry {
             .trim()
             .to_string();
         if challenge_id.is_empty() {
-            return Err(McpError::invalid_params("challenge_id is required for apply"));
+            return Err(McpError::invalid_params(
+                "challenge_id is required for apply",
+            ));
         }
-        let token =
-            arguments.get("token").and_then(Value::as_str).unwrap_or_default().to_string();
+        let token = arguments
+            .get("token")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string();
         if token.is_empty() {
             return Err(McpError::invalid_params("token is required for apply"));
         }
@@ -554,22 +613,28 @@ impl ZbrainRegistry {
                 Ok(found) => found,
                 Err(error) => return Ok(is_error_result(&error.to_string())),
             };
-        let workspace_arg =
-            arguments.get("workspace").and_then(Value::as_str).unwrap_or_default();
+        let workspace_arg = arguments
+            .get("workspace")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
         if !workspace_arg.is_empty() && workspace_arg != workspace {
             return Ok(is_error_result(&format!(
                 "workspace {workspace_arg:?} does not own challenge {challenge_id}"
             )));
         }
-        let claim_arg =
-            arguments.get("claim_id").and_then(Value::as_str).unwrap_or_default();
+        let claim_arg = arguments
+            .get("claim_id")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
         if !claim_arg.is_empty() && claim_arg.trim() != challenge.claim_id {
             return Ok(is_error_result(&format!(
                 "claim_id does not match challenge {challenge_id}"
             )));
         }
-        let action_arg =
-            arguments.get("action").and_then(Value::as_str).unwrap_or_default();
+        let action_arg = arguments
+            .get("action")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
         if !action_arg.is_empty() {
             match lifecycle_action(action_arg) {
                 None => {
@@ -616,8 +681,10 @@ impl ZbrainRegistry {
                 "prior verification digest does not match challenge {challenge_id}"
             )));
         }
-        let reason_arg =
-            arguments.get("revoke_reason").and_then(Value::as_str).unwrap_or_default();
+        let reason_arg = arguments
+            .get("revoke_reason")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
         if !reason_arg.is_empty() && reason_arg != challenge.revoke_reason {
             return Ok(is_error_result(&format!(
                 "revoke reason does not match challenge {challenge_id}"
@@ -646,13 +713,13 @@ impl ZbrainRegistry {
 
     /// Ports the campaign_begin handler body: spec validation plus run-file
     /// persistence. No claim is created until each draft is submitted.
-    fn run_campaign_begin(
-        &self,
-        arguments: Option<&Value>,
-    ) -> Result<CallToolResult, McpError> {
+    fn run_campaign_begin(&self, arguments: Option<&Value>) -> Result<CallToolResult, McpError> {
         self.run_tool(arguments, &CAMPAIGN_BEGIN_INPUT, |arguments| {
             let workspace = match self.resolve_workspace(
-                arguments.get("workspace").and_then(Value::as_str).unwrap_or_default(),
+                arguments
+                    .get("workspace")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default(),
             ) {
                 Ok(workspace) => workspace,
                 Err(message) => return Ok(is_error_result(&message)),
@@ -680,19 +747,22 @@ impl ZbrainRegistry {
 
     /// Ports the campaign_next handler body: read-only resume reporting the
     /// run state and the next pending draft spec.
-    fn run_campaign_next(
-        &self,
-        arguments: Option<&Value>,
-    ) -> Result<CallToolResult, McpError> {
+    fn run_campaign_next(&self, arguments: Option<&Value>) -> Result<CallToolResult, McpError> {
         self.run_tool(arguments, &CAMPAIGN_NEXT_INPUT, |arguments| {
             let workspace = match self.resolve_workspace(
-                arguments.get("workspace").and_then(Value::as_str).unwrap_or_default(),
+                arguments
+                    .get("workspace")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default(),
             ) {
                 Ok(workspace) => workspace,
                 Err(message) => return Ok(is_error_result(&message)),
             };
-            let run_id =
-                arguments.get("run_id").and_then(Value::as_str).unwrap_or_default().trim();
+            let run_id = arguments
+                .get("run_id")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .trim();
             let state = match CampaignStore::with_clock(self.paths.clone(), self.clock.clone())
                 .resume_campaign(&workspace, run_id)
             {
@@ -711,7 +781,10 @@ impl ZbrainRegistry {
                 ("phase", OrderedJson::string(&state.run.phase)),
                 ("pending", OrderedJson::Int(state.pending as i64)),
                 ("submitted", OrderedJson::Int(state.submitted as i64)),
-                ("superseded_by_owner", OrderedJson::Int(state.superseded_by_owner as i64)),
+                (
+                    "superseded_by_owner",
+                    OrderedJson::Int(state.superseded_by_owner as i64),
+                ),
                 ("next_index", OrderedJson::Int(state.next_index)),
                 ("next_spec", next_spec),
             ])))
@@ -727,20 +800,30 @@ impl ZbrainRegistry {
     ) -> Result<CallToolResult, McpError> {
         self.run_tool(arguments, &CAMPAIGN_SUBMIT_INPUT, |arguments| {
             let workspace = match self.resolve_workspace(
-                arguments.get("workspace").and_then(Value::as_str).unwrap_or_default(),
+                arguments
+                    .get("workspace")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default(),
             ) {
                 Ok(workspace) => workspace,
                 Err(message) => return Ok(is_error_result(&message)),
             };
-            let run_id =
-                arguments.get("run_id").and_then(Value::as_str).unwrap_or_default().trim();
-            let body = arguments.get("body").and_then(Value::as_str).unwrap_or_default();
-            let submission = match CampaignStore::with_clock(
-                self.paths.clone(),
-                self.clock.clone(),
-            )
-            .submit_campaign_draft(&workspace, run_id, campaign_index(arguments.get("index")), body)
-            {
+            let run_id = arguments
+                .get("run_id")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .trim();
+            let body = arguments
+                .get("body")
+                .and_then(Value::as_str)
+                .unwrap_or_default();
+            let submission = match CampaignStore::with_clock(self.paths.clone(), self.clock.clone())
+                .submit_campaign_draft(
+                    &workspace,
+                    run_id,
+                    campaign_index(arguments.get("index")),
+                    body,
+                ) {
                 Ok(submission) => submission,
                 Err(error) => return Ok(is_error_result(&error.to_string())),
             };
@@ -764,7 +847,9 @@ impl ZbrainRegistry {
         workspace: &str,
         id: &str,
     ) -> Option<ReadResourceResult> {
-        let claim = ClaimStore::new(self.paths.clone()).read(workspace, id).ok()?;
+        let claim = ClaimStore::new(self.paths.clone())
+            .read(workspace, id)
+            .ok()?;
         Some(ReadResourceResult::text(
             uri,
             "application/json",
@@ -935,7 +1020,10 @@ fn parse_workspace_uri(uri: &str) -> Option<(&str, &str, &str)> {
 /// text becomes a single text content block.
 fn is_error_result(message: &str) -> CallToolResult {
     CallToolResult {
-        content: vec![ContentBlock { r#type: "text", text: message.to_string() }],
+        content: vec![ContentBlock {
+            r#type: "text",
+            text: message.to_string(),
+        }],
         is_error: true,
         ..Default::default()
     }
@@ -945,7 +1033,10 @@ fn is_error_result(message: &str) -> CallToolResult {
 /// payload as structured content (Go's `jsonResult`).
 fn text_result(out: OrderedJson) -> CallToolResult {
     CallToolResult {
-        content: vec![ContentBlock { r#type: "text", text: out.pretty() }],
+        content: vec![ContentBlock {
+            r#type: "text",
+            text: out.pretty(),
+        }],
         structured_content: Some(out),
         ..Default::default()
     }
@@ -972,7 +1063,13 @@ fn boolean_property(description: &str) -> OrderedJson {
 
 fn string_array_property(description: &str) -> OrderedJson {
     OrderedJson::object(vec![
-        ( "type", OrderedJson::array(vec![OrderedJson::string("null"), OrderedJson::string("array")])),
+        (
+            "type",
+            OrderedJson::array(vec![
+                OrderedJson::string("null"),
+                OrderedJson::string("array"),
+            ]),
+        ),
         (
             "items",
             OrderedJson::object(vec![("type", OrderedJson::string("string"))]),
@@ -1010,7 +1107,10 @@ fn campaign_spec_item_schema() -> OrderedJson {
         (
             "required",
             OrderedJson::Array(
-                ["tier", "title", "basis"].iter().map(|name| OrderedJson::string(*name)).collect(),
+                ["tier", "title", "basis"]
+                    .iter()
+                    .map(|name| OrderedJson::string(*name))
+                    .collect(),
             ),
         ),
         ("additionalProperties", OrderedJson::Bool(false)),
@@ -1025,7 +1125,12 @@ fn input_schema(properties: Vec<(&'static str, OrderedJson)>, required: &[&str])
     if !required.is_empty() {
         entries.push((
             "required",
-            OrderedJson::Array(required.iter().map(|name| OrderedJson::string(*name)).collect()),
+            OrderedJson::Array(
+                required
+                    .iter()
+                    .map(|name| OrderedJson::string(*name))
+                    .collect(),
+            ),
         ));
     }
     entries.push(("additionalProperties", OrderedJson::Bool(false)));
@@ -1062,7 +1167,10 @@ fn evidence_capture_input_schema() -> OrderedJson {
 }
 
 /// `workspace_current` (Go `currentIn`, an empty struct).
-const WORKSPACE_CURRENT_INPUT: ToolInput = ToolInput { required: &[], properties: &[] };
+const WORKSPACE_CURRENT_INPUT: ToolInput = ToolInput {
+    required: &[],
+    properties: &[],
+};
 
 fn workspace_current_input_schema() -> OrderedJson {
     input_schema(vec![], &[])
@@ -1118,10 +1226,7 @@ fn memory_ask_input_schema() -> OrderedJson {
 /// `memory_status` (Go `statusIn`).
 const MEMORY_STATUS_INPUT: ToolInput = ToolInput {
     required: &[],
-    properties: &[(
-        "workspace",
-        PropertyKind::String,
-    )],
+    properties: &[("workspace", PropertyKind::String)],
 };
 
 fn memory_status_input_schema() -> OrderedJson {
@@ -1148,7 +1253,9 @@ fn memory_reindex_input_schema() -> OrderedJson {
         vec![
             (
                 "workspace",
-                string_property("workspace whose derived index to rebuild; defaults to the current workspace"),
+                string_property(
+                    "workspace whose derived index to rebuild; defaults to the current workspace",
+                ),
             ),
             (
                 "embedding",
@@ -1262,7 +1369,10 @@ fn campaign_begin_input_schema() -> OrderedJson {
     let spec_property = vec![
         (
             "type",
-            OrderedJson::array(vec![OrderedJson::string("null"), OrderedJson::string("array")]),
+            OrderedJson::array(vec![
+                OrderedJson::string("null"),
+                OrderedJson::string("array"),
+            ]),
         ),
         ("items", campaign_spec_item_schema()),
         (
@@ -1361,7 +1471,10 @@ fn validate_arguments(arguments: Option<&Value>, input: &ToolInput) -> Result<()
         if input.required.is_empty() {
             return Ok(());
         }
-        return Err(format!("validating root: {}", missing_properties(input.required)));
+        return Err(format!(
+            "validating root: {}",
+            missing_properties(input.required)
+        ));
     };
     let Value::Object(map) = arguments else {
         let raw = serde_json::to_string(arguments).unwrap_or_default();
@@ -1397,7 +1510,10 @@ fn validate_object(
     unknown.sort();
     if !unknown.is_empty() {
         let quoted: Vec<String> = unknown.iter().map(|key| format!("\"{key}\"")).collect();
-        return Err(format!("unexpected additional properties [{}]", quoted.join(" ")));
+        return Err(format!(
+            "unexpected additional properties [{}]",
+            quoted.join(" ")
+        ));
     }
     let mut missing: Vec<&str> = Vec::new();
     for required in input.required {
@@ -1491,8 +1607,10 @@ fn type_mismatch_one_of(value: &Value, want: &str) -> String {
 
 /// Bare `required: missing properties: [...]` leaf.
 fn missing_properties(properties: &[&str]) -> String {
-    let quoted: Vec<String> =
-        properties.iter().map(|property| format!("\"{property}\"")).collect();
+    let quoted: Vec<String> = properties
+        .iter()
+        .map(|property| format!("\"{property}\""))
+        .collect();
     format!("required: missing properties: [{}]", quoted.join(" "))
 }
 
@@ -1615,16 +1733,17 @@ fn summary_output_json(schema_version: i64, summary: &IndexSummary) -> OrderedJs
     }
     entries.push(("legacy", OrderedJson::Int(summary.legacy)));
     entries.push(("rebuild_state", OrderedJson::string(&summary.rebuild_state)));
-    entries.push(("manifest_digest", OrderedJson::string(&summary.manifest_digest)));
+    entries.push((
+        "manifest_digest",
+        OrderedJson::string(&summary.manifest_digest),
+    ));
     entries.push(("rebuilt_at", OrderedJson::string(&summary.rebuilt_at)));
     entries.push(("embedding", embedding_summary_json(&summary.embedding)));
     entries.push((
         "catalog",
         match &summary.catalog {
             None => OrderedJson::Null,
-            Some(catalog) => {
-                OrderedJson::Array(catalog.iter().map(catalog_claim_json).collect())
-            }
+            Some(catalog) => OrderedJson::Array(catalog.iter().map(catalog_claim_json).collect()),
         },
     ));
     OrderedJson::object(entries)
@@ -1633,9 +1752,7 @@ fn summary_output_json(schema_version: i64, summary: &IndexSummary) -> OrderedJs
 /// Go `EmbeddingSummary` json tags: `model` and `degraded_reason` omitempty,
 /// `strategy`/`indexed`/`eligible` always present.
 fn embedding_summary_json(summary: &crate::index::EmbeddingSummary) -> OrderedJson {
-    let mut entries = vec![
-        ("strategy", OrderedJson::string(&summary.strategy)),
-    ];
+    let mut entries = vec![("strategy", OrderedJson::string(&summary.strategy))];
     if !summary.model.is_empty() {
         entries.push(("model", OrderedJson::string(&summary.model)));
     }
@@ -1706,11 +1823,7 @@ fn ask_response_json(response: &TrustedQueryResponse) -> OrderedJson {
                             (
                                 "claim_ids",
                                 OrderedJson::Array(
-                                    conflict
-                                        .claim_ids
-                                        .iter()
-                                        .map(OrderedJson::string)
-                                        .collect(),
+                                    conflict.claim_ids.iter().map(OrderedJson::string).collect(),
                                 ),
                             ),
                         ])
@@ -1907,14 +2020,30 @@ fn campaign_spec_from_json(item: &Value) -> CampaignSpec {
         item.get(key)
             .and_then(Value::as_array)
             .map(|items| {
-                items.iter().filter_map(Value::as_str).map(str::to_string).collect()
+                items
+                    .iter()
+                    .filter_map(Value::as_str)
+                    .map(str::to_string)
+                    .collect()
             })
             .unwrap_or_default()
     };
     CampaignSpec {
-        tier: item.get("tier").and_then(Value::as_str).unwrap_or_default().to_string(),
-        title: item.get("title").and_then(Value::as_str).unwrap_or_default().to_string(),
-        basis: item.get("basis").and_then(Value::as_str).unwrap_or_default().to_string(),
+        tier: item
+            .get("tier")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string(),
+        title: item
+            .get("title")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string(),
+        basis: item
+            .get("basis")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string(),
         evidence_ids: strings("evidence"),
         supporting_claim_ids: strings("support"),
         conflicts_with: strings("conflicts_with"),
@@ -1939,14 +2068,22 @@ fn campaign_spec_json(spec: &CampaignSpec) -> OrderedJson {
         entries.push((
             "support",
             OrderedJson::Array(
-                spec.supporting_claim_ids.iter().map(OrderedJson::string).collect(),
+                spec.supporting_claim_ids
+                    .iter()
+                    .map(OrderedJson::string)
+                    .collect(),
             ),
         ));
     }
     if !spec.conflicts_with.is_empty() {
         entries.push((
             "conflicts_with",
-            OrderedJson::Array(spec.conflicts_with.iter().map(OrderedJson::string).collect()),
+            OrderedJson::Array(
+                spec.conflicts_with
+                    .iter()
+                    .map(OrderedJson::string)
+                    .collect(),
+            ),
         ));
     }
     OrderedJson::object(entries)
@@ -1976,7 +2113,10 @@ fn lifecycle_prepare_json(challenge: &Challenge) -> OrderedJson {
         ("claim_id", OrderedJson::string(&challenge.claim_id)),
         ("challenge_id", OrderedJson::string(&challenge.id)),
         ("action_summary", lifecycle_action_summary_json(challenge)),
-        ("action_digest", OrderedJson::string(&challenge.action_digest)),
+        (
+            "action_digest",
+            OrderedJson::string(&challenge.action_digest),
+        ),
         ("expires_at", OrderedJson::string(&challenge.expires_at)),
     ])
 }
@@ -1994,7 +2134,10 @@ fn lifecycle_apply_json(challenge: &Challenge, claim: &Claim) -> OrderedJson {
         ("claim_id", OrderedJson::string(&claim.id)),
         ("challenge_id", OrderedJson::string(&challenge.id)),
         ("action_summary", lifecycle_action_summary_json(challenge)),
-        ("action_digest", OrderedJson::string(&challenge.action_digest)),
+        (
+            "action_digest",
+            OrderedJson::string(&challenge.action_digest),
+        ),
         ("expires_at", OrderedJson::string(&challenge.expires_at)),
     ];
     if !challenge.token_expires_at.is_empty() {
@@ -2027,14 +2170,21 @@ fn lifecycle_action_summary_json(challenge: &Challenge) -> OrderedJson {
         (
             "superseded_ids",
             OrderedJson::Array(
-                challenge.superseded_ids.iter().map(OrderedJson::string).collect(),
+                challenge
+                    .superseded_ids
+                    .iter()
+                    .map(OrderedJson::string)
+                    .collect(),
             ),
         ),
         (
             "prior_verification_digest",
             OrderedJson::string(&challenge.prior_verification_digest),
         ),
-        ("revoke_reason", OrderedJson::string(&challenge.revoke_reason)),
+        (
+            "revoke_reason",
+            OrderedJson::string(&challenge.revoke_reason),
+        ),
     ])
 }
 
@@ -2075,15 +2225,24 @@ fn claim_json_with_sources(claim: &Claim, sources: OrderedJson) -> OrderedJson {
         ("CreatedBy", OrderedJson::string(&claim.created_by)),
         ("VerifiedAt", OrderedJson::string(&claim.verified_at)),
         ("VerifiedBy", OrderedJson::string(&claim.verified_by)),
-        ("VerifiedDigest", OrderedJson::string(&claim.verified_digest)),
+        (
+            "VerifiedDigest",
+            OrderedJson::string(&claim.verified_digest),
+        ),
         ("StaleAfter", OrderedJson::string(&claim.stale_after)),
         ("Sources", sources),
-        ("EvidenceIDs", OrderedJson::strings_or_null(&claim.evidence_ids)),
+        (
+            "EvidenceIDs",
+            OrderedJson::strings_or_null(&claim.evidence_ids),
+        ),
         (
             "SupportingClaimIDs",
             OrderedJson::strings_or_null(&claim.supporting_claim_ids),
         ),
-        ("Supersedes", OrderedJson::strings_or_null(&claim.supersedes)),
+        (
+            "Supersedes",
+            OrderedJson::strings_or_null(&claim.supersedes),
+        ),
         (
             "ConflictsWith",
             OrderedJson::strings_or_null(&claim.conflicts_with),
@@ -2181,10 +2340,15 @@ fn claim_transition_json(transition: &ClaimTransition) -> OrderedJson {
 
 /// All `ClaimTransitionAuthorization` fields are omitempty; a non-nil
 /// pointer still renders as an object (possibly `{}`).
-fn claim_transition_authorization_json(authorization: &ClaimTransitionAuthorization) -> OrderedJson {
+fn claim_transition_authorization_json(
+    authorization: &ClaimTransitionAuthorization,
+) -> OrderedJson {
     let mut entries = Vec::new();
     if !authorization.challenge_id.is_empty() {
-        entries.push(("challenge_id", OrderedJson::string(&authorization.challenge_id)));
+        entries.push((
+            "challenge_id",
+            OrderedJson::string(&authorization.challenge_id),
+        ));
     }
     if !authorization.method.is_empty() {
         entries.push(("method", OrderedJson::string(&authorization.method)));
@@ -2198,9 +2362,7 @@ fn claim_transition_authorization_json(authorization: &ClaimTransitionAuthorizat
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::claims::{
-        new_claim_id, CLAIM_BASIS_EVIDENCE, OKF_CLAIM_TYPE,
-    };
+    use crate::claims::{new_claim_id, CLAIM_BASIS_EVIDENCE, OKF_CLAIM_TYPE};
     use crate::clock::{rfc3339, FixedClock};
     use crate::config::ensure_config;
     use crate::mcp::protocol::SERVER_NAME;
@@ -2226,10 +2388,8 @@ mod tests {
     }
 
     fn fixture(name: &str) -> Fixture {
-        let dir = std::env::temp_dir().join(format!(
-            "zbrain-mcp-gateway-{}-{name}",
-            std::process::id()
-        ));
+        let dir =
+            std::env::temp_dir().join(format!("zbrain-mcp-gateway-{}-{name}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         let paths = Paths::resolve(Options {
@@ -2245,7 +2405,13 @@ mod tests {
         let source = dir.join("source.txt");
         std::fs::write(&source, b"raw snapshot bytes").unwrap();
         let evidence = EvidenceStore::new(paths.clone())
-            .add_file("research", &source, "file://source.txt", "text/plain", &clock)
+            .add_file(
+                "research",
+                &source,
+                "file://source.txt",
+                "text/plain",
+                &clock,
+            )
             .unwrap();
 
         let claim_id = new_claim_id().unwrap();
@@ -2267,17 +2433,29 @@ mod tests {
             )
             .unwrap();
         assert_eq!(draft.status, "draft");
-        Fixture { _dir: dir, paths, clock, claim_id, evidence_id: evidence.id }
+        Fixture {
+            _dir: dir,
+            paths,
+            clock,
+            claim_id,
+            evidence_id: evidence.id,
+        }
     }
 
     fn registry(fixture: &Fixture) -> ZbrainRegistry {
-        ZbrainRegistry::new(fixture.paths.clone(), Box::new(FixedClock::new(fixture.clock.now())))
+        ZbrainRegistry::new(
+            fixture.paths.clone(),
+            Box::new(FixedClock::new(fixture.clock.now())),
+        )
     }
 
     /// Drives requests through the full server over the memory transport,
     /// returning the raw response frames (for byte-shape assertions).
     fn run_session_raw(registry: ZbrainRegistry, requests: &str) -> Vec<String> {
-        let options = McpOptions { version: "test".to_string(), ..Default::default() };
+        let options = McpOptions {
+            version: "test".to_string(),
+            ..Default::default()
+        };
         let mut server = Server::new(registry, options);
         let mut transport = MemoryTransport::with_requests(requests.as_bytes().to_vec());
         server.run(&mut transport).unwrap();
@@ -2330,10 +2508,7 @@ mod tests {
                 .find(&needle)
                 .unwrap_or_else(|| panic!("key {key} missing from {text}"))
                 + cursor;
-            assert!(
-                position >= cursor,
-                "key {key} out of order in {text}"
-            );
+            assert!(position >= cursor, "key {key} out of order in {text}");
             cursor = position + needle.len();
         }
     }
@@ -2352,31 +2527,60 @@ mod tests {
         assert_eq!(templates[1]["name"], "Evidence");
         // Wire key order mirrors the go-sdk ResourceTemplate struct.
         let rendered = templates[0].to_string();
-        assert_key_order(&rendered, &["description", "mimeType", "name", "uriTemplate"]);
+        assert_key_order(
+            &rendered,
+            &["description", "mimeType", "name", "uriTemplate"],
+        );
     }
 
     #[test]
     fn claim_resource_read_returns_canonical_claim() {
         let fix = fixture("claim-read");
         let reg = registry(&fix);
-        let claim = ClaimStore::new(fix.paths.clone()).read("research", &fix.claim_id).unwrap();
+        let claim = ClaimStore::new(fix.paths.clone())
+            .read("research", &fix.claim_id)
+            .unwrap();
         let uri = format!("zbrain://workspace/research/claim/{}", fix.claim_id);
         let read = reg.read_resource(&uri).expect("claim resource");
         assert_eq!(read.ttl_ms, 0);
         assert_eq!(read.cache_scope, "public");
         assert_eq!(read.contents.len(), 1);
         assert_eq!(read.contents[0].uri, uri);
-        assert_eq!(read.contents[0].mime_type.as_deref(), Some("application/json"));
+        assert_eq!(
+            read.contents[0].mime_type.as_deref(),
+            Some("application/json")
+        );
         let text = read.contents[0].text.clone().expect("text");
 
         // Byte-exact Go field order for the untagged Claim struct.
         assert_key_order(
             &text,
             &[
-                "Schema", "Type", "ID", "Tier", "Path", "Status", "Title", "Description",
-                "Resource", "Basis", "CreatedAt", "CreatedBy", "VerifiedAt", "VerifiedBy",
-                "VerifiedDigest", "StaleAfter", "Sources", "EvidenceIDs", "SupportingClaimIDs",
-                "Supersedes", "ConflictsWith", "Contradicts", "Tags", "Transitions", "Body",
+                "Schema",
+                "Type",
+                "ID",
+                "Tier",
+                "Path",
+                "Status",
+                "Title",
+                "Description",
+                "Resource",
+                "Basis",
+                "CreatedAt",
+                "CreatedBy",
+                "VerifiedAt",
+                "VerifiedBy",
+                "VerifiedDigest",
+                "StaleAfter",
+                "Sources",
+                "EvidenceIDs",
+                "SupportingClaimIDs",
+                "Supersedes",
+                "ConflictsWith",
+                "Contradicts",
+                "Tags",
+                "Transitions",
+                "Body",
             ],
         );
         let parsed: serde_json::Map<String, Value> =
@@ -2403,7 +2607,10 @@ mod tests {
             "Tags",
             "Transitions",
         ] {
-            assert!(parsed[nil_field].is_null(), "{nil_field} must marshal as Go nil");
+            assert!(
+                parsed[nil_field].is_null(),
+                "{nil_field} must marshal as Go nil"
+            );
         }
         assert!(text.contains("Resource claim body"));
         assert!(text.contains(&fix.claim_id));
@@ -2415,7 +2622,9 @@ mod tests {
         // no top-level raw_content, byte-exact envelope field order.
         let fix = fixture("fenced");
         let uri = format!("zbrain://workspace/research/evidence/{}", fix.evidence_id);
-        let read = registry(&fix).read_resource(&uri).expect("evidence resource");
+        let read = registry(&fix)
+            .read_resource(&uri)
+            .expect("evidence resource");
         let text = read.contents[0].text.clone().expect("text");
         assert_key_order(
             &text,
@@ -2424,7 +2633,13 @@ mod tests {
         assert_key_order(
             &text,
             &[
-                "id", "origin", "captured_at", "media_type", "byte_length", "sha256", "deduped",
+                "id",
+                "origin",
+                "captured_at",
+                "media_type",
+                "byte_length",
+                "sha256",
+                "deduped",
             ],
         );
         let parsed: Value = serde_json::from_str(&text).unwrap();
@@ -2435,7 +2650,10 @@ mod tests {
         assert_eq!(parsed["evidence"]["media_type"], "text/plain");
         assert_eq!(parsed["evidence"]["byte_length"], 18);
         assert_eq!(parsed["evidence"]["deduped"], false);
-        assert!(parsed.get("raw_content").is_none(), "top-level raw_content present");
+        assert!(
+            parsed.get("raw_content").is_none(),
+            "top-level raw_content present"
+        );
         assert_eq!(
             parsed["untrusted_evidence"]["raw_content"],
             "raw snapshot bytes"
@@ -2474,16 +2692,16 @@ mod tests {
                 "{}\n{}\n{}\n",
                 initialize_frame(1),
                 resources_read_frame(2, &claim_uri),
-                resources_read_frame(3, &format!(
-                    "zbrain://workspace/research/claim/{}",
-                    "f".repeat(32)
-                )),
+                resources_read_frame(
+                    3,
+                    &format!("zbrain://workspace/research/claim/{}", "f".repeat(32))
+                ),
             ),
         );
-        let expected_result_prefix = "{\"ttlMs\":0,\"cacheScope\":\"public\",\"contents\":[{\"uri\":\""
-            .to_string()
-            + &claim_uri
-            + "\",\"mimeType\":\"application/json\",\"text\":\"{";
+        let expected_result_prefix =
+            "{\"ttlMs\":0,\"cacheScope\":\"public\",\"contents\":[{\"uri\":\"".to_string()
+                + &claim_uri
+                + "\",\"mimeType\":\"application/json\",\"text\":\"{";
         let expected_frame_prefix =
             format!("{{\"jsonrpc\":\"2.0\",\"id\":2,\"result\":{expected_result_prefix}");
         assert!(
@@ -2528,7 +2746,9 @@ mod tests {
         let evidence_uri = format!("zbrain://workspace/research/evidence/{}", fix.evidence_id);
         reg.read_resource(&claim_uri).unwrap();
         reg.read_resource(&evidence_uri).unwrap();
-        let claim = ClaimStore::new(fix.paths.clone()).read("research", &fix.claim_id).unwrap();
+        let claim = ClaimStore::new(fix.paths.clone())
+            .read("research", &fix.claim_id)
+            .unwrap();
         assert_eq!(claim.status, "draft");
         let evidence = EvidenceStore::new(fix.paths.clone())
             .read("research", &fix.evidence_id)
@@ -2549,7 +2769,10 @@ mod tests {
         let tools = registry(&fix).tools();
         assert_eq!(tools.len(), 10);
         assert_eq!(
-            tools.iter().map(|tool| tool.name.as_str()).collect::<Vec<_>>(),
+            tools
+                .iter()
+                .map(|tool| tool.name.as_str())
+                .collect::<Vec<_>>(),
             vec![
                 "campaign_begin",
                 "campaign_next",
@@ -2590,13 +2813,24 @@ mod tests {
             &format!(
                 "{}\n{}\n{}\n",
                 initialize_frame(1),
-                tools_call_frame(2, &format!(r#"{{"file":"{source_json}","origin":"file://capture.txt"}}"#)),
-                tools_call_frame(3, &format!(r#"{{"file":"{source_json}","origin":"file://capture.txt"}}"#)),
+                tools_call_frame(
+                    2,
+                    &format!(r#"{{"file":"{source_json}","origin":"file://capture.txt"}}"#)
+                ),
+                tools_call_frame(
+                    3,
+                    &format!(r#"{{"file":"{source_json}","origin":"file://capture.txt"}}"#)
+                ),
             ),
         );
         let first = &responses[1];
-        assert!(first["result"].get("isError").is_none(), "first capture errored");
-        let text = first["result"]["content"][0]["text"].as_str().expect("text");
+        assert!(
+            first["result"].get("isError").is_none(),
+            "first capture errored"
+        );
+        let text = first["result"]["content"][0]["text"]
+            .as_str()
+            .expect("text");
         assert!(text.contains("\"id\": \"evd_"), "{text}");
         // Wire field order mirrors the Go output struct.
         assert_key_order(
@@ -2640,19 +2874,23 @@ mod tests {
         let first = reg
             .call_tool(
                 "evidence_capture",
-                Some(&serde_json::from_str::<Value>(&format!(
-                    r#"{{"file":"{source_json}","origin":"file://one.txt"}}"#
-                ))
-                .unwrap()),
+                Some(
+                    &serde_json::from_str::<Value>(&format!(
+                        r#"{{"file":"{source_json}","origin":"file://one.txt"}}"#
+                    ))
+                    .unwrap(),
+                ),
             )
             .unwrap();
         let second = reg
             .call_tool(
                 "evidence_capture",
-                Some(&serde_json::from_str::<Value>(&format!(
-                    r#"{{"file":"{source_json}","origin":"file://two.txt"}}"#
-                ))
-                .unwrap()),
+                Some(
+                    &serde_json::from_str::<Value>(&format!(
+                        r#"{{"file":"{source_json}","origin":"file://two.txt"}}"#
+                    ))
+                    .unwrap(),
+                ),
             )
             .unwrap();
         assert!(!first.is_error && !second.is_error);
@@ -2674,7 +2912,9 @@ mod tests {
         let args = |json_text: &str| serde_json::from_str::<Value>(json_text).unwrap();
 
         // Schema-invalid: missing required fields fail closed as isError.
-        let result = reg.call_tool("evidence_capture", Some(&args("{}"))).unwrap();
+        let result = reg
+            .call_tool("evidence_capture", Some(&args("{}")))
+            .unwrap();
         assert!(result.is_error);
         assert_eq!(
             result.content[0].text,
@@ -2717,7 +2957,10 @@ mod tests {
 
         // Empty strings pass schema validation and hit the handler guards.
         let result = reg
-            .call_tool("evidence_capture", Some(&args(r#"{"file":"","origin":"o"}"#)))
+            .call_tool(
+                "evidence_capture",
+                Some(&args(r#"{"file":"","origin":"o"}"#)),
+            )
             .unwrap();
         assert!(result.is_error);
         assert_eq!(result.content[0].text, "file is required");
@@ -2746,7 +2989,9 @@ mod tests {
         let result = reg
             .call_tool(
                 "evidence_capture",
-                Some(&args(r#"{"file":"x","origin":"o","workspace":"nonexistent"}"#)),
+                Some(&args(
+                    r#"{"file":"x","origin":"o","workspace":"nonexistent"}"#,
+                )),
             )
             .unwrap();
         assert!(result.is_error);
@@ -2759,17 +3004,20 @@ mod tests {
         let reg = registry(&fix);
         let oversized = "c".repeat((1 << 20) + 10);
         let arguments = serde_json::json!({ "file": "f", "origin": oversized });
-        let error = reg.call_tool("evidence_capture", Some(&arguments)).unwrap_err();
+        let error = reg
+            .call_tool("evidence_capture", Some(&arguments))
+            .unwrap_err();
         assert_eq!(error.to_wire("tools/call").code, -32602);
-        assert_eq!(error.to_wire("tools/call").message, "input exceeds 1MB limit");
+        assert_eq!(
+            error.to_wire("tools/call").message,
+            "input exceeds 1MB limit"
+        );
     }
 
     #[test]
     fn unknown_tool_maps_to_32602() {
         let fix = fixture("unknown-tool");
-        let error = registry(&fix)
-            .call_tool("no_such_tool", None)
-            .unwrap_err();
+        let error = registry(&fix).call_tool("no_such_tool", None).unwrap_err();
         assert_eq!(error.to_wire("tools/call").code, -32602);
     }
 
@@ -2785,7 +3033,10 @@ mod tests {
         );
         assert_eq!(parse_workspace_uri("claims://current"), None);
         assert_eq!(parse_workspace_uri("zbrain://workspace"), None);
-        assert_eq!(parse_workspace_uri("zbrain://workspace/research/claim"), None);
+        assert_eq!(
+            parse_workspace_uri("zbrain://workspace/research/claim"),
+            None
+        );
         assert_eq!(
             parse_workspace_uri("zbrain://workspace/research/claim/a/b"),
             None
@@ -2909,7 +3160,10 @@ mod tests {
         let mut html_claim = claim.clone();
         html_claim.title = "<a> & \"b\"".to_string();
         let text = claim_resource_json(&html_claim).compact();
-        assert!(text.contains(r#""Title":"\u003ca\u003e \u0026 \"b\"""#), "{text}");
+        assert!(
+            text.contains(r#""Title":"\u003ca\u003e \u0026 \"b\"""#),
+            "{text}"
+        );
     }
 
     #[test]
@@ -3063,12 +3317,18 @@ mod tests {
                 initialize_frame(1),
                 tools_call_named_frame(2, "memory_ask", r#"{"query":"Resource Claim"}"#),
                 tools_call_named_frame(3, "memory_ask", r#"{"query":"zzz-unmatchable"}"#),
-                tools_call_named_frame(4, "memory_ask", r#"{"query":"Resource Claim","workspace":"nonexistent"}"#),
+                tools_call_named_frame(
+                    4,
+                    "memory_ask",
+                    r#"{"query":"Resource Claim","workspace":"nonexistent"}"#
+                ),
             ),
         );
         let ready = &responses[1];
         let ready_value: Value = serde_json::from_str(ready).unwrap();
-        let ready_text = ready_value["result"]["content"][0]["text"].as_str().unwrap();
+        let ready_text = ready_value["result"]["content"][0]["text"]
+            .as_str()
+            .unwrap();
         assert_key_order(
             ready_text,
             &[
@@ -3196,14 +3456,20 @@ mod tests {
             "validating \"arguments\": validating root: validating /properties/query: type: 3.5 has type \"number\", want \"string\""
         );
         let result = reg
-            .call_tool("memory_ask", Some(&args(r#"{"query":"x","embedding":"notabool"}"#)))
+            .call_tool(
+                "memory_ask",
+                Some(&args(r#"{"query":"x","embedding":"notabool"}"#)),
+            )
             .unwrap();
         assert_eq!(
             result.content[0].text,
             "validating \"arguments\": validating root: validating /properties/embedding: type: notabool has type \"string\", want \"boolean\""
         );
         let result = reg
-            .call_tool("memory_ask", Some(&args(r#"{"query":"x","include":"notanarray"}"#)))
+            .call_tool(
+                "memory_ask",
+                Some(&args(r#"{"query":"x","include":"notanarray"}"#)),
+            )
             .unwrap();
         assert_eq!(
             result.content[0].text,
@@ -3541,12 +3807,18 @@ mod tests {
         let args = |json_text: &str| serde_json::from_str::<Value>(json_text).unwrap();
 
         let lexical = reg
-            .call_tool("memory_ask", Some(&args(r#"{"query":"embedding-only-term"}"#)))
+            .call_tool(
+                "memory_ask",
+                Some(&args(r#"{"query":"embedding-only-term"}"#)),
+            )
             .unwrap();
         let parsed: Value = serde_json::from_str(&lexical.content[0].text).unwrap();
         assert_eq!(parsed["status"], "gap");
         assert!(
-            !fix.paths.indexes_dir.join("research.embeddings.sqlite").exists(),
+            !fix.paths
+                .indexes_dir
+                .join("research.embeddings.sqlite")
+                .exists(),
             "embedding sidecar exists before opt-in"
         );
 
@@ -3585,7 +3857,10 @@ mod tests {
         );
 
         let lexical_again = reg
-            .call_tool("memory_ask", Some(&args(r#"{"query":"embedding-only-term"}"#)))
+            .call_tool(
+                "memory_ask",
+                Some(&args(r#"{"query":"embedding-only-term"}"#)),
+            )
             .unwrap();
         let again_value: Value = serde_json::from_str(&lexical_again.content[0].text).unwrap();
         assert_eq!(again_value["status"], "gap");
@@ -3638,10 +3913,15 @@ mod tests {
         let result = reg
             .call_tool(
                 "claim_draft",
-                Some(&args(r#"{"tier":"projects","title":"t","basis":"weird","body":"b"}"#)),
+                Some(&args(
+                    r#"{"tier":"projects","title":"t","basis":"weird","body":"b"}"#,
+                )),
             )
             .unwrap();
-        assert_eq!(result.content[0].text, "claim basis \"weird\" is not supported");
+        assert_eq!(
+            result.content[0].text,
+            "claim basis \"weird\" is not supported"
+        );
         let result = reg.call_tool("claim_draft", Some(&args("{}"))).unwrap();
         assert_eq!(
             result.content[0].text,
@@ -3662,7 +3942,9 @@ mod tests {
         let result = reg
             .call_tool(
                 "claim_draft",
-                Some(&args(r#"{"tier":3,"title":"t","basis":"owner","body":"b"}"#)),
+                Some(&args(
+                    r#"{"tier":3,"title":"t","basis":"owner","body":"b"}"#,
+                )),
             )
             .unwrap();
         assert_eq!(
@@ -3701,7 +3983,10 @@ mod tests {
         let arguments = serde_json::json!({ "query": oversized });
         let error = reg.call_tool("memory_ask", Some(&arguments)).unwrap_err();
         assert_eq!(error.to_wire("tools/call").code, -32602);
-        assert_eq!(error.to_wire("tools/call").message, "input exceeds 1MB limit");
+        assert_eq!(
+            error.to_wire("tools/call").message,
+            "input exceeds 1MB limit"
+        );
         let arguments = serde_json::json!({
             "tier": "projects",
             "title": "huge",
@@ -3775,11 +4060,7 @@ mod tests {
     }
 
     /// Runs apply through a connected session (client `zbrain-test-client`).
-    fn session_apply(
-        fixture: &Fixture,
-        id: i64,
-        arguments: &str,
-    ) -> Value {
+    fn session_apply(fixture: &Fixture, id: i64, arguments: &str) -> Value {
         run_session(
             registry(fixture),
             &format!(
@@ -3789,7 +4070,7 @@ mod tests {
                 tools_call_named_frame(id, "claim_lifecycle", arguments),
             ),
         )[1]
-            .clone()
+        .clone()
     }
 
     #[test]
@@ -3822,7 +4103,12 @@ mod tests {
         );
         let descriptions: Vec<(&str, &str)> = tools
             .iter()
-            .map(|tool| (tool.name.as_str(), tool.description.as_deref().unwrap_or_default()))
+            .map(|tool| {
+                (
+                    tool.name.as_str(),
+                    tool.description.as_deref().unwrap_or_default(),
+                )
+            })
             .collect();
         assert!(
             descriptions.contains(&(
@@ -3860,38 +4146,34 @@ mod tests {
         let reg = registry(&fix);
         let args = |json_text: &str| serde_json::from_str::<Value>(json_text).unwrap();
         // Structural parameter faults are -32602 protocol errors, not isError.
-        let wire = |result: Result<CallToolResult, McpError>| {
-            result.unwrap_err().to_wire("tools/call")
-        };
-        let error = wire(reg.call_tool(
-            "claim_lifecycle",
-            Some(&args(r#"{"operation":"bogus"}"#)),
-        ));
+        let wire =
+            |result: Result<CallToolResult, McpError>| result.unwrap_err().to_wire("tools/call");
+        let error = wire(reg.call_tool("claim_lifecycle", Some(&args(r#"{"operation":"bogus"}"#))));
         assert_eq!(error.code, -32602);
         assert_eq!(error.message, "operation must be prepare or apply");
-        let error = wire(reg.call_tool(
-            "claim_lifecycle",
-            Some(&args(r#"{"operation":"prepare"}"#)),
-        ));
+        let error =
+            wire(reg.call_tool("claim_lifecycle", Some(&args(r#"{"operation":"prepare"}"#))));
         assert_eq!(error.message, "action is required for prepare");
         let error = wire(reg.call_tool(
             "claim_lifecycle",
             Some(&args(r#"{"operation":"prepare","action":"bogus","claim_id":"clm_00000000000000000000000000000000"}"#)),
         ));
-        assert_eq!(error.message, "action must be approve, supersede, or revoke");
+        assert_eq!(
+            error.message,
+            "action must be approve, supersede, or revoke"
+        );
         let error = wire(reg.call_tool(
             "claim_lifecycle",
             Some(&args(r#"{"operation":"prepare","action":"approve"}"#)),
         ));
         assert_eq!(error.message, "claim_id is required for prepare");
-        let error = wire(reg.call_tool(
-            "claim_lifecycle",
-            Some(&args(r#"{"operation":"apply"}"#)),
-        ));
+        let error = wire(reg.call_tool("claim_lifecycle", Some(&args(r#"{"operation":"apply"}"#))));
         assert_eq!(error.message, "challenge_id is required for apply");
         let error = wire(reg.call_tool(
             "claim_lifecycle",
-            Some(&args(r#"{"operation":"apply","challenge_id":"chg_00000000000000000000000000000000"}"#)),
+            Some(&args(
+                r#"{"operation":"apply","challenge_id":"chg_00000000000000000000000000000000"}"#,
+            )),
         ));
         assert_eq!(error.message, "token is required for apply");
         let error = wire(reg.call_tool(
@@ -3917,10 +4199,7 @@ mod tests {
             "validating \"arguments\": validating root: validating /properties/operation: type: 3 has type \"integer\", want \"string\""
         );
         let result = reg
-            .call_tool(
-                "claim_lifecycle",
-                Some(&args(r#"{"operation":null}"#)),
-            )
+            .call_tool("claim_lifecycle", Some(&args(r#"{"operation":null}"#)))
             .unwrap();
         assert_eq!(
             result.content[0].text,
@@ -4018,11 +4297,15 @@ mod tests {
                 tools_call_named_frame(
                     2,
                     "claim_lifecycle",
-                    &format!(r#"{{"operation":"prepare","action":"approve","workspace":"research","claim_id":"{claim_id_json}"}}"#),
+                    &format!(
+                        r#"{{"operation":"prepare","action":"approve","workspace":"research","claim_id":"{claim_id_json}"}}"#
+                    ),
                 ),
             ),
         );
-        let text = responses[1]["result"]["content"][0]["text"].as_str().expect("text");
+        let text = responses[1]["result"]["content"][0]["text"]
+            .as_str()
+            .expect("text");
         let parsed: Value = serde_json::from_str(text).unwrap();
         assert_key_order(
             text,
@@ -4047,16 +4330,27 @@ mod tests {
         assert_eq!(parsed["action"], "approve");
         assert_eq!(parsed["workspace"], "research");
         assert_eq!(parsed["claim_id"], claim_id_json);
-        assert!(parsed.get("token").is_none(), "prepare exposed plaintext token");
+        assert!(
+            parsed.get("token").is_none(),
+            "prepare exposed plaintext token"
+        );
         assert!(parsed.get("token_expires_at").is_none());
-        assert!(!parsed["action_digest"].as_str().unwrap_or_default().is_empty());
+        assert!(!parsed["action_digest"]
+            .as_str()
+            .unwrap_or_default()
+            .is_empty());
         assert!(!parsed["expires_at"].as_str().unwrap_or_default().is_empty());
-        assert_eq!(parsed["action_summary"]["superseded_ids"], serde_json::json!([]));
+        assert_eq!(
+            parsed["action_summary"]["superseded_ids"],
+            serde_json::json!([])
+        );
         let challenge_id = parsed["challenge_id"].as_str().unwrap().to_string();
         assert!(challenge_id.starts_with("chg_"));
         // No token material is persisted before the owner grant.
         let persisted = std::fs::read(
-            fix.paths.workspaces_dir.join(format!("research/.zbrain/challenges/{challenge_id}.json")),
+            fix.paths
+                .workspaces_dir
+                .join(format!("research/.zbrain/challenges/{challenge_id}.json")),
         )
         .unwrap();
         let persisted_json: Value = serde_json::from_slice(&persisted).unwrap();
@@ -4067,7 +4361,9 @@ mod tests {
         let blocked = session_apply(
             &fix,
             3,
-            &format!(r#"{{"operation":"apply","action":"approve","workspace":"research","claim_id":"{claim_id_json}","challenge_id":"{challenge_id}","token":"not-issued"}}"#),
+            &format!(
+                r#"{{"operation":"apply","action":"approve","workspace":"research","claim_id":"{claim_id_json}","challenge_id":"{challenge_id}","token":"not-issued"}}"#
+            ),
         );
         assert_eq!(blocked["result"]["isError"], true);
         assert!(
@@ -4077,8 +4373,9 @@ mod tests {
                 .contains("has not been owner-granted"),
             "{blocked}"
         );
-        let unchanged =
-            ClaimStore::new(fix.paths.clone()).read("research", &claim_id_json).unwrap();
+        let unchanged = ClaimStore::new(fix.paths.clone())
+            .read("research", &claim_id_json)
+            .unwrap();
         assert_eq!(unchanged.status, "draft");
         assert!(unchanged.transitions.is_empty());
 
@@ -4086,13 +4383,17 @@ mod tests {
         let applied = session_apply(
             &fix,
             4,
-            &format!(r#"{{"operation":"apply","action":"approve","workspace":"research","claim_id":"{claim_id_json}","challenge_id":"{challenge_id}","token":"{token}"}}"#),
+            &format!(
+                r#"{{"operation":"apply","action":"approve","workspace":"research","claim_id":"{claim_id_json}","challenge_id":"{challenge_id}","token":"{token}"}}"#
+            ),
         );
         assert!(
             applied["result"].get("isError").is_none(),
             "apply failed: {applied}"
         );
-        let applied_text = applied["result"]["content"][0]["text"].as_str().expect("text");
+        let applied_text = applied["result"]["content"][0]["text"]
+            .as_str()
+            .expect("text");
         let applied_out: Value = serde_json::from_str(applied_text).unwrap();
         assert_key_order(
             applied_text,
@@ -4115,14 +4416,20 @@ mod tests {
         assert_eq!(applied_out["status"], "approved");
         assert_eq!(applied_out["verified_by"], "owner:mcp");
         assert_eq!(applied_out["operation"], "apply");
-        assert!(!applied_out["token_expires_at"].as_str().unwrap_or_default().is_empty());
-        let claim =
-            ClaimStore::new(fix.paths.clone()).read("research", &claim_id_json).unwrap();
+        assert!(!applied_out["token_expires_at"]
+            .as_str()
+            .unwrap_or_default()
+            .is_empty());
+        let claim = ClaimStore::new(fix.paths.clone())
+            .read("research", &claim_id_json)
+            .unwrap();
         assert_eq!(claim.status, "approved");
         assert_eq!(claim.verified_by, "owner:mcp");
         assert_eq!(claim.transitions.len(), 1);
-        let authorization =
-            claim.transitions[0].authorization.as_ref().expect("authorization");
+        let authorization = claim.transitions[0]
+            .authorization
+            .as_ref()
+            .expect("authorization");
         assert_eq!(authorization.challenge_id, challenge_id);
         assert_eq!(authorization.method, "mcp.claim_lifecycle");
         assert_eq!(authorization.mcp_client, "zbrain-test-client/0.0.0");
@@ -4134,7 +4441,9 @@ mod tests {
         let replay = session_apply(
             &fix,
             5,
-            &format!(r#"{{"operation":"apply","challenge_id":"{challenge_id}","token":"{token}"}}"#),
+            &format!(
+                r#"{{"operation":"apply","challenge_id":"{challenge_id}","token":"{token}"}}"#
+            ),
         );
         assert_eq!(replay["result"]["isError"], true);
         assert!(
@@ -4188,12 +4497,10 @@ mod tests {
             prepared_out["action_summary"]["superseded_ids"],
             serde_json::json!([approved_id])
         );
-        assert!(
-            !prepared_out["action_summary"]["prior_verification_digest"]
-                .as_str()
-                .unwrap_or_default()
-                .is_empty()
-        );
+        assert!(!prepared_out["action_summary"]["prior_verification_digest"]
+            .as_str()
+            .unwrap_or_default()
+            .is_empty());
         let token = grant_lifecycle_token(&fix, &challenge_id);
         // An explicit empty superseded list contradicts the bound action.
         let empty = reg
@@ -4205,7 +4512,11 @@ mod tests {
             )
             .unwrap();
         assert!(empty.is_error);
-        assert!(empty.content[0].text.contains("superseded IDs"), "{}", empty.content[0].text);
+        assert!(
+            empty.content[0].text.contains("superseded IDs"),
+            "{}",
+            empty.content[0].text
+        );
         let applied = reg
             .call_tool(
                 "claim_lifecycle",
@@ -4216,8 +4527,14 @@ mod tests {
             .unwrap();
         assert!(!applied.is_error, "{}", applied.content[0].text);
         let store = ClaimStore::new(fix.paths.clone());
-        assert_eq!(store.read("research", &replacement.id).unwrap().status, "approved");
-        assert_eq!(store.read("research", &approved_id).unwrap().status, "superseded");
+        assert_eq!(
+            store.read("research", &replacement.id).unwrap().status,
+            "approved"
+        );
+        assert_eq!(
+            store.read("research", &approved_id).unwrap().status,
+            "superseded"
+        );
 
         // Revoke: the remaining approved claim leaves with reason + provenance.
         let victim = lifecycle_draft(&fix, "revoke victim");
@@ -4274,11 +4591,11 @@ mod tests {
                 ))),
             )
             .unwrap();
-        let challenge_id =
-            serde_json::from_str::<Value>(&prepared.content[0].text).unwrap()["challenge_id"]
-                .as_str()
-                .unwrap()
-                .to_string();
+        let challenge_id = serde_json::from_str::<Value>(&prepared.content[0].text).unwrap()
+            ["challenge_id"]
+            .as_str()
+            .unwrap()
+            .to_string();
         let token = grant_lifecycle_token(&fix, &challenge_id);
         let wrong = reg
             .call_tool(
@@ -4289,7 +4606,11 @@ mod tests {
             )
             .unwrap();
         assert!(wrong.is_error);
-        assert!(wrong.content[0].text.contains("token mismatch"), "{}", wrong.content[0].text);
+        assert!(
+            wrong.content[0].text.contains("token mismatch"),
+            "{}",
+            wrong.content[0].text
+        );
         let correct = reg
             .call_tool(
                 "claim_lifecycle",
@@ -4313,15 +4634,17 @@ mod tests {
                 ))),
             )
             .unwrap();
-        let challenge_id =
-            serde_json::from_str::<Value>(&prepared.content[0].text).unwrap()["challenge_id"]
-                .as_str()
-                .unwrap()
-                .to_string();
+        let challenge_id = serde_json::from_str::<Value>(&prepared.content[0].text).unwrap()
+            ["challenge_id"]
+            .as_str()
+            .unwrap()
+            .to_string();
         let token = grant_lifecycle_token(&fix, &challenge_id);
         let mut stale = draft.clone();
         stale.body = "changed after prepare".to_string();
-        ClaimStore::new(fix.paths.clone()).write_draft("research", stale).unwrap();
+        ClaimStore::new(fix.paths.clone())
+            .write_draft("research", stale)
+            .unwrap();
         let result = reg
             .call_tool(
                 "claim_lifecycle",
@@ -4331,9 +4654,16 @@ mod tests {
             )
             .unwrap();
         assert!(result.is_error);
-        assert!(result.content[0].text.contains("stale"), "{}", result.content[0].text);
+        assert!(
+            result.content[0].text.contains("stale"),
+            "{}",
+            result.content[0].text
+        );
         assert_eq!(
-            ClaimStore::new(fix.paths.clone()).read("research", &draft.id).unwrap().status,
+            ClaimStore::new(fix.paths.clone())
+                .read("research", &draft.id)
+                .unwrap()
+                .status,
             "draft"
         );
 
@@ -4351,11 +4681,11 @@ mod tests {
                 ))),
             )
             .unwrap();
-        let challenge_id =
-            serde_json::from_str::<Value>(&prepared.content[0].text).unwrap()["challenge_id"]
-                .as_str()
-                .unwrap()
-                .to_string();
+        let challenge_id = serde_json::from_str::<Value>(&prepared.content[0].text).unwrap()
+            ["challenge_id"]
+            .as_str()
+            .unwrap()
+            .to_string();
         let result = reg
             .call_tool(
                 "claim_lifecycle",
@@ -4365,7 +4695,11 @@ mod tests {
             )
             .unwrap();
         assert!(result.is_error);
-        assert!(result.content[0].text.contains("does not own"), "{}", result.content[0].text);
+        assert!(
+            result.content[0].text.contains("does not own"),
+            "{}",
+            result.content[0].text
+        );
 
         // An unapplied token expires with the grant clock.
         let fix = memory_fixture("lifecycle-expiry");
@@ -4380,11 +4714,11 @@ mod tests {
                 ))),
             )
             .unwrap();
-        let challenge_id =
-            serde_json::from_str::<Value>(&prepared.content[0].text).unwrap()["challenge_id"]
-                .as_str()
-                .unwrap()
-                .to_string();
+        let challenge_id = serde_json::from_str::<Value>(&prepared.content[0].text).unwrap()
+            ["challenge_id"]
+            .as_str()
+            .unwrap()
+            .to_string();
         let token = grant_lifecycle_token(&fix, &challenge_id);
         let later = ZbrainRegistry {
             paths: fix.paths.clone(),
@@ -4402,7 +4736,11 @@ mod tests {
             )
             .unwrap();
         assert!(result.is_error);
-        assert!(result.content[0].text.contains("token expired"), "{}", result.content[0].text);
+        assert!(
+            result.content[0].text.contains("token expired"),
+            "{}",
+            result.content[0].text
+        );
     }
 
     #[test]
@@ -4421,11 +4759,11 @@ mod tests {
                 ))),
             )
             .unwrap();
-        let challenge_id =
-            serde_json::from_str::<Value>(&prepared.content[0].text).unwrap()["challenge_id"]
-                .as_str()
-                .unwrap()
-                .to_string();
+        let challenge_id = serde_json::from_str::<Value>(&prepared.content[0].text).unwrap()
+            ["challenge_id"]
+            .as_str()
+            .unwrap()
+            .to_string();
         let token = grant_lifecycle_token(&fix, &challenge_id);
         let shared = std::sync::Arc::new(reg);
         let arguments = args(&format!(
@@ -4435,9 +4773,7 @@ mod tests {
         std::thread::scope(|scope| {
             let mut handles = Vec::new();
             for _ in 0..8 {
-                handles.push(scope.spawn(|| {
-                    shared.call_tool("claim_lifecycle", Some(&arguments))
-                }));
+                handles.push(scope.spawn(|| shared.call_tool("claim_lifecycle", Some(&arguments))));
             }
             for handle in handles {
                 let result = handle.join().expect("worker").expect("protocol");
@@ -4467,11 +4803,11 @@ mod tests {
             )
             .unwrap();
         assert!(!prepared.is_error, "{}", prepared.content[0].text);
-        let challenge_id =
-            serde_json::from_str::<Value>(&prepared.content[0].text).unwrap()["challenge_id"]
-                .as_str()
-                .unwrap()
-                .to_string();
+        let challenge_id = serde_json::from_str::<Value>(&prepared.content[0].text).unwrap()
+            ["challenge_id"]
+            .as_str()
+            .unwrap()
+            .to_string();
         let token = grant_lifecycle_token(&fix, &challenge_id);
         let applied = reg
             .call_tool(
@@ -4482,11 +4818,16 @@ mod tests {
             )
             .unwrap();
         assert!(!applied.is_error, "{}", applied.content[0].text);
-        let claim =
-            ClaimStore::new(fix.paths.clone()).read("research", &draft.id).unwrap();
+        let claim = ClaimStore::new(fix.paths.clone())
+            .read("research", &draft.id)
+            .unwrap();
         assert_eq!(claim.transitions.len(), 1);
         assert_eq!(
-            claim.transitions[0].authorization.as_ref().expect("authorization").mcp_client,
+            claim.transitions[0]
+                .authorization
+                .as_ref()
+                .expect("authorization")
+                .mcp_client,
             "unknown"
         );
     }
@@ -4503,8 +4844,7 @@ mod tests {
     }
 
     fn campaign_begin_arguments(workspace: Option<&str>) -> Value {
-        let mut arguments =
-            serde_json::json!({"specs": campaign_specs_arguments()});
+        let mut arguments = serde_json::json!({"specs": campaign_specs_arguments()});
         if let Some(workspace) = workspace {
             arguments["workspace"] = Value::from(workspace);
         }
@@ -4515,16 +4855,29 @@ mod tests {
     fn campaign_tools_author_drafts_only() {
         let fix = memory_fixture("campaign-drafts-only");
         let reg = registry(&fix);
-        let before_published = crate::coordination::read_workspace_generation(&fix.paths, "research")
-            .map(|generation| generation.published)
-            .unwrap_or_default();
+        let before_published =
+            crate::coordination::read_workspace_generation(&fix.paths, "research")
+                .map(|generation| generation.published)
+                .unwrap_or_default();
 
         let begin = reg
-            .call_tool("campaign_begin", Some(&campaign_begin_arguments(Some("research"))))
+            .call_tool(
+                "campaign_begin",
+                Some(&campaign_begin_arguments(Some("research"))),
+            )
             .unwrap();
         assert!(!begin.is_error, "{}", begin.content[0].text);
         let begun: Value = serde_json::from_str(&begin.content[0].text).unwrap();
-        assert_key_order(&begin.content[0].text, &["schema_version", "workspace", "run_id", "phase", "total_drafts"]);
+        assert_key_order(
+            &begin.content[0].text,
+            &[
+                "schema_version",
+                "workspace",
+                "run_id",
+                "phase",
+                "total_drafts",
+            ],
+        );
         assert_eq!(begun["phase"], "drafting");
         assert_eq!(begun["total_drafts"], 2);
         let run_id = begun["run_id"].as_str().unwrap().to_string();
@@ -4540,8 +4893,15 @@ mod tests {
         assert_key_order(
             &next.content[0].text,
             &[
-                "schema_version", "workspace", "run_id", "phase", "pending", "submitted",
-                "superseded_by_owner", "next_index", "next_spec",
+                "schema_version",
+                "workspace",
+                "run_id",
+                "phase",
+                "pending",
+                "submitted",
+                "superseded_by_owner",
+                "next_index",
+                "next_spec",
             ],
         );
         let state: Value = serde_json::from_str(&next.content[0].text).unwrap();
@@ -4559,7 +4919,16 @@ mod tests {
         assert!(!first.is_error, "{}", first.content[0].text);
         assert_key_order(
             &first.content[0].text,
-            &["schema_version", "workspace", "run_id", "index", "id", "status", "path", "pending"],
+            &[
+                "schema_version",
+                "workspace",
+                "run_id",
+                "index",
+                "id",
+                "status",
+                "path",
+                "pending",
+            ],
         );
         let submitted: Value = serde_json::from_str(&first.content[0].text).unwrap();
         assert_eq!(submitted["status"], "draft");
@@ -4579,7 +4948,11 @@ mod tests {
             )
             .unwrap();
         assert!(replay.is_error);
-        assert!(replay.content[0].text.contains("only pending drafts"), "{}", replay.content[0].text);
+        assert!(
+            replay.content[0].text.contains("only pending drafts"),
+            "{}",
+            replay.content[0].text
+        );
 
         let second = reg
             .call_tool(
@@ -4593,11 +4966,19 @@ mod tests {
         // and the derived index is left dirty.
         let after = crate::coordination::read_workspace_generation(&fix.paths, "research").unwrap();
         assert_eq!(after.published, before_published);
-        let dirty = IndexStore::new(fix.paths.clone()).dirty_path("research").unwrap();
-        assert!(dirty.exists(), "campaign tools did not leave the index dirty");
+        let dirty = IndexStore::new(fix.paths.clone())
+            .dirty_path("research")
+            .unwrap();
+        assert!(
+            dirty.exists(),
+            "campaign tools did not leave the index dirty"
+        );
 
         let exhausted = reg
-            .call_tool("campaign_next", Some(&serde_json::json!({"run_id": run_id})))
+            .call_tool(
+                "campaign_next",
+                Some(&serde_json::json!({"run_id": run_id})),
+            )
             .unwrap();
         assert!(!exhausted.is_error, "{}", exhausted.content[0].text);
         let drained: Value = serde_json::from_str(&exhausted.content[0].text).unwrap();
@@ -4615,24 +4996,40 @@ mod tests {
         let invalid = reg
             .call_tool(
                 "campaign_begin",
-                Some(&args(r#"{"specs":[{"tier":"not-a-tier","title":"Bad","basis":"owner"}]}"#)),
+                Some(&args(
+                    r#"{"specs":[{"tier":"not-a-tier","title":"Bad","basis":"owner"}]}"#,
+                )),
             )
             .unwrap();
         assert!(invalid.is_error);
-        assert!(invalid.content[0].text.contains("campaign spec 0"), "{}", invalid.content[0].text);
+        assert!(
+            invalid.content[0].text.contains("campaign spec 0"),
+            "{}",
+            invalid.content[0].text
+        );
         let empty = reg
             .call_tool("campaign_begin", Some(&args(r#"{"specs":[]}"#)))
             .unwrap();
         assert!(empty.is_error);
-        assert!(empty.content[0].text.contains("at least one draft spec"), "{}", empty.content[0].text);
+        assert!(
+            empty.content[0].text.contains("at least one draft spec"),
+            "{}",
+            empty.content[0].text
+        );
         let unknown = reg
             .call_tool(
                 "campaign_next",
-                Some(&args(r#"{"run_id":"cmp_00000000000000000000000000000000"}"#)),
+                Some(&args(
+                    r#"{"run_id":"cmp_00000000000000000000000000000000"}"#,
+                )),
             )
             .unwrap();
         assert!(unknown.is_error);
-        assert!(unknown.content[0].text.contains("not found"), "{}", unknown.content[0].text);
+        assert!(
+            unknown.content[0].text.contains("not found"),
+            "{}",
+            unknown.content[0].text
+        );
         let malformed = reg
             .call_tool("campaign_next", Some(&args(r#"{"run_id":"not-a-run-id"}"#)))
             .unwrap();
@@ -4640,13 +5037,18 @@ mod tests {
         let unknown_submit = reg
             .call_tool(
                 "campaign_submit_draft",
-                Some(&args(r#"{"run_id":"cmp_00000000000000000000000000000000","index":0,"body":"body"}"#)),
+                Some(&args(
+                    r#"{"run_id":"cmp_00000000000000000000000000000000","index":0,"body":"body"}"#,
+                )),
             )
             .unwrap();
         assert!(unknown_submit.is_error);
 
         let begin = reg
-            .call_tool("campaign_begin", Some(&campaign_begin_arguments(Some("research"))))
+            .call_tool(
+                "campaign_begin",
+                Some(&campaign_begin_arguments(Some("research"))),
+            )
             .unwrap();
         assert!(!begin.is_error, "{}", begin.content[0].text);
         let run_id = serde_json::from_str::<Value>(&begin.content[0].text).unwrap()["run_id"]
@@ -4656,24 +5058,38 @@ mod tests {
         let bad_index = reg
             .call_tool(
                 "campaign_submit_draft",
-                Some(&args(&format!(r#"{{"run_id":"{run_id}","index":7,"body":"body"}}"#))),
+                Some(&args(&format!(
+                    r#"{{"run_id":"{run_id}","index":7,"body":"body"}}"#
+                ))),
             )
             .unwrap();
         assert!(bad_index.is_error);
-        assert!(bad_index.content[0].text.contains("out of range"), "{}", bad_index.content[0].text);
+        assert!(
+            bad_index.content[0].text.contains("out of range"),
+            "{}",
+            bad_index.content[0].text
+        );
         reg.call_tool(
             "campaign_submit_draft",
-            Some(&args(&format!(r#"{{"run_id":"{run_id}","index":0,"body":"body"}}"#))),
+            Some(&args(&format!(
+                r#"{{"run_id":"{run_id}","index":0,"body":"body"}}"#
+            ))),
         )
         .unwrap();
         let twice = reg
             .call_tool(
                 "campaign_submit_draft",
-                Some(&args(&format!(r#"{{"run_id":"{run_id}","index":0,"body":"body"}}"#))),
+                Some(&args(&format!(
+                    r#"{{"run_id":"{run_id}","index":0,"body":"body"}}"#
+                ))),
             )
             .unwrap();
         assert!(twice.is_error);
-        assert!(twice.content[0].text.contains("only pending drafts"), "{}", twice.content[0].text);
+        assert!(
+            twice.content[0].text.contains("only pending drafts"),
+            "{}",
+            twice.content[0].text
+        );
     }
 
     #[test]
@@ -4693,14 +5109,20 @@ mod tests {
 
         // Explicit workspace binding.
         let begin_other = reg
-            .call_tool("campaign_begin", Some(&campaign_begin_arguments(Some("other"))))
+            .call_tool(
+                "campaign_begin",
+                Some(&campaign_begin_arguments(Some("other"))),
+            )
             .unwrap();
         assert!(!begin_other.is_error, "{}", begin_other.content[0].text);
         let other_begun: Value = serde_json::from_str(&begin_other.content[0].text).unwrap();
         assert_eq!(other_begun["workspace"], "other");
         let other_run_id = other_begun["run_id"].as_str().unwrap().to_string();
         assert!(
-            fix.paths.workspaces_dir.join(format!("other/campaigns/{other_run_id}.json")).exists(),
+            fix.paths
+                .workspaces_dir
+                .join(format!("other/campaigns/{other_run_id}.json"))
+                .exists(),
             "run file not bound to workspace other"
         );
 
@@ -4712,9 +5134,16 @@ mod tests {
             )
             .unwrap();
         assert!(cross.is_error);
-        assert!(cross.content[0].text.contains("not found"), "{}", cross.content[0].text);
+        assert!(
+            cross.content[0].text.contains("not found"),
+            "{}",
+            cross.content[0].text
+        );
         let nonexistent = reg
-            .call_tool("campaign_begin", Some(&campaign_begin_arguments(Some("nonexistent"))))
+            .call_tool(
+                "campaign_begin",
+                Some(&campaign_begin_arguments(Some("nonexistent"))),
+            )
             .unwrap();
         assert!(nonexistent.is_error);
     }
@@ -4725,7 +5154,9 @@ mod tests {
         let reg = registry(&fix);
         let args = |json_text: &str| serde_json::from_str::<Value>(json_text).unwrap();
         let invalid = |name: &str, json_text: &str| -> String {
-            reg.call_tool(name, Some(&args(json_text))).unwrap().content[0].text.clone()
+            reg.call_tool(name, Some(&args(json_text))).unwrap().content[0]
+                .text
+                .clone()
         };
         assert_eq!(
             invalid("campaign_begin", "{}"),
@@ -4832,7 +5263,9 @@ mod tests {
         let reg = registry(&fix);
         let args = |json_text: &str| serde_json::from_str::<Value>(json_text).unwrap();
         let invalid = |name: &str, json_text: &str| -> String {
-            reg.call_tool(name, Some(&args(json_text))).unwrap().content[0].text.clone()
+            reg.call_tool(name, Some(&args(json_text))).unwrap().content[0]
+                .text
+                .clone()
         };
         assert_eq!(
             invalid("memory_ask", r#"{"query":null}"#),

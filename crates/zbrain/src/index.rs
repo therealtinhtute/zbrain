@@ -12,9 +12,8 @@ use serde::Serialize;
 
 use crate::boundary::{safe_relative_path, validate_workspace, BoundaryError};
 use crate::claims::{
-    is_known_claim_status, verify_claim_digest,
-    Claim, ClaimError, ClaimStore, InvalidClaim, OKF_CLAIM_TYPE,
-    CLAIM_STATUS_APPROVED, CLAIM_STATUS_DRAFT,
+    is_known_claim_status, verify_claim_digest, Claim, ClaimError, ClaimStore, InvalidClaim,
+    CLAIM_STATUS_APPROVED, CLAIM_STATUS_DRAFT, OKF_CLAIM_TYPE,
 };
 use crate::coordination::{
     acquire_workspace_lock, ensure_workspace_generation, mark_dirty_unlocked,
@@ -23,7 +22,7 @@ use crate::coordination::{
 };
 use crate::evidence::{validate_claim_evidence, EvidenceValidator};
 use crate::manifest::{build_trust_input_manifest, TrustInputManifest};
-use crate::paths::{ensure_directory_mode, set_permissions, DERIVED_INDEX_MODE, Paths};
+use crate::paths::{ensure_directory_mode, set_permissions, Paths, DERIVED_INDEX_MODE};
 use crate::trust::TrustValidator;
 use crate::workspace::WIKI_TIERS;
 use crate::{claims, index_state, transition};
@@ -260,7 +259,10 @@ impl IndexStore {
         Ok(())
     }
 
-    pub(crate) fn mark_dirty_unlocked(&self, workspace: &str) -> Result<(), crate::coordination::MutationError> {
+    pub(crate) fn mark_dirty_unlocked(
+        &self,
+        workspace: &str,
+    ) -> Result<(), crate::coordination::MutationError> {
         mark_dirty_unlocked(&self.paths, workspace)
     }
 
@@ -270,7 +272,10 @@ impl IndexStore {
         Ok(())
     }
 
-    pub(crate) fn check_fresh_unlocked(&self, workspace: &str) -> Result<TrustInputManifest, IndexError> {
+    pub(crate) fn check_fresh_unlocked(
+        &self,
+        workspace: &str,
+    ) -> Result<TrustInputManifest, IndexError> {
         self.check_fresh_unlocked_output(workspace)
     }
 
@@ -298,8 +303,11 @@ impl IndexStore {
             return Err(source.into());
         }
 
-        let conn = open_index(&database_path)
-            .map_err(|err| IndexError::Message(format!("workspace {workspace:?} index cannot be opened: {err}")))?;
+        let conn = open_index(&database_path).map_err(|err| {
+            IndexError::Message(format!(
+                "workspace {workspace:?} index cannot be opened: {err}"
+            ))
+        })?;
         let (manifest, state) = index_state::read_index_state(&conn).map_err(|err| {
             IndexError::Message(format!(
                 "workspace {workspace:?} index state is malformed or missing: {err}"
@@ -387,10 +395,10 @@ impl IndexStore {
             directory_changed = true;
             let offender = find_freshness_offender(&workspace_root, &directory, &recorded_mtimes)
                 .map_err(|err| {
-                    IndexError::Message(format!(
-                        "workspace {workspace:?} index freshness check failed: {err}"
-                    ))
-                })?;
+                IndexError::Message(format!(
+                    "workspace {workspace:?} index freshness check failed: {err}"
+                ))
+            })?;
             if let Some(offender) = offender {
                 return msg(format!(
                     "workspace {workspace:?} index is stale; trust input {:?} changed after index; run zbrain reindex",
@@ -486,13 +494,22 @@ impl IndexStore {
         drop(start_lock);
 
         self.assert_fts5()?;
-        ensure_directory_mode(&self.paths.indexes_dir, crate::paths::RUNTIME_DIRECTORY_MODE)?;
+        ensure_directory_mode(
+            &self.paths.indexes_dir,
+            crate::paths::RUNTIME_DIRECTORY_MODE,
+        )?;
         let tmp_path = create_temp_file(&self.paths.indexes_dir, &format!("{workspace}.sqlite."))?;
 
         let cleanup = |tmp_path: &Path| {
             let _ = std::fs::remove_file(tmp_path);
-            let _ = std::fs::remove_file(tmp_path.with_file_name(format!("{}-wal", tmp_path.file_name().unwrap_or_default().to_string_lossy())));
-            let _ = std::fs::remove_file(tmp_path.with_file_name(format!("{}-shm", tmp_path.file_name().unwrap_or_default().to_string_lossy())));
+            let _ = std::fs::remove_file(tmp_path.with_file_name(format!(
+                "{}-wal",
+                tmp_path.file_name().unwrap_or_default().to_string_lossy()
+            )));
+            let _ = std::fs::remove_file(tmp_path.with_file_name(format!(
+                "{}-shm",
+                tmp_path.file_name().unwrap_or_default().to_string_lossy()
+            )));
         };
 
         let result = (|| -> Result<IndexSummary, IndexError> {
@@ -583,8 +600,8 @@ impl IndexStore {
             let publish = (|| -> Result<(), IndexError> {
                 validated_index_paths(&self.paths, workspace)?;
                 transition::check_pending_transition_unlocked(&self.paths, workspace)?;
-                let generation = read_workspace_generation(&self.paths, workspace)
-                    .map_err(|err| {
+                let generation =
+                    read_workspace_generation(&self.paths, workspace).map_err(|err| {
                         IndexError::Message(format!(
                             "read workspace generation before publication: {err}"
                         ))
@@ -639,7 +656,11 @@ impl IndexStore {
         }
     }
 
-    pub fn search(&self, workspace: &str, options: SearchOptions) -> Result<Vec<IndexedClaim>, IndexError> {
+    pub fn search(
+        &self,
+        workspace: &str,
+        options: SearchOptions,
+    ) -> Result<Vec<IndexedClaim>, IndexError> {
         let _lock = acquire_workspace_lock(&self.paths, workspace, false)?;
         self.search_unlocked(workspace, options)
     }
@@ -775,9 +796,8 @@ limit ?"
 }
 
 fn open_index(path: &Path) -> Result<Connection, IndexError> {
-    Connection::open(path).map_err(|err| {
-        IndexError::Message(format!("index database cannot be opened: {err}"))
-    })
+    Connection::open(path)
+        .map_err(|err| IndexError::Message(format!("index database cannot be opened: {err}")))
 }
 
 fn tmp_wal(path: &Path) -> PathBuf {
@@ -848,7 +868,9 @@ pub(crate) fn read_trust_input_mtimes(
     Ok(mtimes)
 }
 
-pub(crate) fn read_trust_directories(conn: &Connection) -> Result<Vec<TrustDirectoryMtime>, IndexError> {
+pub(crate) fn read_trust_directories(
+    conn: &Connection,
+) -> Result<Vec<TrustDirectoryMtime>, IndexError> {
     let mut statement = conn
         .prepare("select path, modified_at, change_token from trust_directories order by path")?;
     let mut rows = statement.query([])?;
@@ -896,7 +918,10 @@ fn find_freshness_offender(
             return Ok(());
         }
         if entry_type.is_symlink() {
-            return msg(format!("trust input {:?} must not be a symlink", path.display()));
+            return msg(format!(
+                "trust input {:?} must not be a symlink",
+                path.display()
+            ));
         }
         let relative = path
             .strip_prefix(workspace_root)
@@ -905,7 +930,10 @@ fn find_freshness_offender(
             .replace('\\', "/");
         if entry_type.is_dir() {
             if is_trust_input_path(&relative) {
-                return msg(format!("trust input {:?} is not a regular file", path.display()));
+                return msg(format!(
+                    "trust input {:?} is not a regular file",
+                    path.display()
+                ));
             }
             return Ok(());
         }
@@ -914,7 +942,10 @@ fn find_freshness_offender(
         }
         let info = std::fs::symlink_metadata(path)?;
         if !info.is_file() {
-            return msg(format!("trust input {:?} is not a regular file", path.display()));
+            return msg(format!(
+                "trust input {:?} is not a regular file",
+                path.display()
+            ));
         }
         match known_input_mtimes.get(&relative) {
             Some(recorded)
@@ -1058,7 +1089,10 @@ fn collect_trust_directories(
             .to_string_lossy()
             .replace('\\', "/");
         if !is_trust_directory_path(&relative) {
-            return msg(format!("trust directory {:?} is not canonical", path.display()));
+            return msg(format!(
+                "trust directory {:?} is not canonical",
+                path.display()
+            ));
         }
         directory_set.insert(
             relative.clone(),
@@ -1131,7 +1165,10 @@ pub(crate) fn is_trust_directory_path(path: &str) -> bool {
         return true;
     }
     path == "evidence/sources"
-        || (parts.len() == 3 && parts[0] == "evidence" && parts[1] == "sources" && !parts[2].is_empty())
+        || (parts.len() == 3
+            && parts[0] == "evidence"
+            && parts[1] == "sources"
+            && !parts[2].is_empty())
 }
 
 pub(crate) fn is_trust_input_path(path: &str) -> bool {
@@ -1177,7 +1214,11 @@ fn write_trust_directories(
     for directory in directories {
         tx.execute(
             "insert into trust_directories(path, modified_at, change_token) values (?, ?, ?)",
-            rusqlite::params![directory.path, directory.modified_at, directory.change_token],
+            rusqlite::params![
+                directory.path,
+                directory.modified_at,
+                directory.change_token
+            ],
         )
         .map_err(|err| {
             IndexError::Message(format!("write trust directory {:?}: {err}", directory.path))
@@ -1247,7 +1288,10 @@ pub fn same_trust_input_manifest(left: &TrustInputManifest, right: &TrustInputMa
 // ---------------------------------------------------------------------------
 
 fn go_is_space_byte(byte: u8) -> bool {
-    matches!(byte, b'\t' | b'\n' | 0x0B | 0x0C | b'\r' | b' ' | 0x85 | 0xA0)
+    matches!(
+        byte,
+        b'\t' | b'\n' | 0x0B | 0x0C | b'\r' | b' ' | 0x85 | 0xA0
+    )
 }
 
 pub fn fts5_query(query: &str) -> String {
@@ -1294,7 +1338,11 @@ pub fn fts5_query(query: &str) -> String {
             continue;
         }
         let is_wildcard = raw.ends_with('*');
-        let base = if is_wildcard { raw[..raw.len() - 1].to_string() } else { raw.clone() };
+        let base = if is_wildcard {
+            raw[..raw.len() - 1].to_string()
+        } else {
+            raw.clone()
+        };
         if is_wildcard && base.trim().is_empty() {
             continue;
         }
@@ -1484,7 +1532,8 @@ fn set_file_times_now(path: &Path) -> Result<(), std::io::Error> {
     Ok(())
 }
 
-pub(crate) fn create_temp_file(dir: &Path, prefix: &str) -> Result<PathBuf, IndexError> {    use std::os::unix::fs::OpenOptionsExt;
+pub(crate) fn create_temp_file(dir: &Path, prefix: &str) -> Result<PathBuf, IndexError> {
+    use std::os::unix::fs::OpenOptionsExt;
     let mut attempt: u64 = 0;
     let nanos = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -1492,7 +1541,9 @@ pub(crate) fn create_temp_file(dir: &Path, prefix: &str) -> Result<PathBuf, Inde
         .unwrap_or(0);
     let mut seed = nanos ^ ((std::process::id() as u128) << 64);
     loop {
-        seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+        seed = seed
+            .wrapping_mul(6364136223846793005)
+            .wrapping_add(1442695040888963407);
         let suffix = format!("{:016x}{:02x}", seed, attempt);
         let path = dir.join(format!("{prefix}{suffix}.tmp"));
         match std::fs::OpenOptions::new()
@@ -1676,14 +1727,24 @@ pub(crate) mod test_support {
         digest.iter().map(|b| format!("{b:02x}")).collect()
     }
 
-    pub fn indexed_claim_statuses(paths: &Paths, workspace: &str) -> std::collections::BTreeMap<String, String> {
-        let db_path = IndexStore::new(paths.clone()).database_path(workspace).unwrap();
+    pub fn indexed_claim_statuses(
+        paths: &Paths,
+        workspace: &str,
+    ) -> std::collections::BTreeMap<String, String> {
+        let db_path = IndexStore::new(paths.clone())
+            .database_path(workspace)
+            .unwrap();
         let conn = Connection::open(&db_path).unwrap();
-        let mut statement = conn.prepare("select id, status from claims order by id").unwrap();
+        let mut statement = conn
+            .prepare("select id, status from claims order by id")
+            .unwrap();
         let mut rows = statement.query([]).unwrap();
         let mut statuses = std::collections::BTreeMap::new();
         while let Some(row) = rows.next().unwrap() {
-            statuses.insert(row.get::<_, String>(0).unwrap(), row.get::<_, String>(1).unwrap());
+            statuses.insert(
+                row.get::<_, String>(0).unwrap(),
+                row.get::<_, String>(1).unwrap(),
+            );
         }
         statuses
     }
@@ -1723,7 +1784,12 @@ pub(crate) mod test_support {
         }
     }
 
-    pub fn rewrite_evidence_metadata(paths: &Paths, workspace: &str, id: &str, evidence: &Evidence) {
+    pub fn rewrite_evidence_metadata(
+        paths: &Paths,
+        workspace: &str,
+        id: &str,
+        evidence: &Evidence,
+    ) {
         use std::os::unix::fs::PermissionsExt;
         let path = paths
             .workspaces_dir
@@ -1776,23 +1842,50 @@ mod tests {
     fn reindex_publishes_rejected_state_for_legacy_and_evidence() {
         let (_dir, paths) = index_test_paths("rejected-legacy");
         let claim_store = claim_store(&paths);
-        let mut approved = index_claim("clm_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "Approved Local Memory", CLAIM_BASIS_OWNER);
+        let mut approved = index_claim(
+            "clm_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "Approved Local Memory",
+            CLAIM_BASIS_OWNER,
+        );
         approved.description = "description recall token".into();
-        claim_store.write_draft("research", approved.clone()).unwrap();
+        claim_store
+            .write_draft("research", approved.clone())
+            .unwrap();
         claim_store.approve("research", &approved.id).unwrap();
-        let mut draft = index_claim("clm_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", "Draft Candidate", CLAIM_BASIS_OWNER);
+        let mut draft = index_claim(
+            "clm_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            "Draft Candidate",
+            CLAIM_BASIS_OWNER,
+        );
         draft.body = "draft-only recall token\n".into();
         claim_store.write_draft("research", draft).unwrap();
-        let legacy_path = paths.workspaces_dir.join("research/wiki/projects/legacy.md");
+        let legacy_path = paths
+            .workspaces_dir
+            .join("research/wiki/projects/legacy.md");
         std::fs::write(&legacy_path, b"legacy local memory should not index").unwrap();
-        let non_zbrain_okf = paths.workspaces_dir.join("research/wiki/projects/okf-note.md");
-        std::fs::write(&non_zbrain_okf, b"---\ntype: note\ntitle: Poison Note\n---\n\npoison local memory\n").unwrap();
-        let evidence_path = paths.workspaces_dir.join("research/evidence/sources/raw.md");
+        let non_zbrain_okf = paths
+            .workspaces_dir
+            .join("research/wiki/projects/okf-note.md");
+        std::fs::write(
+            &non_zbrain_okf,
+            b"---\ntype: note\ntitle: Poison Note\n---\n\npoison local memory\n",
+        )
+        .unwrap();
+        let evidence_path = paths
+            .workspaces_dir
+            .join("research/evidence/sources/raw.md");
         std::fs::write(&evidence_path, b"poison local memory evidence").unwrap();
 
         let summary = store(&paths).rebuild("research").unwrap();
         assert_eq!(
-            (summary.approved, summary.draft, summary.legacy, summary.invalid, summary.invalid_count, summary.rebuild_state.as_str()),
+            (
+                summary.approved,
+                summary.draft,
+                summary.legacy,
+                summary.invalid,
+                summary.invalid_count,
+                summary.rebuild_state.as_str()
+            ),
             (1, 1, 2, 0, 2, REBUILD_STATUS_REJECTED)
         );
         let (manifest, state) = read_published_index_state(&store(&paths), "research");
@@ -1806,7 +1899,11 @@ mod tests {
     fn rebuild_rejects_duplicate_canonical_claim_ids() {
         let (_dir, paths) = index_test_paths("duplicate-ids");
         let id = "clm_77777777777777777777777777777777";
-        let flat = finalize_approved_store_claim(index_claim(id, "Flat duplicate index marker", CLAIM_BASIS_OWNER));
+        let flat = finalize_approved_store_claim(index_claim(
+            id,
+            "Flat duplicate index marker",
+            CLAIM_BASIS_OWNER,
+        ));
         write_canonical_store_claim(&paths, &flat);
 
         let nested_path = "projects/topics/security/".to_string() + id + ".md";
@@ -1814,7 +1911,10 @@ mod tests {
         nested.body = "nested duplicate index marker\n".into();
         nested.path = nested_path.clone();
         let nested = finalize_approved_store_claim(nested);
-        let nested_absolute_path = paths.workspaces_dir.join("research/wiki").join(&nested_path);
+        let nested_absolute_path = paths
+            .workspaces_dir
+            .join("research/wiki")
+            .join(&nested_path);
         crate::claims::write_claim_atomic(&nested_absolute_path, &nested).unwrap();
 
         let flat_path = format!("projects/{id}.md");
@@ -1823,7 +1923,12 @@ mod tests {
         let before_nested = sha256_hex(&nested_absolute_path);
         let summary = store(&paths).rebuild("research").unwrap();
         assert_eq!(
-            (summary.approved, summary.invalid, summary.invalid_count, summary.rebuild_state.as_str()),
+            (
+                summary.approved,
+                summary.invalid,
+                summary.invalid_count,
+                summary.rebuild_state.as_str()
+            ),
             (0, 2, 2, REBUILD_STATUS_REJECTED)
         );
         assert_eq!(summary.invalid_claims.len(), 2);
@@ -1850,7 +1955,11 @@ mod tests {
     fn rebuild_recovers_pending_transition() {
         let (_dir, paths) = index_test_paths("recover-pending");
         let claim_store = claim_store(&paths);
-        let draft = index_claim("clm_99999999999999999999999999999999", "Recovered Claim", CLAIM_BASIS_OWNER);
+        let draft = index_claim(
+            "clm_99999999999999999999999999999999",
+            "Recovered Claim",
+            CLAIM_BASIS_OWNER,
+        );
         claim_store.write_draft("research", draft.clone()).unwrap();
         let claim_path = paths
             .workspaces_dir
@@ -1887,7 +1996,10 @@ mod tests {
         .unwrap();
 
         let summary = store(&paths).rebuild("research").unwrap();
-        assert_eq!((summary.approved, summary.rebuild_state.as_str()), (1, REBUILD_STATUS_CLEAN));
+        assert_eq!(
+            (summary.approved, summary.rebuild_state.as_str()),
+            (1, REBUILD_STATUS_CLEAN)
+        );
         store(&paths).check_fresh("research").unwrap();
         assert!(transition::read_pending_transition(&paths, "research")
             .unwrap_err()
@@ -1898,7 +2010,9 @@ mod tests {
     #[test]
     fn recovery_leaves_dirty() {
         let (_dir, paths) = index_test_paths("recovery-dirty");
-        let path = paths.workspaces_dir.join("research/wiki/projects/recovery.md");
+        let path = paths
+            .workspaces_dir
+            .join("research/wiki/projects/recovery.md");
         let before = b"before\n".to_vec();
         let target = b"after\n".to_vec();
         std::fs::write(&path, &before).unwrap();
@@ -1909,7 +2023,11 @@ mod tests {
                 operation_id: "txn_dirty".into(),
                 kind: crate::claims::CLAIM_TRANSITION_SUPERSEDE.into(),
                 workspace: "research".into(),
-                targets: vec![pending_transition_target("wiki/projects/recovery.md", &before, &target)],
+                targets: vec![pending_transition_target(
+                    "wiki/projects/recovery.md",
+                    &before,
+                    &target,
+                )],
             },
         )
         .unwrap();
@@ -1926,7 +2044,11 @@ mod tests {
     fn reindex_excludes_tampered_approved_claim() {
         let (_dir, paths) = index_test_paths("tampered");
         let claim_store = claim_store(&paths);
-        let mut claim = index_claim("clm_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "Tampered Search", CLAIM_BASIS_OWNER);
+        let mut claim = index_claim(
+            "clm_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "Tampered Search",
+            CLAIM_BASIS_OWNER,
+        );
         claim.body = "original indexed body\n".into();
         claim_store.write_draft("research", claim.clone()).unwrap();
         claim_store.approve("research", &claim.id).unwrap();
@@ -1941,7 +2063,12 @@ mod tests {
 
         let summary = store(&paths).rebuild("research").unwrap();
         assert_eq!(
-            (summary.approved, summary.invalid, summary.invalid_count, summary.rebuild_state.as_str()),
+            (
+                summary.approved,
+                summary.invalid,
+                summary.invalid_count,
+                summary.rebuild_state.as_str()
+            ),
             (0, 1, 1, REBUILD_STATUS_REJECTED)
         );
         let (manifest, state) = read_published_index_state(&store(&paths), "research");
@@ -1955,17 +2082,37 @@ mod tests {
     fn rebuild_dependency_canonical_unchanged() {
         let (_dir, paths) = index_test_paths("dependency");
         let claim_store = claim_store(&paths);
-        let support = index_claim("clm_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "Revoked Support", CLAIM_BASIS_OWNER);
-        claim_store.write_draft("research", support.clone()).unwrap();
+        let support = index_claim(
+            "clm_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "Revoked Support",
+            CLAIM_BASIS_OWNER,
+        );
+        claim_store
+            .write_draft("research", support.clone())
+            .unwrap();
         claim_store.approve("research", &support.id).unwrap();
-        let mut dependent = index_claim("clm_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", "Dependent Claim", CLAIM_BASIS_DERIVED);
+        let mut dependent = index_claim(
+            "clm_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            "Dependent Claim",
+            CLAIM_BASIS_DERIVED,
+        );
         dependent.supporting_claim_ids = vec![support.id.clone()];
-        claim_store.write_draft("research", dependent.clone()).unwrap();
+        claim_store
+            .write_draft("research", dependent.clone())
+            .unwrap();
         claim_store.approve("research", &dependent.id).unwrap();
-        let unrelated = index_claim("clm_cccccccccccccccccccccccccccccccc", "Unrelated Claim", CLAIM_BASIS_OWNER);
-        claim_store.write_draft("research", unrelated.clone()).unwrap();
+        let unrelated = index_claim(
+            "clm_cccccccccccccccccccccccccccccccc",
+            "Unrelated Claim",
+            CLAIM_BASIS_OWNER,
+        );
+        claim_store
+            .write_draft("research", unrelated.clone())
+            .unwrap();
         claim_store.approve("research", &unrelated.id).unwrap();
-        claim_store.revoke("research", &support.id, "no longer trusted").unwrap();
+        claim_store
+            .revoke("research", &support.id, "no longer trusted")
+            .unwrap();
 
         let dependent_path = paths
             .workspaces_dir
@@ -1979,13 +2126,25 @@ mod tests {
         let unrelated_before = sha256_hex(&unrelated_path);
         let summary = store(&paths).rebuild("research").unwrap();
         assert_eq!(
-            (summary.rebuild_state.as_str(), summary.approved, summary.invalid, summary.invalid_count),
+            (
+                summary.rebuild_state.as_str(),
+                summary.approved,
+                summary.invalid,
+                summary.invalid_count
+            ),
             (REBUILD_STATUS_REJECTED, 1, 1, 1)
         );
         assert_eq!(summary.invalid_claims.len(), 1);
-        assert_eq!(summary.invalid_claims[0].path, format!("projects/{}.md", dependent.id));
+        assert_eq!(
+            summary.invalid_claims[0].path,
+            format!("projects/{}.md", dependent.id)
+        );
         let error = &summary.invalid_claims[0].error;
-        assert!(error.contains(&dependent.id) && error.contains(&support.id) && error.contains("revoked"));
+        assert!(
+            error.contains(&dependent.id)
+                && error.contains(&support.id)
+                && error.contains("revoked")
+        );
         let indexed = indexed_claim_statuses(&paths, "research");
         assert!(!indexed.contains_key(&dependent.id));
         assert_eq!(indexed[&unrelated.id], CLAIM_STATUS_APPROVED);
@@ -1999,11 +2158,21 @@ mod tests {
         let (_dir, paths) = index_test_paths("evidence-digest");
         let evidence = add_store_evidence(&paths, "original evidence");
         let claim_store = claim_store(&paths);
-        let mut support = index_claim("clm_eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee", "Evidence Support", CLAIM_BASIS_EVIDENCE);
+        let mut support = index_claim(
+            "clm_eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+            "Evidence Support",
+            CLAIM_BASIS_EVIDENCE,
+        );
         support.evidence_ids = vec![evidence.id.clone()];
-        claim_store.write_draft("research", support.clone()).unwrap();
+        claim_store
+            .write_draft("research", support.clone())
+            .unwrap();
         claim_store.approve("research", &support.id).unwrap();
-        let mut dependent = index_claim("clm_ffffffffffffffffffffffffffffffff", "Evidence Dependent", CLAIM_BASIS_DERIVED);
+        let mut dependent = index_claim(
+            "clm_ffffffffffffffffffffffffffffffff",
+            "Evidence Dependent",
+            CLAIM_BASIS_DERIVED,
+        );
         dependent.supporting_claim_ids = vec![support.id.clone()];
         claim_store.write_draft("research", dependent).unwrap();
         claim_store
@@ -2011,7 +2180,10 @@ mod tests {
             .unwrap();
 
         let initial = store(&paths).rebuild("research").unwrap();
-        assert_eq!((initial.rebuild_state.as_str(), initial.approved), (REBUILD_STATUS_CLEAN, 2));
+        assert_eq!(
+            (initial.rebuild_state.as_str(), initial.approved),
+            (REBUILD_STATUS_CLEAN, 2)
+        );
 
         let replacement = b"tampered evidence".to_vec();
         let raw_path = paths
@@ -2033,7 +2205,12 @@ mod tests {
 
         let summary = store(&paths).rebuild("research").unwrap();
         assert_eq!(
-            (summary.rebuild_state.as_str(), summary.approved, summary.invalid, summary.invalid_count),
+            (
+                summary.rebuild_state.as_str(),
+                summary.approved,
+                summary.invalid,
+                summary.invalid_count
+            ),
             (REBUILD_STATUS_REJECTED, 0, 2, 2)
         );
         for invalid in &summary.invalid_claims {
@@ -2049,7 +2226,11 @@ mod tests {
         let (_dir, paths) = index_test_paths("evidence-metadata");
         let evidence = add_store_evidence(&paths, "original evidence");
         let claim_store = claim_store(&paths);
-        let mut claim = index_claim("clm_11111111111111111111111111111111", "Metadata Evidence Claim", CLAIM_BASIS_EVIDENCE);
+        let mut claim = index_claim(
+            "clm_11111111111111111111111111111111",
+            "Metadata Evidence Claim",
+            CLAIM_BASIS_EVIDENCE,
+        );
         claim.evidence_ids = vec![evidence.id.clone()];
         claim_store.write_draft("research", claim.clone()).unwrap();
         claim_store.approve("research", &claim.id).unwrap();
@@ -2061,7 +2242,12 @@ mod tests {
 
         let summary = store(&paths).rebuild("research").unwrap();
         assert_eq!(
-            (summary.rebuild_state.as_str(), summary.approved, summary.invalid, summary.invalid_count),
+            (
+                summary.rebuild_state.as_str(),
+                summary.approved,
+                summary.invalid,
+                summary.invalid_count
+            ),
             (REBUILD_STATUS_REJECTED, 0, 1, 1)
         );
         assert_eq!(summary.invalid_claims.len(), 1);
@@ -2075,7 +2261,11 @@ mod tests {
         let (_dir, paths) = index_test_paths("legacy-digest");
         let evidence = add_store_evidence(&paths, "legacy digest evidence");
         let claim_store = claim_store(&paths);
-        let mut claim = index_claim("clm_33333333333333333333333333333333", "Legacy Evidence Claim", CLAIM_BASIS_EVIDENCE);
+        let mut claim = index_claim(
+            "clm_33333333333333333333333333333333",
+            "Legacy Evidence Claim",
+            CLAIM_BASIS_EVIDENCE,
+        );
         claim.evidence_ids = vec![evidence.id.clone()];
         claim_store.write_draft("research", claim.clone()).unwrap();
         let mut approved = claim_store.approve("research", &claim.id).unwrap();
@@ -2089,7 +2279,12 @@ mod tests {
 
         let summary = store(&paths).rebuild("research").unwrap();
         assert_eq!(
-            (summary.rebuild_state.as_str(), summary.approved, summary.invalid, summary.invalid_count),
+            (
+                summary.rebuild_state.as_str(),
+                summary.approved,
+                summary.invalid,
+                summary.invalid_count
+            ),
             (REBUILD_STATUS_REJECTED, 0, 1, 1)
         );
         assert_eq!(summary.invalid_claims.len(), 1);
@@ -2103,7 +2298,11 @@ mod tests {
         let (_dir, paths) = index_test_paths("closure-mismatch");
         let evidence = add_store_evidence(&paths, "closure evidence");
         let claim_store = claim_store(&paths);
-        let mut claim = index_claim("clm_22222222222222222222222222222222", "Closure Evidence Claim", CLAIM_BASIS_EVIDENCE);
+        let mut claim = index_claim(
+            "clm_22222222222222222222222222222222",
+            "Closure Evidence Claim",
+            CLAIM_BASIS_EVIDENCE,
+        );
         claim.evidence_ids = vec![evidence.id.clone()];
         claim_store.write_draft("research", claim.clone()).unwrap();
         let mut approved = claim_store.approve("research", &claim.id).unwrap();
@@ -2117,11 +2316,18 @@ mod tests {
 
         let summary = store(&paths).rebuild("research").unwrap();
         assert_eq!(
-            (summary.rebuild_state.as_str(), summary.approved, summary.invalid, summary.invalid_count),
+            (
+                summary.rebuild_state.as_str(),
+                summary.approved,
+                summary.invalid,
+                summary.invalid_count
+            ),
             (REBUILD_STATUS_REJECTED, 0, 1, 1)
         );
         assert_eq!(summary.invalid_claims.len(), 1);
-        assert!(summary.invalid_claims[0].error.contains("duplicate evidence id"));
+        assert!(summary.invalid_claims[0]
+            .error
+            .contains("duplicate evidence id"));
         let _ = std::fs::remove_dir_all(&_dir);
     }
 
@@ -2130,7 +2336,11 @@ mod tests {
         let (_dir, paths) = index_test_paths("evidence-rejected");
         let evidence = add_store_evidence(&paths, "evidence bytes");
         let claim_store = claim_store(&paths);
-        let mut claim = index_claim("clm_dddddddddddddddddddddddddddddddd", "Tampered Evidence Claim", CLAIM_BASIS_EVIDENCE);
+        let mut claim = index_claim(
+            "clm_dddddddddddddddddddddddddddddddd",
+            "Tampered Evidence Claim",
+            CLAIM_BASIS_EVIDENCE,
+        );
         claim.evidence_ids = vec![evidence.id.clone()];
         claim_store.write_draft("research", claim.clone()).unwrap();
         claim_store.approve("research", &claim.id).unwrap();
@@ -2154,7 +2364,12 @@ mod tests {
 
         let summary = store(&paths).rebuild("research").unwrap();
         assert_eq!(
-            (summary.rebuild_state.as_str(), summary.approved, summary.invalid, summary.invalid_count),
+            (
+                summary.rebuild_state.as_str(),
+                summary.approved,
+                summary.invalid,
+                summary.invalid_count
+            ),
             (REBUILD_STATUS_REJECTED, 0, 1, 1)
         );
         assert_eq!(summary.invalid_claims.len(), 1);
@@ -2170,13 +2385,25 @@ mod tests {
         let (_dir, paths) = index_test_paths("dependent-evidence");
         let evidence = add_store_evidence(&paths, "support evidence bytes");
         let claim_store = claim_store(&paths);
-        let mut support = index_claim("clm_eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee", "Evidence Support", CLAIM_BASIS_EVIDENCE);
+        let mut support = index_claim(
+            "clm_eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+            "Evidence Support",
+            CLAIM_BASIS_EVIDENCE,
+        );
         support.evidence_ids = vec![evidence.id.clone()];
-        claim_store.write_draft("research", support.clone()).unwrap();
+        claim_store
+            .write_draft("research", support.clone())
+            .unwrap();
         claim_store.approve("research", &support.id).unwrap();
-        let mut dependent = index_claim("clm_ffffffffffffffffffffffffffffffff", "Evidence Dependent", CLAIM_BASIS_DERIVED);
+        let mut dependent = index_claim(
+            "clm_ffffffffffffffffffffffffffffffff",
+            "Evidence Dependent",
+            CLAIM_BASIS_DERIVED,
+        );
         dependent.supporting_claim_ids = vec![support.id.clone()];
-        claim_store.write_draft("research", dependent.clone()).unwrap();
+        claim_store
+            .write_draft("research", dependent.clone())
+            .unwrap();
         claim_store.approve("research", &dependent.id).unwrap();
         let initial = store(&paths).rebuild("research").unwrap();
         assert_eq!(initial.rebuild_state, REBUILD_STATUS_CLEAN);
@@ -2206,12 +2433,23 @@ mod tests {
 
         let summary = store(&paths).rebuild("research").unwrap();
         assert_eq!(
-            (summary.rebuild_state.as_str(), summary.approved, summary.invalid, summary.invalid_count),
+            (
+                summary.rebuild_state.as_str(),
+                summary.approved,
+                summary.invalid,
+                summary.invalid_count
+            ),
             (REBUILD_STATUS_REJECTED, 0, 2, 2)
         );
         assert_eq!(summary.invalid_claims.len(), 2);
-        assert_eq!(summary.invalid_claims[0].path, format!("projects/{}.md", support.id));
-        assert_eq!(summary.invalid_claims[1].path, format!("projects/{}.md", dependent.id));
+        assert_eq!(
+            summary.invalid_claims[0].path,
+            format!("projects/{}.md", support.id)
+        );
+        assert_eq!(
+            summary.invalid_claims[1].path,
+            format!("projects/{}.md", dependent.id)
+        );
         for invalid in &summary.invalid_claims {
             assert!(invalid.error.contains(&evidence.id) && invalid.error.contains("raw"));
         }
@@ -2224,8 +2462,16 @@ mod tests {
     #[test]
     fn rebuild_cycle_rejected_state() {
         let (_dir, paths) = index_test_paths("cycle");
-        let mut first = index_claim("clm_eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee", "Cycle First", CLAIM_BASIS_DERIVED);
-        let mut second = index_claim("clm_ffffffffffffffffffffffffffffffff", "Cycle Second", CLAIM_BASIS_DERIVED);
+        let mut first = index_claim(
+            "clm_eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+            "Cycle First",
+            CLAIM_BASIS_DERIVED,
+        );
+        let mut second = index_claim(
+            "clm_ffffffffffffffffffffffffffffffff",
+            "Cycle Second",
+            CLAIM_BASIS_DERIVED,
+        );
         first.supporting_claim_ids = vec![second.id.clone()];
         second.supporting_claim_ids = vec![first.id.clone()];
         let first = finalize_approved_store_claim(first);
@@ -2245,7 +2491,12 @@ mod tests {
 
         let summary = store(&paths).rebuild("research").unwrap();
         assert_eq!(
-            (summary.rebuild_state.as_str(), summary.approved, summary.invalid, summary.invalid_count),
+            (
+                summary.rebuild_state.as_str(),
+                summary.approved,
+                summary.invalid,
+                summary.invalid_count
+            ),
             (REBUILD_STATUS_REJECTED, 0, 2, 2)
         );
         assert_eq!(summary.invalid_claims.len(), 2);
@@ -2262,9 +2513,15 @@ mod tests {
     fn rebuild_manifest() {
         let (_dir, paths) = index_test_paths("manifest");
         let claim_store = claim_store(&paths);
-        let claim = index_claim("clm_cccccccccccccccccccccccccccccccc", "Manifest Claim", CLAIM_BASIS_OWNER);
+        let claim = index_claim(
+            "clm_cccccccccccccccccccccccccccccccc",
+            "Manifest Claim",
+            CLAIM_BASIS_OWNER,
+        );
         claim_store.write_draft("research", claim).unwrap();
-        claim_store.approve("research", "clm_cccccccccccccccccccccccccccccccc").unwrap();
+        claim_store
+            .approve("research", "clm_cccccccccccccccccccccccccccccccc")
+            .unwrap();
 
         let summary = store(&paths).rebuild("research").unwrap();
         let (manifest, state) = read_published_index_state(&store(&paths), "research");
@@ -2301,7 +2558,11 @@ mod tests {
     fn check_fresh_reports_stale_after_covered_input_edit() {
         let (_dir, paths) = index_test_paths("stale-edit");
         let claim_store = claim_store(&paths);
-        let claim = index_claim("clm_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "Covered Input", CLAIM_BASIS_OWNER);
+        let claim = index_claim(
+            "clm_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "Covered Input",
+            CLAIM_BASIS_OWNER,
+        );
         claim_store.write_draft("research", claim.clone()).unwrap();
         claim_store.approve("research", &claim.id).unwrap();
         store(&paths).rebuild("research").unwrap();
@@ -2315,7 +2576,10 @@ mod tests {
         let err = store(&paths).check_fresh("research").unwrap_err();
         let message = err.to_string();
         assert!(message.contains("stale"), "{message}");
-        assert!(message.contains(&claim_path.display().to_string()), "{message}");
+        assert!(
+            message.contains(&claim_path.display().to_string()),
+            "{message}"
+        );
         assert!(message.contains("run zbrain reindex"), "{message}");
         let _ = std::fs::remove_dir_all(&_dir);
     }
@@ -2326,7 +2590,11 @@ mod tests {
         store(&paths).rebuild("research").unwrap();
         let database_path = index_database_path(&store(&paths), "research");
         let database_info = std::fs::metadata(&database_path).unwrap();
-        let claim = index_claim("clm_eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee", "Hand Authored Claim", CLAIM_BASIS_OWNER);
+        let claim = index_claim(
+            "clm_eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+            "Hand Authored Claim",
+            CLAIM_BASIS_OWNER,
+        );
         let contents = crate::claims::render_claim_markdown(&claim).unwrap();
         let claim_path = paths
             .workspaces_dir
@@ -2343,7 +2611,10 @@ mod tests {
 
         let err = store(&paths).check_fresh("research").unwrap_err();
         let message = err.to_string();
-        assert!(message.contains(&claim_path.display().to_string()), "{message}");
+        assert!(
+            message.contains(&claim_path.display().to_string()),
+            "{message}"
+        );
         assert!(message.contains("run zbrain reindex"), "{message}");
 
         store(&paths).rebuild("research").unwrap();
@@ -2355,7 +2626,11 @@ mod tests {
     fn check_fresh_reports_stale_after_trust_input_deletion() {
         let (_dir, paths) = index_test_paths("stale-deletion");
         let claim_store = claim_store(&paths);
-        let claim = index_claim("clm_ffffffffffffffffffffffffffffffff", "Deleted Claim", CLAIM_BASIS_OWNER);
+        let claim = index_claim(
+            "clm_ffffffffffffffffffffffffffffffff",
+            "Deleted Claim",
+            CLAIM_BASIS_OWNER,
+        );
         claim_store.write_draft("research", claim.clone()).unwrap();
         claim_store.approve("research", &claim.id).unwrap();
         store(&paths).rebuild("research").unwrap();
@@ -2366,7 +2641,10 @@ mod tests {
         std::fs::remove_file(&claim_path).unwrap();
         let err = store(&paths).check_fresh("research").unwrap_err();
         let message = err.to_string();
-        assert!(message.contains(&claim_path.display().to_string()), "{message}");
+        assert!(
+            message.contains(&claim_path.display().to_string()),
+            "{message}"
+        );
         assert!(message.contains("run zbrain reindex"), "{message}");
         let _ = std::fs::remove_dir_all(&_dir);
     }
@@ -2398,7 +2676,11 @@ mod tests {
         // claim edit with restored mtime
         let (_dir, paths) = index_test_paths("digest-claim");
         let claim_store = claim_store(&paths);
-        let claim = index_claim("clm_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "Content Digest Claim", CLAIM_BASIS_OWNER);
+        let claim = index_claim(
+            "clm_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "Content Digest Claim",
+            CLAIM_BASIS_OWNER,
+        );
         claim_store.write_draft("research", claim.clone()).unwrap();
         claim_store.approve("research", &claim.id).unwrap();
         store(&paths).rebuild("research").unwrap();
@@ -2414,7 +2696,10 @@ mod tests {
         set_file_times(&claim_path, modified_at);
         let err = store(&paths).check_fresh("research").unwrap_err();
         let message = err.to_string();
-        assert!(message.contains(&claim_path.display().to_string()), "{message}");
+        assert!(
+            message.contains(&claim_path.display().to_string()),
+            "{message}"
+        );
         assert!(message.contains("run zbrain reindex"), "{message}");
         let _ = std::fs::remove_dir_all(&_dir);
 
@@ -2439,7 +2724,10 @@ mod tests {
         set_file_times(&raw_path, modified_at);
         let err = store(&paths).check_fresh("research").unwrap_err();
         let message = err.to_string();
-        assert!(message.contains(&raw_path.display().to_string()), "{message}");
+        assert!(
+            message.contains(&raw_path.display().to_string()),
+            "{message}"
+        );
         assert!(message.contains("run zbrain reindex"), "{message}");
         let _ = std::fs::remove_dir_all(&_dir);
     }
@@ -2449,7 +2737,11 @@ mod tests {
         set_trust_file_change_token_override(Some(UNAVAILABLE_FILE_CHANGE_TOKEN));
         let (_dir, paths) = index_test_paths("digest-fallback");
         let claim_store = claim_store(&paths);
-        let claim = index_claim("clm_12121212121212121212121212121212", "Fallback Digest Claim", CLAIM_BASIS_OWNER);
+        let claim = index_claim(
+            "clm_12121212121212121212121212121212",
+            "Fallback Digest Claim",
+            CLAIM_BASIS_OWNER,
+        );
         claim_store.write_draft("research", claim.clone()).unwrap();
         claim_store.approve("research", &claim.id).unwrap();
         store(&paths).rebuild("research").unwrap();
@@ -2465,7 +2757,10 @@ mod tests {
         set_file_times(&claim_path, modified_at);
         let err = store(&paths).check_fresh("research").unwrap_err();
         let message = err.to_string();
-        assert!(message.contains(&claim_path.display().to_string()), "{message}");
+        assert!(
+            message.contains(&claim_path.display().to_string()),
+            "{message}"
+        );
         assert!(message.contains("run zbrain reindex"), "{message}");
         set_trust_file_change_token_override(None);
         let _ = std::fs::remove_dir_all(&_dir);
@@ -2483,7 +2778,10 @@ mod tests {
         set_file_times(&projects_dir, modified_at);
         let err = store(&paths).check_fresh("research").unwrap_err();
         let message = err.to_string();
-        assert!(message.contains(&added_path.display().to_string()), "{message}");
+        assert!(
+            message.contains(&added_path.display().to_string()),
+            "{message}"
+        );
         assert!(message.contains("run zbrain reindex"), "{message}");
         let _ = std::fs::remove_dir_all(&_dir);
     }
@@ -2491,7 +2789,9 @@ mod tests {
     #[test]
     fn check_fresh_reports_stale_after_evidence_edit() {
         let (_dir, paths) = index_test_paths("stale-evidence");
-        let source_root = paths.workspaces_dir.join("research/evidence/sources/evd_test");
+        let source_root = paths
+            .workspaces_dir
+            .join("research/evidence/sources/evd_test");
         std::fs::create_dir_all(&source_root).unwrap();
         let metadata_path = source_root.join("source.yaml");
         let raw_path = source_root.join("raw");
@@ -2501,7 +2801,10 @@ mod tests {
         std::fs::write(&raw_path, b"changed evidence\n").unwrap();
         let err = store(&paths).check_fresh("research").unwrap_err();
         let message = err.to_string();
-        assert!(message.contains(&raw_path.display().to_string()), "{message}");
+        assert!(
+            message.contains(&raw_path.display().to_string()),
+            "{message}"
+        );
         assert!(message.contains("run zbrain reindex"), "{message}");
         let _ = std::fs::remove_dir_all(&_dir);
     }
@@ -2512,12 +2815,17 @@ mod tests {
         store(&paths).rebuild("research").unwrap();
         let outside_path = _dir.join("outside.md");
         std::fs::write(&outside_path, b"outside\n").unwrap();
-        let link_path = paths.workspaces_dir.join("research/wiki/projects/linked.md");
+        let link_path = paths
+            .workspaces_dir
+            .join("research/wiki/projects/linked.md");
         std::os::unix::fs::symlink(&outside_path, &link_path).unwrap();
         let err = store(&paths).check_fresh("research").unwrap_err();
         let message = err.to_string();
         assert!(message.contains("symlink"), "{message}");
-        assert!(message.contains(&link_path.display().to_string()), "{message}");
+        assert!(
+            message.contains(&link_path.display().to_string()),
+            "{message}"
+        );
         let _ = std::fs::remove_dir_all(&_dir);
     }
 
@@ -2549,7 +2857,9 @@ mod tests {
 
         // rejected
         let (_dir, paths) = index_test_paths("fresh-rejected");
-        let legacy_path = paths.workspaces_dir.join("research/wiki/projects/legacy.md");
+        let legacy_path = paths
+            .workspaces_dir
+            .join("research/wiki/projects/legacy.md");
         std::fs::write(&legacy_path, b"legacy input\n").unwrap();
         store(&paths).rebuild("research").unwrap();
         let err = store(&paths).check_fresh("research").unwrap_err();
@@ -2571,7 +2881,9 @@ mod tests {
     #[test]
     fn rebuild_rejected_state() {
         let (_dir, paths) = index_test_paths("rejected-state");
-        let legacy_path = paths.workspaces_dir.join("research/wiki/projects/legacy.md");
+        let legacy_path = paths
+            .workspaces_dir
+            .join("research/wiki/projects/legacy.md");
         std::fs::write(&legacy_path, b"legacy input\n").unwrap();
         let summary = store(&paths).rebuild("research").unwrap();
         let (_manifest, state) = read_published_index_state(&store(&paths), "research");
@@ -2588,7 +2900,9 @@ mod tests {
         let (_dir, paths) = index_test_paths("failure-dirty");
         let outside = _dir.join("outside.md");
         std::fs::write(&outside, b"outside\n").unwrap();
-        let linked = paths.workspaces_dir.join("research/wiki/projects/linked.md");
+        let linked = paths
+            .workspaces_dir
+            .join("research/wiki/projects/linked.md");
         std::os::unix::fs::symlink(&outside, &linked).unwrap();
 
         assert!(store(&paths).rebuild("research").is_err());
@@ -2604,7 +2918,11 @@ mod tests {
     fn rebuild_does_not_mutate_canonical() {
         let (_dir, paths) = index_test_paths("canonical-unchanged");
         let claim_store = claim_store(&paths);
-        let claim = index_claim("clm_dddddddddddddddddddddddddddddddd", "Canonical Claim", CLAIM_BASIS_OWNER);
+        let claim = index_claim(
+            "clm_dddddddddddddddddddddddddddddddd",
+            "Canonical Claim",
+            CLAIM_BASIS_OWNER,
+        );
         claim_store.write_draft("research", claim.clone()).unwrap();
         claim_store.approve("research", &claim.id).unwrap();
         let claim_path = paths
@@ -2662,20 +2980,24 @@ mod tests {
         for workspace in ["../outside", "missing"] {
             assert!(store(&paths).mark_dirty(workspace).is_err(), "{workspace}");
             assert!(store(&paths).check_fresh(workspace).is_err(), "{workspace}");
-            assert!(store(&paths)
-                .search(
-                    workspace,
-                    SearchOptions {
-                        query: "anything".into(),
-                        statuses: vec![CLAIM_STATUS_APPROVED.into()],
-                        limit: 10,
-                    },
-                )
-                .is_err(), "{workspace}");
+            assert!(
+                store(&paths)
+                    .search(
+                        workspace,
+                        SearchOptions {
+                            query: "anything".into(),
+                            statuses: vec![CLAIM_STATUS_APPROVED.into()],
+                            limit: 10,
+                        },
+                    )
+                    .is_err(),
+                "{workspace}"
+            );
             assert!(store(&paths).rebuild(workspace).is_err(), "{workspace}");
         }
 
-        std::os::unix::fs::symlink(std::env::temp_dir(), paths.workspaces_dir.join("linked")).unwrap();
+        std::os::unix::fs::symlink(std::env::temp_dir(), paths.workspaces_dir.join("linked"))
+            .unwrap();
         assert!(store(&paths).mark_dirty("linked").is_err());
         assert!(store(&paths).check_fresh("linked").is_err());
         assert!(store(&paths)
@@ -2724,7 +3046,10 @@ mod tests {
 
     #[test]
     fn index_operations_allow_symlinked_ancestor_path() {
-        let dir = std::env::temp_dir().join(format!("zbrain-index-{}-symlink-ancestor", std::process::id()));
+        let dir = std::env::temp_dir().join(format!(
+            "zbrain-index-{}-symlink-ancestor",
+            std::process::id()
+        ));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         let real_root = dir.join("real");
@@ -2738,7 +3063,8 @@ mod tests {
         })
         .unwrap();
         crate::config::ensure_config(&paths.config_file).unwrap();
-        crate::workspace::create_workspace(&paths, "research", &FixedClock::new(fixed_index_now())).unwrap();
+        crate::workspace::create_workspace(&paths, "research", &FixedClock::new(fixed_index_now()))
+            .unwrap();
         store(&paths).mark_dirty("research").unwrap();
         assert!(index_dirty_path(&store(&paths), "research").exists());
         let _ = std::fs::remove_dir_all(&dir);
@@ -2755,7 +3081,8 @@ mod tests {
             let before = b"outside database bytes".to_vec();
             std::fs::write(&outside, &before).unwrap();
             std::fs::remove_file(index_database_path(&store(&paths), "research")).unwrap();
-            std::os::unix::fs::symlink(&outside, index_database_path(&store(&paths), "research")).unwrap();
+            std::os::unix::fs::symlink(&outside, index_database_path(&store(&paths), "research"))
+                .unwrap();
             assert!(store(&paths).mark_dirty("research").is_err());
             assert!(store(&paths).check_fresh("research").is_err());
             assert!(store(&paths)
@@ -2778,7 +3105,8 @@ mod tests {
             let outside = _dir.join("outside.dirty");
             let before = b"outside dirty bytes".to_vec();
             std::fs::write(&outside, &before).unwrap();
-            std::os::unix::fs::symlink(&outside, index_dirty_path(&store(&paths), "research")).unwrap();
+            std::os::unix::fs::symlink(&outside, index_dirty_path(&store(&paths), "research"))
+                .unwrap();
             assert!(store(&paths).mark_dirty("research").is_err());
             assert!(store(&paths).check_fresh("research").is_err());
             assert!(store(&paths)
@@ -2801,10 +3129,16 @@ mod tests {
     fn reindex_is_deterministic_after_deleting_index() {
         let (_dir, paths) = index_test_paths("deterministic");
         let claim_store = claim_store(&paths);
-        let mut claim = index_claim("clm_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "Deterministic Search", CLAIM_BASIS_OWNER);
+        let mut claim = index_claim(
+            "clm_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "Deterministic Search",
+            CLAIM_BASIS_OWNER,
+        );
         claim.body = "alpha beta deterministic body\n".into();
         claim_store.write_draft("research", claim).unwrap();
-        claim_store.approve("research", "clm_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa").unwrap();
+        claim_store
+            .approve("research", "clm_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+            .unwrap();
         store(&paths).rebuild("research").unwrap();
         let first = store(&paths)
             .search(
@@ -2837,10 +3171,35 @@ mod tests {
 
     #[test]
     fn approved_catalog_omits_drafts_and_sorts() {
-        let draft = Claim { id: "clm_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb".into(), title: "Draft".into(), tier: "projects".into(), status: CLAIM_STATUS_DRAFT.into(), ..Claim::default() };
-        let second = Claim { id: "clm_cccccccccccccccccccccccccccccccc".into(), title: "Second".into(), tier: "axioms".into(), status: CLAIM_STATUS_APPROVED.into(), stale_after: "2027-01-01T00:00:00Z".into(), ..Claim::default() };
-        let first = Claim { id: "clm_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".into(), title: "First".into(), tier: "projects".into(), status: CLAIM_STATUS_APPROVED.into(), ..Claim::default() };
-        let revoked = Claim { id: "clm_dddddddddddddddddddddddddddddddd".into(), title: "Revoked".into(), tier: "projects".into(), status: crate::claims::CLAIM_STATUS_REVOKED.into(), ..Claim::default() };
+        let draft = Claim {
+            id: "clm_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb".into(),
+            title: "Draft".into(),
+            tier: "projects".into(),
+            status: CLAIM_STATUS_DRAFT.into(),
+            ..Claim::default()
+        };
+        let second = Claim {
+            id: "clm_cccccccccccccccccccccccccccccccc".into(),
+            title: "Second".into(),
+            tier: "axioms".into(),
+            status: CLAIM_STATUS_APPROVED.into(),
+            stale_after: "2027-01-01T00:00:00Z".into(),
+            ..Claim::default()
+        };
+        let first = Claim {
+            id: "clm_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".into(),
+            title: "First".into(),
+            tier: "projects".into(),
+            status: CLAIM_STATUS_APPROVED.into(),
+            ..Claim::default()
+        };
+        let revoked = Claim {
+            id: "clm_dddddddddddddddddddddddddddddddd".into(),
+            title: "Revoked".into(),
+            tier: "projects".into(),
+            status: crate::claims::CLAIM_STATUS_REVOKED.into(),
+            ..Claim::default()
+        };
         let got = approved_catalog(&[draft, second, first, revoked]);
         assert_eq!(got.len(), 2);
         assert_eq!(got[0].id, "clm_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
@@ -2854,9 +3213,15 @@ mod tests {
     fn rebuild_does_not_write_wiki_catalog() {
         let (_dir, paths) = index_test_paths("no-catalog");
         let claim_store = claim_store(&paths);
-        let claim = index_claim("clm_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "Catalog Claim", CLAIM_BASIS_OWNER);
+        let claim = index_claim(
+            "clm_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "Catalog Claim",
+            CLAIM_BASIS_OWNER,
+        );
         claim_store.write_draft("research", claim).unwrap();
-        claim_store.approve("research", "clm_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa").unwrap();
+        claim_store
+            .approve("research", "clm_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+            .unwrap();
         store(&paths).rebuild("research").unwrap();
         let wiki = paths.workspaces_dir.join("research/wiki");
         let mut files = Vec::new();
@@ -2864,7 +3229,10 @@ mod tests {
         for path in files {
             let name = path.file_name().unwrap().to_string_lossy().to_string();
             assert!(
-                !matches!(name.as_str(), "catalog.json" | "_catalog.json" | "index.md" | "_index.md"),
+                !matches!(
+                    name.as_str(),
+                    "catalog.json" | "_catalog.json" | "index.md" | "_index.md"
+                ),
                 "unexpected catalog file {}",
                 path.display()
             );

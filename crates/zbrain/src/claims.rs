@@ -9,12 +9,16 @@ use std::path::{Path, PathBuf};
 use serde::Deserialize;
 use sha2::{Digest as ShaDigest, Sha256};
 
-use crate::boundary::{resolve_workspace_path, safe_relative_path, validate_workspace, BoundaryError};
+use crate::boundary::{
+    resolve_workspace_path, safe_relative_path, validate_workspace, BoundaryError,
+};
 use crate::coordination::{
     begin_canonical_mutation_unlocked, run_workspace_generation_test_hook, MutationError,
     WORKSPACE_GENERATION_HOOK_BEFORE_CANONICAL_WRITE,
 };
-use crate::paths::{ensure_directory_mode, ensure_file_mode, Paths, RUNTIME_DIRECTORY_MODE, RUNTIME_METADATA_MODE};
+use crate::paths::{
+    ensure_directory_mode, ensure_file_mode, Paths, RUNTIME_DIRECTORY_MODE, RUNTIME_METADATA_MODE,
+};
 use crate::workspace::WIKI_TIERS;
 use crate::yaml::{self, Yaml, YamlStyle};
 
@@ -148,8 +152,8 @@ impl From<MutationError> for ClaimError {
     }
 }
 
-impl From<serde_yml::Error> for ClaimError {
-    fn from(source: serde_yml::Error) -> Self {
+impl From<serde_yaml::Error> for ClaimError {
+    fn from(source: serde_yaml::Error) -> Self {
         Self::Message(source.to_string())
     }
 }
@@ -184,7 +188,10 @@ fn has_id_prefix(value: &str, prefix: &str) -> bool {
     let Some(rest) = value.strip_prefix(prefix) else {
         return false;
     };
-    rest.len() == 32 && rest.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+    rest.len() == 32
+        && rest
+            .bytes()
+            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
 }
 
 pub fn new_claim_id() -> Result<String, std::io::Error> {
@@ -213,7 +220,7 @@ fn hex_lower(bytes: &[u8]) -> String {
 }
 
 // ---------------------------------------------------------------------------
-// Frontmatter parsing (serde_yml — output style is irrelevant on this side).
+// Frontmatter parsing (serde_yaml — output style is irrelevant on this side).
 // ---------------------------------------------------------------------------
 
 #[derive(Deserialize, Default)]
@@ -386,7 +393,11 @@ fn transitions_from_yaml(transitions: Vec<ClaimTransitionYaml>) -> Vec<ClaimTran
 // Parse / render.
 // ---------------------------------------------------------------------------
 
-pub fn parse_claim_markdown(tier: &str, rel_path: &str, contents: &[u8]) -> Result<Claim, ClaimError> {
+pub fn parse_claim_markdown(
+    tier: &str,
+    rel_path: &str,
+    contents: &[u8],
+) -> Result<Claim, ClaimError> {
     let (frontmatter, body) = split_markdown_frontmatter(contents)?;
     let path_tier = rel_path.split('/').next().unwrap_or("");
     let tier = if tier.is_empty() { path_tier } else { tier };
@@ -396,7 +407,7 @@ pub fn parse_claim_markdown(tier: &str, rel_path: &str, contents: &[u8]) -> Resu
         )));
     }
 
-    let probe: ProbeFrontmatter = serde_yml::from_slice(frontmatter)?;
+    let probe: ProbeFrontmatter = serde_yaml::from_slice(frontmatter)?;
     let claim = if probe.schema == CLAIM_SCHEMA_VERSION {
         parse_legacy_claim_frontmatter(frontmatter, tier, rel_path, body)?
     } else if probe.claim_type == OKF_CLAIM_TYPE {
@@ -430,7 +441,7 @@ fn parse_legacy_claim_frontmatter(
     rel_path: &str,
     body: &[u8],
 ) -> Result<Claim, ClaimError> {
-    let metadata: LegacyFrontmatterYaml = serde_yml::from_slice(frontmatter)?;
+    let metadata: LegacyFrontmatterYaml = serde_yaml::from_slice(frontmatter)?;
     let (verified_at, verified_by, verified_digest) = metadata
         .verified
         .map(|verified| (verified.at, verified.by, verified.digest))
@@ -486,7 +497,7 @@ fn parse_okf_claim_frontmatter(
     rel_path: &str,
     body: &[u8],
 ) -> Result<Claim, ClaimError> {
-    let metadata: OkfFrontmatterYaml = serde_yml::from_slice(frontmatter)?;
+    let metadata: OkfFrontmatterYaml = serde_yaml::from_slice(frontmatter)?;
     let mut claim = Claim {
         claim_type: metadata.claim_type,
         id: metadata.zbrain.id,
@@ -570,7 +581,10 @@ pub fn render_claim_markdown(claim: &Claim) -> Result<Vec<u8>, ClaimError> {
         zbrain_entries.push(("evidence_ids", Yaml::string_list(&claim.evidence_ids)));
     }
     if !claim.supporting_claim_ids.is_empty() {
-        zbrain_entries.push(("supporting_claim_ids", Yaml::string_list(&claim.supporting_claim_ids)));
+        zbrain_entries.push((
+            "supporting_claim_ids",
+            Yaml::string_list(&claim.supporting_claim_ids),
+        ));
     }
     if !claim.supersedes.is_empty() {
         zbrain_entries.push(("supersedes", Yaml::string_list(&claim.supersedes)));
@@ -624,7 +638,10 @@ pub fn render_claim_markdown(claim: &Claim) -> Result<Vec<u8>, ClaimError> {
             ]),
         ));
     }
-    if !claim.verified_at.is_empty() || !claim.verified_by.is_empty() || !claim.verified_digest.is_empty() {
+    if !claim.verified_at.is_empty()
+        || !claim.verified_by.is_empty()
+        || !claim.verified_digest.is_empty()
+    {
         metadata.push((
             "verified",
             Yaml::map(vec![
@@ -640,7 +657,10 @@ pub fn render_claim_markdown(claim: &Claim) -> Result<Vec<u8>, ClaimError> {
     }
     metadata.push(("zbrain", Yaml::map(zbrain_entries)));
 
-    Ok(yaml::emit_markdown_document(&Yaml::map(metadata), &claim.body))
+    Ok(yaml::emit_markdown_document(
+        &Yaml::map(metadata),
+        &claim.body,
+    ))
 }
 
 fn sources_to_yaml(sources: &[ClaimSource]) -> Yaml {
@@ -695,7 +715,10 @@ fn transitions_to_yaml(transitions: &[ClaimTransition]) -> Yaml {
                     entries.push(("reason", Yaml::scalar(&transition.reason)));
                 }
                 if !transition.related_claim_ids.is_empty() {
-                    entries.push(("related_claim_ids", Yaml::string_list(&transition.related_claim_ids)));
+                    entries.push((
+                        "related_claim_ids",
+                        Yaml::string_list(&transition.related_claim_ids),
+                    ));
                 }
                 if !transition.prior_verification_digest.is_empty() {
                     entries.push((
@@ -745,7 +768,10 @@ pub fn validate_claim(claim: &Claim) -> Result<(), ClaimError> {
         return Err(message("claim id must match clm_<32 lowercase hex chars>"));
     }
     if !is_known_wiki_tier(&claim.tier) {
-        return Err(message(format!("claim tier {:?} is not supported", claim.tier)));
+        return Err(message(format!(
+            "claim tier {:?} is not supported",
+            claim.tier
+        )));
     }
     if !is_known_claim_status(&claim.status) {
         return Err(message(format!(
@@ -764,11 +790,18 @@ pub fn validate_claim(claim: &Claim) -> Result<(), ClaimError> {
     }
     for source in &claim.sources {
         for span in &source.spans {
-            if !is_evidence_id(&span.evidence_id) || span.start_line < 1 || span.end_line < span.start_line {
-                return Err(message("claim evidence span has invalid evidence or line range"));
+            if !is_evidence_id(&span.evidence_id)
+                || span.start_line < 1
+                || span.end_line < span.start_line
+            {
+                return Err(message(
+                    "claim evidence span has invalid evidence or line range",
+                ));
             }
             if !span.digest.starts_with("sha256:span-v1:") {
-                return Err(message("claim evidence span digest must use sha256:span-v1:<hex>"));
+                return Err(message(
+                    "claim evidence span digest must use sha256:span-v1:<hex>",
+                ));
             }
         }
     }
@@ -778,7 +811,10 @@ pub fn validate_claim(claim: &Claim) -> Result<(), ClaimError> {
     if claim.created_by.trim().is_empty() {
         return Err(message("claim generated.by is required"));
     }
-    if !claim.verified_at.is_empty() || !claim.verified_by.is_empty() || !claim.verified_digest.is_empty() {
+    if !claim.verified_at.is_empty()
+        || !claim.verified_by.is_empty()
+        || !claim.verified_digest.is_empty()
+    {
         if crate::clock::parse_rfc3339(&claim.verified_at).is_err() {
             return Err(message("claim verified.at must be RFC3339"));
         }
@@ -810,7 +846,11 @@ pub fn validate_claim(claim: &Claim) -> Result<(), ClaimError> {
             return Err(message("source digest must use sha256:<hex>"));
         }
     }
-    for ids in [&claim.supporting_claim_ids, &claim.supersedes, &claim.conflicts_with] {
+    for ids in [
+        &claim.supporting_claim_ids,
+        &claim.supersedes,
+        &claim.conflicts_with,
+    ] {
         for id in ids {
             if !is_claim_id(id) {
                 return Err(message(format!(
@@ -990,8 +1030,14 @@ pub fn detect_contradictions(draft: &Claim, approved_claims: &[Claim]) -> Vec<Co
                 heuristics.insert(heuristic);
             }
         }
-        for heuristic in [CONTRADICTION_STATUS_CHANGE, CONTRADICTION_NEGATION, CONTRADICTION_VALUE_SWAP] {
-            if !heuristics.contains(heuristic) || !seen.insert(format!("{}/{}", approved.id, heuristic)) {
+        for heuristic in [
+            CONTRADICTION_STATUS_CHANGE,
+            CONTRADICTION_NEGATION,
+            CONTRADICTION_VALUE_SWAP,
+        ] {
+            if !heuristics.contains(heuristic)
+                || !seen.insert(format!("{}/{}", approved.id, heuristic))
+            {
                 continue;
             }
             contradictions.push(Contradiction {
@@ -1019,7 +1065,16 @@ fn classify_contradiction(draft_text: &str, approved_text: &str) -> Option<&'sta
 fn negator(token: &str) -> bool {
     matches!(
         token,
-        "not" | "no" | "never" | "cannot" | "cant" | "dont" | "doesnt" | "isnt" | "arent" | "wont"
+        "not"
+            | "no"
+            | "never"
+            | "cannot"
+            | "cant"
+            | "dont"
+            | "doesnt"
+            | "isnt"
+            | "arent"
+            | "wont"
             | "without"
     )
 }
@@ -1034,16 +1089,37 @@ fn predicate(token: &str) -> bool {
 fn status_word(token: &str) -> bool {
     matches!(
         token,
-        "deprecated" | "obsolete" | "active" | "current" | "recommended" | "rejected" | "approved"
-            | "stable" | "experimental" | "required" | "optional" | "enabled" | "disabled"
+        "deprecated"
+            | "obsolete"
+            | "active"
+            | "current"
+            | "recommended"
+            | "rejected"
+            | "approved"
+            | "stable"
+            | "experimental"
+            | "required"
+            | "optional"
+            | "enabled"
+            | "disabled"
     )
 }
 
 fn auxiliary(token: &str) -> bool {
     matches!(
         token,
-        "do" | "does" | "did" | "can" | "will" | "would" | "may" | "might" | "with" | "without"
-            | "also" | "even" | "still"
+        "do" | "does"
+            | "did"
+            | "can"
+            | "will"
+            | "would"
+            | "may"
+            | "might"
+            | "with"
+            | "without"
+            | "also"
+            | "even"
+            | "still"
     )
 }
 
@@ -1162,7 +1238,8 @@ fn detect_status_change(draft_text: &str, approved_text: &str) -> bool {
     if !status_word(draft_status) || !status_word(approved_status) {
         return false;
     }
-    equal_token_slices(&draft_clause.subject, &approved_clause.subject) && draft_status != approved_status
+    equal_token_slices(&draft_clause.subject, &approved_clause.subject)
+        && draft_status != approved_status
 }
 
 // ---------------------------------------------------------------------------
@@ -1201,14 +1278,17 @@ pub fn is_known_claim_status(status: &str) -> bool {
 }
 
 pub fn is_known_claim_basis(basis: &str) -> bool {
-    matches!(basis, CLAIM_BASIS_OWNER | CLAIM_BASIS_EVIDENCE | CLAIM_BASIS_DERIVED)
+    matches!(
+        basis,
+        CLAIM_BASIS_OWNER | CLAIM_BASIS_EVIDENCE | CLAIM_BASIS_DERIVED
+    )
 }
 
 fn is_zbrain_claim_document(contents: &[u8]) -> bool {
     let Ok((frontmatter, _)) = split_markdown_frontmatter(contents) else {
         return false;
     };
-    let Ok(probe) = serde_yml::from_slice::<ProbeFrontmatter>(frontmatter) else {
+    let Ok(probe) = serde_yaml::from_slice::<ProbeFrontmatter>(frontmatter) else {
         return false;
     };
     probe.schema == CLAIM_SCHEMA_VERSION || probe.claim_type == OKF_CLAIM_TYPE
@@ -1220,7 +1300,10 @@ impl ClaimStore {
     }
 
     pub fn with_clock(paths: Paths, now: std::sync::Arc<dyn crate::clock::Clock>) -> Self {
-        Self { paths, now: Some(now) }
+        Self {
+            paths,
+            now: Some(now),
+        }
     }
 
     pub(crate) fn now(&self) -> chrono::DateTime<chrono::Utc> {
@@ -1238,7 +1321,11 @@ impl ClaimStore {
         self.write_draft_unlocked(workspace, claim)
     }
 
-    pub(crate) fn write_draft_unlocked(&self, workspace: &str, mut claim: Claim) -> Result<Claim, ClaimError> {
+    pub(crate) fn write_draft_unlocked(
+        &self,
+        workspace: &str,
+        mut claim: Claim,
+    ) -> Result<Claim, ClaimError> {
         let requested_path = claim.path.clone();
         claim.schema = String::new();
         claim.claim_type = OKF_CLAIM_TYPE.to_string();
@@ -1302,7 +1389,10 @@ impl ClaimStore {
         Ok(claim)
     }
 
-    fn approved_claims_for_contradictions(&self, workspace: &str) -> Result<Vec<Claim>, ClaimError> {
+    fn approved_claims_for_contradictions(
+        &self,
+        workspace: &str,
+    ) -> Result<Vec<Claim>, ClaimError> {
         let wiki_root = resolve_workspace_path(&self.paths, workspace, "wiki")?;
         match std::fs::symlink_metadata(&wiki_root) {
             Ok(_) => {}
@@ -1418,7 +1508,11 @@ impl ClaimStore {
         self.scan_workspace_inner(workspace, false)
     }
 
-    pub(crate) fn scan_workspace_inner(&self, workspace: &str, verify_digests: bool) -> Result<ClaimScan, ClaimError> {
+    pub(crate) fn scan_workspace_inner(
+        &self,
+        workspace: &str,
+        verify_digests: bool,
+    ) -> Result<ClaimScan, ClaimError> {
         let workspace_root = validate_workspace(&self.paths, workspace)?;
         let wiki_root = resolve_workspace_path(&self.paths, workspace, "wiki")?;
         match std::fs::metadata(&wiki_root) {
@@ -1455,7 +1549,10 @@ impl ClaimStore {
             let claim = match parse_claim_markdown(&tier, &rel, &contents) {
                 Ok(claim) => claim,
                 Err(err) => {
-                    invalid_by_path.entry(rel.clone()).or_default().push(err.to_string());
+                    invalid_by_path
+                        .entry(rel.clone())
+                        .or_default()
+                        .push(err.to_string());
                     continue;
                 }
             };
@@ -1465,7 +1562,10 @@ impl ClaimStore {
                 .push((claim.clone(), rel.clone()));
             if verify_digests {
                 if let Err(err) = verify_claim_digest(&claim) {
-                    invalid_by_path.entry(rel.clone()).or_default().push(err.to_string());
+                    invalid_by_path
+                        .entry(rel.clone())
+                        .or_default()
+                        .push(err.to_string());
                 }
             }
             parsed.push((claim, rel));
@@ -1486,13 +1586,19 @@ impl ClaimStore {
                 paths.join(", ")
             );
             for (_, path) in claims {
-                invalid_by_path.entry(path.clone()).or_default().push(reason.clone());
+                invalid_by_path
+                    .entry(path.clone())
+                    .or_default()
+                    .push(reason.clone());
             }
         }
 
         parsed.sort_by(|left, right| left.1.cmp(&right.1));
         for (claim, path) in &parsed {
-            if invalid_by_path.get(path).is_some_and(|reasons| !reasons.is_empty()) {
+            if invalid_by_path
+                .get(path)
+                .is_some_and(|reasons| !reasons.is_empty())
+            {
                 continue;
             }
             scan.claims.push(claim.clone());
@@ -1512,11 +1618,19 @@ impl ClaimStore {
     }
 
     pub(crate) fn claim_path(&self, workspace: &str, claim: &Claim) -> Result<PathBuf, ClaimError> {
-        let relative = format!("wiki/{}/{id_file}.md", claim.tier, id_file = format!("{}.md", claim.id).replace(".md", ""));
+        let relative = format!(
+            "wiki/{}/{id_file}.md",
+            claim.tier,
+            id_file = format!("{}.md", claim.id).replace(".md", "")
+        );
         resolve_workspace_path(&self.paths, workspace, &relative).map_err(ClaimError::Boundary)
     }
 
-    pub(crate) fn claim_file_path(&self, workspace: &str, claim: &Claim) -> Result<PathBuf, ClaimError> {
+    pub(crate) fn claim_file_path(
+        &self,
+        workspace: &str,
+        claim: &Claim,
+    ) -> Result<PathBuf, ClaimError> {
         if !claim.path.is_empty() {
             if !claim.path.ends_with(".md") {
                 return Err(message(format!("claim path {:?} is not safe", claim.path)));
@@ -1620,7 +1734,11 @@ pub fn write_claim_atomic(path: &Path, claim: &Claim) -> Result<(), ClaimError> 
         ensure_directory_mode(dir, RUNTIME_DIRECTORY_MODE)?;
     }
     let dir = path.parent().expect("claim path has parent");
-    let file_name = path.file_name().expect("claim path has file name").to_string_lossy().to_string();
+    let file_name = path
+        .file_name()
+        .expect("claim path has file name")
+        .to_string_lossy()
+        .to_string();
     let mut temporary_path = None;
     for attempt in 0..64 {
         let candidate = dir.join(format!(
@@ -1628,7 +1746,7 @@ pub fn write_claim_atomic(path: &Path, claim: &Claim) -> Result<(), ClaimError> 
             std::process::id(),
             attempt
         ));
-            use std::os::unix::fs::OpenOptionsExt;
+        use std::os::unix::fs::OpenOptionsExt;
         match std::fs::OpenOptions::new()
             .write(true)
             .create_new(true)
@@ -1750,12 +1868,15 @@ mod tests {
         let rendered = render_claim_markdown(&claim).unwrap();
         let rendered = String::from_utf8(rendered).unwrap();
         assert!(
-            rendered.contains("type: zbrain.claim") && rendered.contains("profile: zbrain.trusted-memory/v1"),
+            rendered.contains("type: zbrain.claim")
+                && rendered.contains("profile: zbrain.trusted-memory/v1"),
             "rendered claim is not an OKF zbrain concept:\n{rendered}"
         );
         assert!(!rendered.contains("schema: zbrain.claim/v1"));
 
-        let parsed = parse_claim_markdown("projects", "projects/trusted-ask.md", rendered.as_bytes()).unwrap();
+        let parsed =
+            parse_claim_markdown("projects", "projects/trusted-ask.md", rendered.as_bytes())
+                .unwrap();
         assert_eq!(parsed.body, claim.body);
         assert_eq!(parsed.id, claim.id);
         assert_eq!(parsed.title, claim.title);
@@ -1789,7 +1910,9 @@ mod tests {
             }],
         }];
         let rendered = render_claim_markdown(&claim).unwrap();
-        let parsed = parse_claim_markdown("projects", &format!("projects/{}.md", claim.id), &rendered).unwrap();
+        let parsed =
+            parse_claim_markdown("projects", &format!("projects/{}.md", claim.id), &rendered)
+                .unwrap();
         assert_eq!(parsed.sources.len(), 1);
         assert_eq!(parsed.sources[0].spans.len(), 1);
         assert_eq!(parsed.sources[0].spans[0].start_line, 2);
@@ -1811,7 +1934,8 @@ mod tests {
 
             let rendered = render_claim_markdown(&claim).unwrap();
             let parsed =
-                parse_claim_markdown("projects", &format!("projects/{}.md", claim.id), &rendered).unwrap();
+                parse_claim_markdown("projects", &format!("projects/{}.md", claim.id), &rendered)
+                    .unwrap();
             let got = claim_verification_digest(&parsed).unwrap();
             assert_eq!(got, parsed.verified_digest);
         }
@@ -1846,13 +1970,22 @@ mod tests {
         ];
 
         let rendered = String::from_utf8(render_claim_markdown(&claim).unwrap()).unwrap();
-        assert!(rendered.contains("transitions:") && rendered.contains("prior_verification_digest:"));
-        let parsed = parse_claim_markdown("projects", "projects/claim.md", rendered.as_bytes()).unwrap();
+        assert!(
+            rendered.contains("transitions:") && rendered.contains("prior_verification_digest:")
+        );
+        let parsed =
+            parse_claim_markdown("projects", "projects/claim.md", rendered.as_bytes()).unwrap();
         assert_eq!(parsed.transitions.len(), 3);
         assert_eq!(parsed.transitions[1].kind, CLAIM_TRANSITION_SUPERSEDE);
         assert_eq!(parsed.transitions[1].reason, "corrected scope");
-        assert_eq!(parsed.transitions[1].related_claim_ids[0], "clm_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb");
-        assert_eq!(parsed.transitions[1].prior_verification_digest, format!("sha256:{}", "a".repeat(64)));
+        assert_eq!(
+            parsed.transitions[1].related_claim_ids[0],
+            "clm_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+        );
+        assert_eq!(
+            parsed.transitions[1].prior_verification_digest,
+            format!("sha256:{}", "a".repeat(64))
+        );
 
         let rendered_again = String::from_utf8(render_claim_markdown(&parsed).unwrap()).unwrap();
         assert_eq!(rendered_again, rendered);
@@ -1891,8 +2024,12 @@ mod tests {
 
         let rendered = String::from_utf8(render_claim_markdown(&claim).unwrap()).unwrap();
         assert!(!rendered.contains("transitions:"));
-        let parsed =
-            parse_claim_markdown("projects", &format!("projects/{}.md", claim.id), rendered.as_bytes()).unwrap();
+        let parsed = parse_claim_markdown(
+            "projects",
+            &format!("projects/{}.md", claim.id),
+            rendered.as_bytes(),
+        )
+        .unwrap();
         assert!(parsed.transitions.is_empty());
         verify_claim_digest(&parsed).unwrap();
     }
@@ -1907,9 +2044,18 @@ mod tests {
         };
         type TransitionCase = (&'static str, Box<dyn Fn(&mut ClaimTransition)>);
         let mutations: Vec<TransitionCase> = vec![
-            ("unknown kind", Box::new(|t: &mut ClaimTransition| t.kind = "publish".into())),
-            ("invalid time", Box::new(|t: &mut ClaimTransition| t.at = "not-a-time".into())),
-            ("empty actor", Box::new(|t: &mut ClaimTransition| t.by = "  ".into())),
+            (
+                "unknown kind",
+                Box::new(|t: &mut ClaimTransition| t.kind = "publish".into()),
+            ),
+            (
+                "invalid time",
+                Box::new(|t: &mut ClaimTransition| t.at = "not-a-time".into()),
+            ),
+            (
+                "empty actor",
+                Box::new(|t: &mut ClaimTransition| t.by = "  ".into()),
+            ),
             (
                 "unsafe related id",
                 Box::new(|t: &mut ClaimTransition| t.related_claim_ids = vec!["../outside".into()]),
@@ -1933,12 +2079,45 @@ mod tests {
 
         type DigestCase = (&'static str, Box<dyn Fn(&mut Claim)>, &'static str);
         let cases: Vec<DigestCase> = vec![
-            ("tampered body", Box::new(|c: &mut Claim| c.body = "Tampered body\n".into()), "verification digest mismatch"),
-            ("tampered title", Box::new(|c: &mut Claim| c.title = "Tampered title".into()), "verification digest mismatch"),
-            ("missing digest", Box::new(|c: &mut Claim| c.verified_digest = String::new()), "missing verification digest"),
-            ("draft is skipped", Box::new(|c: &mut Claim| { c.status = CLAIM_STATUS_DRAFT.into(); c.verified_digest = String::new(); }), ""),
-            ("superseded is skipped", Box::new(|c: &mut Claim| { c.status = CLAIM_STATUS_SUPERSEDED.into(); c.verified_digest = String::new(); }), ""),
-            ("revoked is skipped", Box::new(|c: &mut Claim| { c.status = CLAIM_STATUS_REVOKED.into(); c.verified_digest = String::new(); }), ""),
+            (
+                "tampered body",
+                Box::new(|c: &mut Claim| c.body = "Tampered body\n".into()),
+                "verification digest mismatch",
+            ),
+            (
+                "tampered title",
+                Box::new(|c: &mut Claim| c.title = "Tampered title".into()),
+                "verification digest mismatch",
+            ),
+            (
+                "missing digest",
+                Box::new(|c: &mut Claim| c.verified_digest = String::new()),
+                "missing verification digest",
+            ),
+            (
+                "draft is skipped",
+                Box::new(|c: &mut Claim| {
+                    c.status = CLAIM_STATUS_DRAFT.into();
+                    c.verified_digest = String::new();
+                }),
+                "",
+            ),
+            (
+                "superseded is skipped",
+                Box::new(|c: &mut Claim| {
+                    c.status = CLAIM_STATUS_SUPERSEDED.into();
+                    c.verified_digest = String::new();
+                }),
+                "",
+            ),
+            (
+                "revoked is skipped",
+                Box::new(|c: &mut Claim| {
+                    c.status = CLAIM_STATUS_REVOKED.into();
+                    c.verified_digest = String::new();
+                }),
+                "",
+            ),
         ];
         for (name, mutate, want_error) in cases {
             let mut candidate = claim.clone();
@@ -1970,14 +2149,20 @@ mod tests {
     #[test]
     fn claim_validation_rejects_tier_mismatch() {
         let contents = b"---\ntype: zbrain.claim\ntitle: Tier mismatch\nstatus: draft\ngenerated:\n  at: 2026-07-30T09:00:00Z\n  by: owner\nzbrain:\n  profile: zbrain.trusted-memory/v1\n  id: clm_0123456789abcdef0123456789abcdef\n  tier: decisions\n  basis: owner\n---\n\nBody\n";
-        let err = parse_claim_markdown("projects", "decisions/tier-mismatch.md", contents).unwrap_err();
+        let err =
+            parse_claim_markdown("projects", "decisions/tier-mismatch.md", contents).unwrap_err();
         assert!(err.to_string().contains("tier"), "{err}");
     }
 
     #[test]
     fn claim_validation_rejects_filename_id_mismatch() {
         let contents = b"---\ntype: zbrain.claim\ntitle: ID mismatch\nstatus: draft\ngenerated:\n  at: 2026-07-30T09:00:00Z\n  by: owner\nzbrain:\n  profile: zbrain.trusted-memory/v1\n  id: clm_0123456789abcdef0123456789abcdef\n  tier: projects\n  basis: owner\n---\n\nBody\n";
-        let err = parse_claim_markdown("projects", "projects/clm_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.md", contents).unwrap_err();
+        let err = parse_claim_markdown(
+            "projects",
+            "projects/clm_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.md",
+            contents,
+        )
+        .unwrap_err();
         assert!(err.to_string().contains("path id"), "{err}");
     }
 
@@ -2029,15 +2214,21 @@ mod tests {
         let fixtures = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures");
         for name in ["claim-minimal.md", "claim-full.md", "claim-tricky.md"] {
             let contents = std::fs::read(fixtures.join(name)).unwrap();
-            let parsed = parse_claim_markdown("projects", &format!("projects/{name}"), &contents).unwrap();
+            let parsed =
+                parse_claim_markdown("projects", &format!("projects/{name}"), &contents).unwrap();
             let rendered = render_claim_markdown(&parsed).unwrap();
-            assert_eq!(rendered, contents, "fixture {name} did not round-trip byte-identically");
+            assert_eq!(
+                rendered, contents,
+                "fixture {name} did not round-trip byte-identically"
+            );
         }
     }
 
     #[test]
     fn fixture_legacy_claim_parses() {
-        let path = std::env::current_dir().unwrap().join("tests/fixtures/claim-legacy.md");
+        let path = std::env::current_dir()
+            .unwrap()
+            .join("tests/fixtures/claim-legacy.md");
         let contents = std::fs::read(path).unwrap();
         let parsed = parse_claim_markdown(
             "projects",
@@ -2067,12 +2258,42 @@ mod tests {
             want: Option<&'static str>,
         }
         let cases = vec![
-            Case { name: "negation flip on title", draft_title: "zbrain runs without network calls", title: "zbrain runs with network calls", want: Some(CONTRADICTION_NEGATION) },
-            Case { name: "value swap on title", draft_title: "zbrain uses SQLite for indexes", title: "zbrain uses BoltDB for indexes", want: Some(CONTRADICTION_VALUE_SWAP) },
-            Case { name: "status change on title", draft_title: "Node runtime is deprecated", title: "Node runtime is recommended", want: Some(CONTRADICTION_STATUS_CHANGE) },
-            Case { name: "unrelated claims do not contradict", draft_title: "zbrain indexes live in SQLite", title: "Owner preference", want: None },
-            Case { name: "same polarity does not contradict", draft_title: "zbrain runs with network calls", title: "zbrain runs with network calls", want: None },
-            Case { name: "different subjects do not value swap", draft_title: "viewer binds loopback only", title: "gateway binds loopback only", want: None },
+            Case {
+                name: "negation flip on title",
+                draft_title: "zbrain runs without network calls",
+                title: "zbrain runs with network calls",
+                want: Some(CONTRADICTION_NEGATION),
+            },
+            Case {
+                name: "value swap on title",
+                draft_title: "zbrain uses SQLite for indexes",
+                title: "zbrain uses BoltDB for indexes",
+                want: Some(CONTRADICTION_VALUE_SWAP),
+            },
+            Case {
+                name: "status change on title",
+                draft_title: "Node runtime is deprecated",
+                title: "Node runtime is recommended",
+                want: Some(CONTRADICTION_STATUS_CHANGE),
+            },
+            Case {
+                name: "unrelated claims do not contradict",
+                draft_title: "zbrain indexes live in SQLite",
+                title: "Owner preference",
+                want: None,
+            },
+            Case {
+                name: "same polarity does not contradict",
+                draft_title: "zbrain runs with network calls",
+                title: "zbrain runs with network calls",
+                want: None,
+            },
+            Case {
+                name: "different subjects do not value swap",
+                draft_title: "viewer binds loopback only",
+                title: "gateway binds loopback only",
+                want: None,
+            },
         ];
         for case in cases {
             let mut draft = approved("draft placeholder", "Body\n");
@@ -2121,8 +2342,12 @@ mod tests {
         ];
         let rendered = String::from_utf8(render_claim_markdown(&claim).unwrap()).unwrap();
         assert!(rendered.contains("contradicts:") && rendered.contains("heuristic: negation"));
-        let parsed =
-            parse_claim_markdown("projects", &format!("projects/{}.md", claim.id), rendered.as_bytes()).unwrap();
+        let parsed = parse_claim_markdown(
+            "projects",
+            &format!("projects/{}.md", claim.id),
+            rendered.as_bytes(),
+        )
+        .unwrap();
         assert_eq!(parsed.contradicts, claim.contradicts);
         let rendered_again = String::from_utf8(render_claim_markdown(&parsed).unwrap()).unwrap();
         assert_eq!(rendered_again, rendered);
@@ -2150,7 +2375,9 @@ mod tests {
     #[test]
     fn claim_store_does_not_mutate_legacy_markdown() {
         let (dir, paths, _clock) = fixture("legacy");
-        let legacy_path = paths.workspaces_dir.join("research/wiki/projects/legacy.md");
+        let legacy_path = paths
+            .workspaces_dir
+            .join("research/wiki/projects/legacy.md");
         let legacy = b"# Legacy note\n\nNo claim schema here.\n";
         std::fs::create_dir_all(legacy_path.parent().unwrap()).unwrap();
         std::fs::write(&legacy_path, legacy).unwrap();
@@ -2216,8 +2443,17 @@ mod tests {
         let scan = store.scan_workspace("research").unwrap();
         assert!(scan.claims.is_empty());
         assert_eq!(scan.invalid.len(), 1);
-        assert_eq!(scan.invalid[0].path, "projects/clm_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.md");
-        assert!(scan.invalid[0].error.contains("verification digest mismatch"), "{:?}", scan.invalid);
+        assert_eq!(
+            scan.invalid[0].path,
+            "projects/clm_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.md"
+        );
+        assert!(
+            scan.invalid[0]
+                .error
+                .contains("verification digest mismatch"),
+            "{:?}",
+            scan.invalid
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -2268,7 +2504,10 @@ mod tests {
             assert!(invalid.error.contains(id));
             assert!(invalid.error.contains("duplicate canonical claim ID"));
         }
-        assert_eq!(sha256_file(&paths.workspaces_dir.join("research/wiki").join(&flat_path)), before_flat);
+        assert_eq!(
+            sha256_file(&paths.workspaces_dir.join("research/wiki").join(&flat_path)),
+            before_flat
+        );
         assert_eq!(sha256_file(&write_path), before_nested);
 
         let trust_scan = store.scan_workspace_for_trust("research").unwrap();
@@ -2371,27 +2610,34 @@ mod tests {
         let (dir, paths, _clock) = fixture("contradict");
         let store = ClaimStore::new(paths.clone());
 
-        let mut approved = valid_store_claim("clm_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", CLAIM_BASIS_OWNER);
+        let mut approved =
+            valid_store_claim("clm_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", CLAIM_BASIS_OWNER);
         approved.title = "zbrain uses SQLite for indexes".into();
         write_canonical_claim(&paths, &finalize_approved_claim(&approved));
 
-        let mut conflicting = valid_store_claim("clm_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", CLAIM_BASIS_OWNER);
+        let mut conflicting =
+            valid_store_claim("clm_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", CLAIM_BASIS_OWNER);
         conflicting.title = "zbrain uses BoltDB for indexes".into();
         let created = store.write_draft("research", conflicting).unwrap();
         assert_eq!(created.contradicts.len(), 1);
         assert_eq!(created.contradicts[0].claim_id, approved.id);
         assert_eq!(created.contradicts[0].heuristic, CONTRADICTION_VALUE_SWAP);
 
-        let stored = store.read("research", "clm_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb").unwrap();
+        let stored = store
+            .read("research", "clm_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")
+            .unwrap();
         assert_eq!(stored.contradicts.len(), 1);
         assert_eq!(stored.contradicts[0].heuristic, CONTRADICTION_VALUE_SWAP);
         assert_eq!(stored.status, CLAIM_STATUS_DRAFT);
 
-        let approved_after = store.read("research", "clm_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa").unwrap();
+        let approved_after = store
+            .read("research", "clm_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+            .unwrap();
         assert_eq!(approved_after.status, CLAIM_STATUS_APPROVED);
         assert!(approved_after.contradicts.is_empty());
 
-        let mut clean = valid_store_claim("clm_cccccccccccccccccccccccccccccccc", CLAIM_BASIS_OWNER);
+        let mut clean =
+            valid_store_claim("clm_cccccccccccccccccccccccccccccccc", CLAIM_BASIS_OWNER);
         clean.title = "Viewer binds loopback only".into();
         let created_clean = store.write_draft("research", clean).unwrap();
         assert!(created_clean.contradicts.is_empty());
@@ -2407,7 +2653,10 @@ mod tests {
         let mut requested = claim.clone();
         requested.body = "Different body\n".into();
         requested.path = "projects/other-name.md".into();
-        let err = store.write_draft("research", requested).unwrap_err().to_string();
+        let err = store
+            .write_draft("research", requested)
+            .unwrap_err()
+            .to_string();
         assert!(err.contains("already exists at canonical path"), "{err}");
         let _ = std::fs::remove_dir_all(&dir);
     }
