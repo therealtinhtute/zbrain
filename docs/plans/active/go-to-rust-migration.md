@@ -276,7 +276,7 @@ updated: 2026-09-04
 
   - phase_slug: m5-mcp-gateway
     story_id: rust-m5-mcp-gateway-20260904
-    status: in-progress
+    status: checked
     goal: Hand-rolled stdio MCP gateway with current protocol revisions and conformance suite
     depends_on: m0-foundation
     notes: Wave-level gating — W1 (transport/framing/revisions) is parallel-eligible after m0; W2a (claim resource + evidence_capture) needs m2; W2b (ask/status/doctor/campaign tools) needs m4 and m6; W3 real-client smoke needs W2b. A subagent may pick up W1 in an early round and W2b in a later round.
@@ -496,3 +496,7 @@ updated: 2026-09-04
 ## Progress (append)
 - 2026-09-05 | phase: m6-approval-campaign | wave: W1-W2 | task: W1.T1,W2.T1,W2.T2 | task_status: DONE | run_id: rust-rewrite-r6-m6 (subagent) | verification: 340 tests (+36 over m4); parity OK x7 (approval new + all previous ops); TTY injection via term.rs ApprovalPrompt trait (StdinPrompt isatty-gated, ScriptedPrompt for tests); grant walks CLI-ready for m7 | surfaces: crates/zbrain/src/{approval,campaign,term}.rs, parity --op approval | commit aeced7c on r6-m6, merged to rust-rewrite
 - 2026-09-05 | phase: m6-approval-campaign | gate | task_status: DONE | judge: same-session | verdict: APPROVED | notes: post-merge rust-rewrite 340 tests + clippy clean verified directly; null-drafts JSON rejects at deserialization (same fail-closed wrapper as Go nil-slice validation); tree-sort sha256 tiebreak for normalized challenge files
+
+## Progress (append)
+- 2026-09-05 | phase: m5-mcp-gateway | wave: W2 | task: W2.T1,W2.T2 | task_status: DONE | run_id: rust-rewrite-r5-w2t2 (subagent, resumed after cancelled run) | verification: 364 tests (+24 over m6); 94 mcp tests; 16/16 conformance responses schema-identical vs live `dist/zbrain mcp serve` (5 byte-identical zero-normalization, rest identical after volatile normalization); 7/7 parity ops OK | surfaces: crates/zbrain/src/mcp/{gateway,protocol,server}.rs, tests/w2t2_capture.rs | commits eddd505..8df9774 on r5-w2t2, merged to rust-rewrite
+- 2026-09-05 | phase: m5-mcp-gateway | gate | task_status: DONE | judge: same-session | verdict: APPROVED | notes: cancelled-run partial work (1872 lines) compiled clean (315 tests) and was preserved as eddd505 before resume; fixed 3 latent bugs in it (bool kind "boolean", null-vs-reflect.Value, null array items); Go tools.go has exactly 10 tools — evidence_check/doctor are NOT MCP tools, not ported/not invented; tools/list+resources/list unified to OrderedJson; 5s post-handler timeout guard ported (-32603); concurrent-apply → exactly 1 winner 3/3 runs; framing spaces unchanged (W1 compact-framing decision)
