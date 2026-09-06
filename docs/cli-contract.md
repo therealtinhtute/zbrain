@@ -2,6 +2,15 @@
 
 > Audit for Wave 1 D1 per `docs/plans/active/zbrain-optimization-plan.md` §6 4.1.
 > Covers `--quiet` / `--no-color` decision and `internal/cli/cli.go:835`.
+>
+> **Cutover note (m8):** this audit is historical evidence from the Go era.
+> The contract itself (stdout = protocol, stderr = diagnostics, no color
+> codes) still holds and is enforced by `scripts/cli-parity.sh` equivalents and
+> the Rust test suite. Go file/line references below map to the frozen Go tree
+> (tag `v0.2.0-go-final`); live equivalents live in `crates/zbrain/src/cli.rs`.
+> Verification commands below are Go-era; current commands are
+> `cargo test --workspace`, `cargo clippy --workspace --all-targets -- -D warnings`,
+> `cargo run -q -p zbrain -- --help | cat -A`.
 
 ## 1. Output streams
 

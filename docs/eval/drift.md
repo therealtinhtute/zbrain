@@ -1,4 +1,10 @@
-# Drift Harness — `internal/eval/drift.go`
+# Drift Harness — `crates/zbrain/src/eval.rs` + `crates/zbrain/tests/eval_suite.rs`
+
+> **Cutover note (m8):** the commands below are the Go-era harness
+> (`internal/eval/`). The current retrieval-eval runner is
+> `cargo test -p zbrain --test eval_suite`; the math helpers live in
+> `crates/zbrain/src/eval.rs`. Historical commands and proofs are preserved
+> verbatim for reference.
 
 Compares two eval JSON runs (same `queries.json`) and flags retrieval drift.
 

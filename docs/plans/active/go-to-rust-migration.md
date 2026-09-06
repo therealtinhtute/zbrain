@@ -393,7 +393,7 @@ updated: 2026-09-04
 
   - phase_slug: m8-cutover
     story_id: rust-m8-cutover-20260904
-    status: planned
+    status: in-progress
     goal: Single cutover PR: CI→Rust, docs/authority→Rust, delete Go tree
     depends_on: m7-cli-view-eval
     requirements: [R1, R4, R9, R10]

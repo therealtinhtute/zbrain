@@ -1,6 +1,6 @@
 # zbrain — Trusted Memory Spec
 
-> Current authority for the Go-native trusted-memory runtime.
+> Current authority for the Rust-native trusted-memory runtime.
 >
 > This document defines the trust contract that `zbrain ask`, claim storage,
 > evidence storage, and the disposable index must uphold. The trusted-agent
@@ -21,7 +21,7 @@ The trust rule is simple: an agent receives only explicit, approved, valid
 claim concepts. Drafts, revoked or superseded claims, invalid documents,
 gaps, conflicts, and stale indexes do not silently become answer material.
 
-The current implementation is Go-native and standalone. It does not call an
+The current implementation is Rust-native and standalone. It does not call an
 LLM or model provider; `zbrain ask` returns JSON context for the caller to use.
 
 ## 2. Current Command Surface
@@ -306,8 +306,8 @@ a gap.
 3. Trust checks fail closed rather than guessing.
 4. Approved content is replaced through supersession, not in-place editing.
 5. Workspace isolation is explicit and enforced at every read path.
-6. Keep command handlers thin and runtime behavior in `internal/runtime/`.
-7. Keep the implementation Go-native and minimal.
+6. Keep command handlers thin and runtime behavior in `crates/zbrain/src/`.
+7. Keep the implementation Rust-native and minimal.
 8. Every behavior change gets focused tests and an isolated runtime smoke.
 
 The following gateway constraints Shipped 2026-08-13 (see
@@ -330,8 +330,8 @@ The following gateway constraints Shipped 2026-08-13 (see
 The trusted-memory slice is releasable only when all of these pass:
 
 ```bash
-go test ./...
-go vet ./...
+cargo test --workspace
+cargo clippy --workspace --all-targets -- -D warnings
 make build
 make smoke
 ```

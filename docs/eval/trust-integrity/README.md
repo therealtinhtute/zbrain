@@ -1,9 +1,9 @@
 # Trust-Integrity Eval Corpus
 
-Adversarial corpus for `TestEvalTrustIntegrity` (runner lives in
-`internal/eval/trust_integrity_test.go` so it can drive **both** query
-layers with one fixture set: the `zbrain ask` CLI path via `internal/cli.App`
-and the `memory_ask` MCP tool over the in-memory client harness).
+Adversarial corpus for the trust-integrity eval (runner lives in
+`crates/zbrain/tests/eval_suite.rs` so it can drive **both** query
+layers with one fixture set: the `zbrain ask` CLI path and
+the `memory_ask` MCP tool over the in-memory harness).
 
 ## Corpus shape
 

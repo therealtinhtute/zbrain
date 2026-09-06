@@ -1,6 +1,6 @@
 # zbrain
 
-`zbrain` is a Go-native CLI for local-first trusted memory and
+`zbrain` is a Rust-native CLI for local-first trusted memory and
 workspace-isolated agent context.
 
 The shipped runtime keeps canonical OKF-style Markdown claims and immutable
@@ -30,7 +30,7 @@ trusted context JSON. It does not call an LLM or model provider.
 ## Architecture
 
 The CLI keeps argument parsing and output at the edge. Durable behavior lives
-in `internal/runtime/`; Markdown and evidence are canonical, while SQLite is a
+in `crates/zbrain/src/`; Markdown and evidence are canonical, while SQLite is a
 derived cache that can be discarded and rebuilt.
 
 ![zbrain architecture overview](docs/diagrams/architecture-overview.png)
@@ -61,7 +61,7 @@ query outcomes.*
 
 ### Shipped gateway and viewer
 
-The shipped binary is standalone and Go-native. It now includes the local
+The shipped binary is standalone and Rust-native. It now includes the local
 integration surfaces described in [`docs/trusted-agent-gateway-spec.md`](docs/trusted-agent-gateway-spec.md):
 
 - `zbrain mcp serve` runs the trusted-agent gateway over stdio. Protocol frames
@@ -80,18 +80,18 @@ canonical Markdown and immutable evidence remain the trust inputs.
 ## Repository structure
 
 ```text
-cmd/zbrain/         CLI binary entrypoint
-internal/cli/       command dispatch and user-facing behavior
-internal/runtime/   paths, config, assets, workspaces, claims, evidence,
-                    trust validation, index, and query
+crates/zbrain/src/main.rs   CLI binary entrypoint
+crates/zbrain/src/cli.rs    command dispatch and user-facing behavior
+crates/zbrain/src/          paths, config, assets, workspaces, claims, evidence,
+                            trust validation, index, and query
 assets/             embedded runtime content copied by setup
 docs/               current supporting docs, diagrams, and durable plans
 ```
 
 ## Prerequisites
 
-- Go 1.24 or newer.
-- SQLite with FTS5 support is provided by the Go SQLite dependency; no external
+- Rust stable toolchain (pinned via `rust-toolchain.toml`).
+- SQLite with FTS5 support is provided by the bundled `rusqlite` dependency; no external
   database or retrieval service is required.
 
 ## Installation
@@ -99,7 +99,7 @@ docs/               current supporting docs, diagrams, and durable plans
 Install the latest published binary:
 
 ```bash
-go install github.com/therealtinhtute/zbrain/cmd/zbrain@latest
+cargo install --path crates/zbrain
 zbrain setup
 ```
 
@@ -109,7 +109,7 @@ For local development:
 git clone <repo>
 cd zbrain
 export ZBRAIN_HOME=/tmp/zbrain-dev
-go run ./cmd/zbrain setup
+cargo run -q -p zbrain -- setup
 ```
 
 ## Configuration
@@ -118,7 +118,7 @@ go run ./cmd/zbrain setup
 `~/.zbrain/`. Use it for tests, smoke runs, and isolated experiments:
 
 ```bash
-ZBRAIN_HOME=/tmp/zbrain-dev go run ./cmd/zbrain setup
+ZBRAIN_HOME=/tmp/zbrain-dev cargo run -q -p zbrain -- setup
 ```
 
 `zbrain setup` creates `config.yml` when needed. The first
@@ -168,7 +168,7 @@ disposable index.
 Show the complete shipped command surface:
 
 ```bash
-go run ./cmd/zbrain --help
+cargo run -q -p zbrain -- --help
 ```
 
 Commands:
@@ -199,10 +199,10 @@ Create an isolated workspace and capture evidence:
 
 ```bash
 export ZBRAIN_HOME=/tmp/zbrain-dev
-go run ./cmd/zbrain setup
-go run ./cmd/zbrain workspace create research
-go run ./cmd/zbrain workspace current
-go run ./cmd/zbrain evidence add \
+cargo run -q -p zbrain -- setup
+cargo run -q -p zbrain -- workspace create research
+cargo run -q -p zbrain -- workspace current
+cargo run -q -p zbrain -- evidence add \
   --file ./notes.txt \
   --origin file://notes.txt \
   --media-type text/plain
@@ -212,16 +212,16 @@ Create a claim from stdin, approve it, rebuild, and query it:
 
 ```bash
 claim_json=$(printf 'The local source is authoritative.\n' | \
-  go run ./cmd/zbrain claim draft \
+  cargo run -q -p zbrain -- claim draft \
     --tier projects \
     --title 'Source authority' \
     --basis owner)
 claim_id=$(printf '%s' "$claim_json" | python3 -c \
   'import json,sys; print(json.load(sys.stdin)["id"])')
-go run ./cmd/zbrain claim approve "$claim_id"
-go run ./cmd/zbrain reindex
-go run ./cmd/zbrain status
-go run ./cmd/zbrain ask authoritative source
+cargo run -q -p zbrain -- claim approve "$claim_id"
+cargo run -q -p zbrain -- reindex
+cargo run -q -p zbrain -- status
+cargo run -q -p zbrain -- ask authoritative source
 ```
 
 Evidence-based claims must pass an evidence ID from `evidence add` using
@@ -302,8 +302,8 @@ status: draft | approved | superseded | revoked
 Run the repository's standard gates from the project root:
 
 ```bash
-go test ./...
-go vet ./...
+cargo test --workspace
+cargo clippy --workspace --all-targets -- -D warnings
 make build
 make smoke
 ```
@@ -312,29 +312,29 @@ The smoke target uses an isolated temporary `ZBRAIN_HOME`. Useful additional
 checks are:
 
 ```bash
-go test -race ./internal/runtime ./internal/cli ./internal/view ./internal/mcp
-CGO_ENABLED=0 go build ./cmd/zbrain
-ZBRAIN_BENCH_100K=1 go test ./internal/runtime -run '^TestAskP95At100K$' -count=1 -v
+cargo test -p zbrain --lib
+cargo audit
+ZBRAIN_BENCH_100K=1 cargo test -p zbrain --test bench_100k
 ```
 
 Check every documented command group directly:
 
 ```bash
-go run ./cmd/zbrain --help
-go run ./cmd/zbrain workspace --help
-go run ./cmd/zbrain evidence --help
-go run ./cmd/zbrain claim --help
-go run ./cmd/zbrain migrate --help
-go run ./cmd/zbrain reindex --help
-go run ./cmd/zbrain ask --help
-go run ./cmd/zbrain status --help
-go run ./cmd/zbrain doctor --help
-go run ./cmd/zbrain mcp --help
-go run ./cmd/zbrain mcp serve --help
-go run ./cmd/zbrain view --help
-go run ./cmd/zbrain approval --help
-go run ./cmd/zbrain approval show --help
-go run ./cmd/zbrain approval grant --help
+cargo run -q -p zbrain -- --help
+cargo run -q -p zbrain -- workspace --help
+cargo run -q -p zbrain -- evidence --help
+cargo run -q -p zbrain -- claim --help
+cargo run -q -p zbrain -- migrate --help
+cargo run -q -p zbrain -- reindex --help
+cargo run -q -p zbrain -- ask --help
+cargo run -q -p zbrain -- status --help
+cargo run -q -p zbrain -- doctor --help
+cargo run -q -p zbrain -- mcp --help
+cargo run -q -p zbrain -- mcp serve --help
+cargo run -q -p zbrain -- view --help
+cargo run -q -p zbrain -- approval --help
+cargo run -q -p zbrain -- approval show --help
+cargo run -q -p zbrain -- approval grant --help
 ```
 
 ## Build and deployment
@@ -380,8 +380,8 @@ runtime contract.
 ## Contributing
 
 Read [CONTRIBUTING.md](CONTRIBUTING.md) before opening a change. Keep command
-handlers thin, put durable behavior in `internal/runtime/`, preserve `assets/`
-as the embedded runtime source of truth, and run the relevant Go, build, smoke,
+handlers thin, put durable behavior in `crates/zbrain/src/`, preserve `assets/`
+as the embedded runtime source of truth, and run the relevant cargo, build, smoke,
 and documentation checks before submitting.
 
 ## License

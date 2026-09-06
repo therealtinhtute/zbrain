@@ -2,15 +2,15 @@
 
 zbrain is a local-first trusted-memory CLI for AI-agent context: locally owned,
 human-reviewed, workspace-isolated, and traceable to source. Keep changes
-small, source-grounded, and Go-native.
+small, source-grounded, and Rust-native.
 
 ## Quick start
 
 ```bash
 git clone <repo>
 cd zbrain
-go test ./...
-go vet ./...
+cargo test --workspace
+cargo clippy --workspace --all-targets -- -D warnings
 make build
 make smoke
 ```
@@ -21,17 +21,17 @@ personal runtime directory.
 ## Repository layout
 
 ```text
-cmd/zbrain/         CLI entrypoint
-internal/cli/       argument parsing, command dispatch, and user-facing output
-internal/runtime/   paths, config, assets, workspaces, claims, evidence,
-                    trust validation, index, and query
+crates/zbrain/src/main.rs   CLI entrypoint
+crates/zbrain/src/cli.rs    argument parsing, command dispatch, and user-facing output
+crates/zbrain/src/          paths, config, assets, workspaces, claims, evidence,
+                            trust validation, index, and query
 assets/             embedded runtime content copied by setup
 docs/               current supporting docs, diagrams, and durable plans
 ```
 
 Command handlers should stay thin. Put filesystem boundaries, trust rules,
 claim lifecycle, evidence verification, index rebuilds, and query behavior in
-`internal/runtime/`.
+`crates/zbrain/src/`.
 
 ## Runtime model
 
@@ -85,15 +85,15 @@ every method other than `GET` and `HEAD`.
 Use the command help as the CLI authority:
 
 ```bash
-go run ./cmd/zbrain --help
-go run ./cmd/zbrain workspace --help
-go run ./cmd/zbrain evidence --help
-go run ./cmd/zbrain claim --help
-go run ./cmd/zbrain migrate --help
-go run ./cmd/zbrain reindex --help
-go run ./cmd/zbrain ask --help
-go run ./cmd/zbrain status --help
-go run ./cmd/zbrain doctor --help
+cargo run -q -p zbrain -- --help
+cargo run -q -p zbrain -- workspace --help
+cargo run -q -p zbrain -- evidence --help
+cargo run -q -p zbrain -- claim --help
+cargo run -q -p zbrain -- migrate --help
+cargo run -q -p zbrain -- reindex --help
+cargo run -q -p zbrain -- ask --help
+cargo run -q -p zbrain -- status --help
+cargo run -q -p zbrain -- doctor --help
 ```
 
 The normal lifecycle is:
@@ -113,31 +113,26 @@ reapproval.
 
 ## Tests and verification
 
-- Keep focused `*_test.go` coverage next to the package being changed.
+- Keep focused unit tests alongside the module being changed.
 - Use temporary directories and explicit `ZBRAIN_HOME` for runtime checks.
 - Do not commit generated runtime data, populated workspaces, or credentials.
 - Run the narrowest useful check while editing, then the full gates before
   submitting:
 
 ```bash
-go test ./...
-go vet ./...
+cargo test --workspace
+cargo clippy --workspace --all-targets -- -D warnings
+cargo fmt --all -- --check
 make build
 make smoke
 git diff --check
-CGO_ENABLED=0 go build ./cmd/zbrain
-```
-
-For concurrency-sensitive runtime or gateway/viewer changes, also run:
-
-```bash
-go test -race ./internal/runtime ./internal/cli ./internal/view ./internal/mcp
+cargo build --release
 ```
 
 For query-scale changes, run the existing benchmark when available:
 
 ```bash
-ZBRAIN_BENCH_100K=1 go test ./internal/runtime -run '^TestAskP95At100K$' -count=1 -v
+ZBRAIN_BENCH_100K=1 cargo test -p zbrain --test bench_100k
 ```
 
 ## Pull requests
