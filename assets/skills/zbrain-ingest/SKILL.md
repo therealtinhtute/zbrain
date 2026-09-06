@@ -6,7 +6,7 @@ version: "2.0.0"
 
 Prefix your first line with 🥷 inline.
 
-`zbrain:ingest` is not implemented by the current Go CLI.
+`zbrain:ingest` is not implemented by the current CLI.
 
 Workspace scope is primary-only by default: resolve it with `zbrain workspace current`, and use `--workspace "$workspace"` only after explicit selection. These commands never imply or expand to secondary workspaces; use `--include "$include"` only for an explicitly permitted read-only secondary workspace.
 

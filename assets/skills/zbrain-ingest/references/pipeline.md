@@ -1,6 +1,6 @@
 # Deprecated Pipeline Reference
 
-The previous learn/ingest/apply pipeline is not implemented in the current Go runtime.
+The previous learn/ingest/apply pipeline is not implemented in the current runtime.
 
 Current supported flow; pass each caller-controlled value as a separate argv element. Resolve the primary workspace with `zbrain workspace current`; use `--workspace "$workspace"` only after explicit selection, and use `--include "$include"` only for an explicitly permitted read-only secondary workspace.
 

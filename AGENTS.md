@@ -41,7 +41,7 @@ Verify CLI surface: `cargo run -q -p zbrain -- --help` and sub-helps (`workspace
 - `claim draft` reads body from **stdin**; metadata via flags. Lifecycle is `draft -> approved -> superseded|revoked` — approved claims are superseded, never edited in place. `claim approve` records `verified.at/by/digest`; `reindex` validates before publishing.
 - `ask` default is lexical; `--embed` opts into local loopback embedding sidecar (also `memory_ask`/`memory_reindex` `embedding: true`). Missing sidecar falls back to lexical, no network calls.
 - `mcp serve` is stdio-only (stdout=protocol, stderr=diagnostics). Protocol revisions: legacy handshake `2025-06-18`…`2025-11-25`, stateless `2026-07-28` (`server/discover`, per-request `_meta`); no Tasks/MRTR/subscriptions extensions; schema-invalid tool input → `isError`, oversized/unknown → `-32602`, server faults → `-32603`. `view` binds `127.0.0.1` only, `GET`/`HEAD` only, strict CSP/`nosniff`, no CORS. Owner-pinned lifecycle: `claim_lifecycle prepare` → `approval show <id>` → `approval grant <id>` (TTY, confirm last 16 hex of digest) → `claim_lifecycle apply`. Challenge 15m, token 5m capped by challenge, single-use.
-- File modes enforced in `crates/zbrain/src/paths.rs`: dirs `0700`, mutable metadata/canonical Markdown `0600`, evidence snapshots+`source.yaml` `0400`, derived indexes/dirty `0600`.
+- File modes enforced in `crates/zbrain/src/paths.rs`: dirs `0700`, mutable metadata/canonical Markdown `0600`, evidence snapshots+`source.yaml` `0400`, derived indexes/dirty `0600`. Extracted program assets (`setup`) are non-secret docs at `0644`/`0755`, matching the oracle.
 
 ## Trust Rules — do not violate
 
