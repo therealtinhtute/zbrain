@@ -99,6 +99,11 @@ impl Server {
 }
 
 fn handle_connection(mut stream: TcpStream, paths: &Paths) -> std::io::Result<()> {
+    // Accepted streams inherit the listener's non-blocking mode; the handler
+    // below is written as blocking I/O, so restore blocking mode first.
+    // Without this, a read racing the client's write returns WouldBlock and
+    // drops the connection unread — a load-dependent flake.
+    stream.set_nonblocking(false)?;
     let mut buf = Vec::new();
     let mut chunk = [0u8; 4096];
     loop {
