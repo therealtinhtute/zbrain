@@ -393,7 +393,7 @@ updated: 2026-09-04
 
   - phase_slug: m8-cutover
     story_id: rust-m8-cutover-20260904
-    status: in-progress
+    status: checked
     goal: Single cutover PR: CI→Rust, docs/authority→Rust, delete Go tree
     depends_on: m7-cli-view-eval
     requirements: [R1, R4, R9, R10]
@@ -504,3 +504,9 @@ updated: 2026-09-04
 ## Progress (append)
 - 2026-09-05 | phase: m7-cli-view-eval | wave: W1-W2 | task: W1.T1,W2.T1,W2.T2 | task_status: DONE | run_id: rust-rewrite-r7-m7 (subagent) | verification: 393 lib tests (+29: 15 cli, 10 view, 4 eval); cli-parity 60/60 incl. real-pty interactive grant diff-clean; smoke.sh rc=0 doctor healthy; 7/7 parity OK; Go oracle cli/view/eval green | surfaces: crates/zbrain/src/{cli.rs,view.rs,main.rs,eval.rs,clock.rs,lib.rs}, tests/eval_suite.rs, scripts/{cli-parity.sh,smoke.sh} | commits cb39f23,4113e82 on r7-m7, merged to rust-rewrite
 - 2026-09-05 | phase: m7-cli-view-eval | gate | task_status: DONE | judge: same-session | verdict: APPROVED | notes: post-merge re-verified (393+cli-parity 60+smoke+7 parity); one transient parallel-run lib failure seen once by agent, unreproduced across ≥6 runs; CLI JSON lacks Go <>& HTML-escaping (no fixture exercises it; view JSON reproduces it, view endpoints byte-identical); App gained clock Arc<dyn Clock> mirroring Go App.Now; eval retrieval runner + drift CLI stay Go harnesses by design (no new CLI commands — help parity); Go eval proof-file churn reverted, not committed
+
+## Progress (append)
+- 2026-09-06 | phase: m8-cutover | wave: W1 | task: W1.T1 | task_status: DONE | verification: CI rewritten (fmt→test→clippy→audit→build→stripped→smoke→diff→release, ubuntu+macos), Makefile Rust (build/test/smoke/bench/eval/install-local/clean), AGENTS.md authority Go→Rust | commit 2be202e
+- 2026-09-06 | phase: m8-cutover | wave: W1 | task: W1.T2 | task_status: DONE | verification: docs sweep (README, CONTRIBUTING, trusted-memory-spec, gateway-spec, release, benchmark, PROJECT, acceptance-walkthrough; cli-contract/drift got cutover notes, proofs+historical plans untouched); tag v0.2.0-go-final created+pushed; Go tree + Go harness deleted (internal/, cmd/, go.mod/sum, fixture-gen, parity.sh, cli-parity.sh, bench-fts5.go, parity bin) | commits a6659fe (serde_yml→serde_yaml security fix), 4cdbe7b (deletion)
+- 2026-09-06 | phase: m8-cutover | gate | task_status: DONE | judge: same-session | verdict: APPROVED | gate evidence: cargo fmt ✓; cargo test --workspace ✓ (393 lib + suites, 7 consecutive full runs); clippy -D ✓; cargo audit ✓ CLEAN after serde fix; make build ✓ (4.4M→3.8M stripped); smoke rc=0 ✓; git diff --check ✓; cargo build --release ✓; tag oracle builds+runs on scratch worktree ✓ (revert path proven)
+- 2026-09-06 | m8 findings (material) | flake FIXED: view::tests::socket_smoke_serves_until_close flaked ~1/7 full runs (connect raced serve-thread scheduling under parallel load) → connect readiness probe + 30s read timeout (test-only, no product change); serde_yml/libyml UNSOUND (RUSTSEC-2025-0067/0068) in parse path → replaced with pure-Rust serde_yaml, 150-case corpus + 393 tests still green
