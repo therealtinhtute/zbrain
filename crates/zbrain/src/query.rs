@@ -808,21 +808,157 @@ fn parse_rfc3339(value: &str) -> Result<DateTime<Utc>, IndexError> {
         .map_err(|err| IndexError::Message(err.to_string()))
 }
 
+/// RFC3339 parse with Go `time.Parse(time.RFC3339, ...)`-shaped error
+/// messages (`parsing time "x" as "2006-01-02T15:04:05Z07:00": cannot parse
+/// ... as "2006"`, `month out of range`, `extra text: ...`), so user-facing
+/// error text matches the Go oracle byte-for-byte.
+fn parse_rfc3339_go(value: &str) -> Result<DateTime<Utc>, String> {
+    const LAYOUT: &str = "2006-01-02T15:04:05Z07:00";
+
+    struct Cursor<'a> {
+        value: &'a str,
+        pos: usize,
+    }
+
+    impl Cursor<'_> {
+        fn fail(&self, element: &str) -> String {
+            format!(
+                "parsing time {:?} as {:?}: cannot parse {:?} as {:?}",
+                self.value,
+                LAYOUT,
+                &self.value[self.pos..],
+                element
+            )
+        }
+
+        fn digits(&mut self, count: usize, element: &str) -> Result<u32, String> {
+            let slice = self
+                .value
+                .get(self.pos..self.pos + count)
+                .ok_or_else(|| self.fail(element))?;
+            if !slice.bytes().all(|byte| byte.is_ascii_digit()) {
+                return Err(self.fail(element));
+            }
+            self.pos += count;
+            slice.parse().map_err(|_| self.fail(element))
+        }
+
+        fn literal(&mut self, expected: &str) -> Result<(), String> {
+            if self.value[self.pos..].starts_with(expected) {
+                self.pos += expected.len();
+                Ok(())
+            } else {
+                Err(self.fail(expected))
+            }
+        }
+    }
+
+    let mut cursor = Cursor { value, pos: 0 };
+    let year = cursor.digits(4, "2006")?;
+    cursor.literal("-")?;
+    let month = cursor.digits(2, "01")?;
+    cursor.literal("-")?;
+    let day = cursor.digits(2, "02")?;
+    cursor.literal("T")?;
+    let hour = cursor.digits(2, "15")?;
+    cursor.literal(":")?;
+    let minute = cursor.digits(2, "04")?;
+    cursor.literal(":")?;
+    let second = cursor.digits(2, "05")?;
+    if matches!(value.as_bytes().get(cursor.pos), Some(b'.') | Some(b',')) {
+        let mut end = cursor.pos + 1;
+        while matches!(value.as_bytes().get(end), Some(byte) if byte.is_ascii_digit()) {
+            end += 1;
+        }
+        cursor.pos = end;
+    }
+    let offset_seconds: i32 = match value.as_bytes().get(cursor.pos) {
+        Some(b'Z') => {
+            cursor.pos += 1;
+            0
+        }
+        Some(sign @ (b'+' | b'-')) => {
+            let sign_multiplier: i32 = if *sign == b'+' { 1 } else { -1 };
+            cursor.pos += 1;
+            let offset_hour = cursor.digits(2, "15")?;
+            cursor.literal(":")?;
+            let offset_minute = cursor.digits(2, "04")?;
+            if offset_hour > 23 {
+                return Err(format!(
+                    "parsing time {value:?}: time zone offset hour out of range"
+                ));
+            }
+            sign_multiplier * (offset_hour as i32 * 3600 + offset_minute as i32 * 60)
+        }
+        _ => return Err(cursor.fail("Z07:00")),
+    };
+    if cursor.pos != value.len() {
+        return Err(format!(
+            "parsing time {value:?}: extra text: {:?}",
+            &value[cursor.pos..]
+        ));
+    }
+    if !(1..=12).contains(&month) {
+        return Err(format!("parsing time {value:?}: month out of range"));
+    }
+    let days_in_month: u32 = match month {
+        1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
+        4 | 6 | 9 | 11 => 30,
+        _ => {
+            let leap = (year % 4 == 0 && year % 100 != 0) || year % 400 == 0;
+            if leap {
+                29
+            } else {
+                28
+            }
+        }
+    };
+    if !(1..=days_in_month).contains(&day) {
+        return Err(format!("parsing time {value:?}: day out of range"));
+    }
+    if hour > 23 {
+        return Err(format!("parsing time {value:?}: hour out of range"));
+    }
+    if minute > 59 {
+        return Err(format!("parsing time {value:?}: minute out of range"));
+    }
+    if second > 59 {
+        return Err(format!("parsing time {value:?}: second out of range"));
+    }
+    let offset = chrono::FixedOffset::east_opt(offset_seconds)
+        .ok_or_else(|| cursor.fail("Z07:00"))?;
+    let parsed = match chrono::TimeZone::with_ymd_and_hms(
+        &offset,
+        year as i32,
+        month,
+        day,
+        hour,
+        minute,
+        second,
+    ) {
+        chrono::LocalResult::Single(parsed) => parsed,
+        _ => return Err(format!("parsing time {value:?}: day out of range")),
+    };
+    // Fractional seconds carry no semantic weight for the filters that
+    // consume this value; the sub-second part is discarded.
+    Ok(parsed.with_timezone(&Utc))
+}
+
 fn parse_temporal_options(options: &TrustedQueryOptions) -> Result<TemporalFilter, IndexError> {
     let mut filter = TemporalFilter::default();
     if !options.after.is_empty() {
-        filter.after = Some(parse_rfc3339(&options.after).map_err(|_| {
-            IndexError::Message(format!("invalid after timestamp {:?}", options.after))
+        filter.after = Some(parse_rfc3339_go(&options.after).map_err(|err| {
+            IndexError::Message(format!("invalid after timestamp {:?}: {err}", options.after))
         })?);
     }
     if !options.before.is_empty() {
-        filter.before = Some(parse_rfc3339(&options.before).map_err(|_| {
-            IndexError::Message(format!("invalid before timestamp {:?}", options.before))
+        filter.before = Some(parse_rfc3339_go(&options.before).map_err(|err| {
+            IndexError::Message(format!("invalid before timestamp {:?}: {err}", options.before))
         })?);
     }
     if !options.as_of.is_empty() {
-        filter.as_of = Some(parse_rfc3339(&options.as_of).map_err(|_| {
-            IndexError::Message(format!("invalid as_of timestamp {:?}", options.as_of))
+        filter.as_of = Some(parse_rfc3339_go(&options.as_of).map_err(|err| {
+            IndexError::Message(format!("invalid as_of timestamp {:?}: {err}", options.as_of))
         })?);
     }
     if let (Some(after), Some(before)) = (filter.after, filter.before) {

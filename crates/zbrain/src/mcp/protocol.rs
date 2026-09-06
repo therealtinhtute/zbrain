@@ -298,6 +298,8 @@ pub enum OrderedJson {
     Null,
     Bool(bool),
     Int(i64),
+    /// Float rendered with Go `encoding/json` semantics (`go_format_f64`).
+    Float(f64),
     Str(String),
     Array(Vec<OrderedJson>),
     Object(Vec<(&'static str, OrderedJson)>),
@@ -345,6 +347,7 @@ impl OrderedJson {
             Self::Bool(true) => out.push_str("true"),
             Self::Bool(false) => out.push_str("false"),
             Self::Int(value) => out.push_str(&value.to_string()),
+            Self::Float(value) => out.push_str(&go_format_f64(*value)),
             Self::Str(value) => push_escaped_json_string(out, value),
             Self::Array(items) => {
                 if items.is_empty() {
@@ -411,6 +414,9 @@ fn push_indent(out: &mut String, depth: usize) {
             Self::Null => serializer.serialize_unit(),
             Self::Bool(value) => serializer.serialize_bool(*value),
             Self::Int(value) => serializer.serialize_i64(*value),
+            Self::Float(value) => serde_json::value::RawValue::from_string(go_format_f64(*value))
+                .map_err(serde::ser::Error::custom)?
+                .serialize(serializer),
             Self::Str(value) => serializer.serialize_str(value),
             Self::Array(items) => {
                 let mut seq = serializer.serialize_seq(Some(items.len()))?;
@@ -427,6 +433,18 @@ fn push_indent(out: &mut String, depth: usize) {
                 map.end()
             }
         }
+    }
+}
+
+/// Go `encoding/json` float64 formatting: integral values print without a
+/// fraction and always in decimal notation. Mirrors the rendering decision
+/// in `query.rs::go_json_f64` for floats that reach OrderedJson payloads
+/// directly (e.g. trusted-query scores).
+pub fn go_format_f64(value: f64) -> String {
+    if value.fract() == 0.0 && value.abs() < 1e15 {
+        format!("{}", value as i64)
+    } else {
+        format!("{value}")
     }
 }
 
