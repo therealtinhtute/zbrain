@@ -3,9 +3,9 @@ id: rust-migration-lock-20260904
 intake_id: rust-migration-intake-20260904
 type: plan
 lane: high-risk
-status: active
+status: completed
 created: 2026-09-04
-updated: 2026-09-04
+updated: 2026-09-06
 ---
 
 # Plan: Go→Rust big-bang migration
@@ -82,11 +82,11 @@ updated: 2026-09-04
 
 ## Phases and Verification
 <!-- Phase and task definitions are immutable after to-plan. Do not add task status fields. Append-only Progress is the sole task execution-status source. Only each phase lifecycle status changes to mirror DB transitions: to-plan=planned; work after run create=in-progress; clean durable check=checked; closing handoff=done. Each planned phase records phase_slug, story_id, status, goal, depends_on, waves, tasks, and checks. -->
-- planning_status: planned
+- planning_status: complete
 - phases:
   - phase_slug: m0-foundation
     story_id: rust-m0-foundation-20260904
-    status: checked
+    status: done
     goal: Rust workspace scaffold with paths, file modes, config, workspace, and flock ported
     depends_on: none
     requirements: [R2, R8, R9]
@@ -127,7 +127,7 @@ updated: 2026-09-04
 
   - phase_slug: m1-assets-setup
     story_id: rust-m1-assets-setup-20260904
-    status: checked
+    status: done
     goal: Embedded assets and `zbrain setup` ported byte-identical
     depends_on: m0-foundation
     requirements: [R2, R8]
@@ -155,7 +155,7 @@ updated: 2026-09-04
 
   - phase_slug: m2-claims-evidence
     story_id: rust-m2-claims-evidence-20260904
-    status: checked
+    status: done
     goal: Claim store, evidence store (SHA-256 skip, digest, immutability), manifest ported with two-way tree readability
     depends_on: m0-foundation
     requirements: [R2, R3, R7]
@@ -230,7 +230,7 @@ updated: 2026-09-04
 
   - phase_slug: m4-index-query
     story_id: rust-m4-index-query-20260904
-    status: checked
+    status: done
     goal: FTS5 index, query/ask, temporal recall, loopback embedder ported; perf at or better than Go
     depends_on: m3-lifecycle-trust
     requirements: [R5, R7, R8]
@@ -276,7 +276,7 @@ updated: 2026-09-04
 
   - phase_slug: m5-mcp-gateway
     story_id: rust-m5-mcp-gateway-20260904
-    status: checked
+    status: done
     goal: Hand-rolled stdio MCP gateway with current protocol revisions and conformance suite
     depends_on: m0-foundation
     notes: Wave-level gating — W1 (transport/framing/revisions) is parallel-eligible after m0; W2a (claim resource + evidence_capture) needs m2; W2b (ask/status/doctor/campaign tools) needs m4 and m6; W3 real-client smoke needs W2b. A subagent may pick up W1 in an early round and W2b in a later round.
@@ -320,7 +320,7 @@ updated: 2026-09-04
 
   - phase_slug: m6-approval-campaign
     story_id: rust-m6-approval-campaign-20260904
-    status: checked
+    status: done
     goal: Owner-pinned approval ceremony, batch approval, and authoring campaign ported 1:1
     depends_on: m3-lifecycle-trust
     requirements: [R3, R7]
@@ -355,7 +355,7 @@ updated: 2026-09-04
 
   - phase_slug: m7-cli-view-eval
     story_id: rust-m7-cli-view-eval-20260904
-    status: checked
+    status: done
     goal: Full CLI surface, loopback viewer, eval suite, and smoke script ported; differential harness covers every command
     depends_on: m6-approval-campaign
     notes: Parallel-eligible slices — W1.T1 (arg parsing/dispatch framework + help text) can start after m0; W2.T1 (view server) can start after m2 (claims read). The phase as a whole (full wiring + eval + smoke) completes after m4/m5/m6.
@@ -393,7 +393,7 @@ updated: 2026-09-04
 
   - phase_slug: m8-cutover
     story_id: rust-m8-cutover-20260904
-    status: checked
+    status: done
     goal: Single cutover PR: CI→Rust, docs/authority→Rust, delete Go tree
     depends_on: m7-cli-view-eval
     requirements: [R1, R4, R9, R10]
@@ -446,6 +446,7 @@ updated: 2026-09-04
 
 ## Decisions
 <!-- Append-only durable entries record timestamp, phase/task, decision, and rationale. -->
+- 2026-09-06 (handoff): absorb: adr docs/adr/0001-go-to-rust-cutover.md — records the expensive-to-reverse cutover decision, consequences, and tag-based recovery.
 - 2026-09-04: Big-bang over strangler/hybrid; Go binary retained as living parity oracle until cutover.
 - 2026-09-04: rusqlite bundled over Turso/Limbo (unproven FTS5); hand-rolled MCP JSON-RPC over rmcp (custom protocol revisions).
 - 2026-09-04: Workspace lives in-repo under `crates/` on branch `rust-rewrite` (history/asset adjacency; single-repo single-identity).
@@ -530,15 +531,15 @@ updated: 2026-09-04
   - receipt: context_sources=plan m8-cutover W1, CI/Makefile/AGENTS.md/docs sweep, Go-tree deletion | policy=.github/workflows/test.yml Rust gate | judge=same-session | judge_model=opencode-go/omen-alpha | retries=0 | rollback_point=tag v0.2.0-go-final + git history | failure_ledger=absent | not_independently_verified=gate-depth only; complete manual review pending (handoff step 6)
 
 ## Current State and Next Action
-- active_phase: none (all m0–m8 checked; cutover PR #29 merged to master as 3c3808f + banner fix d7a76ac)
-- lifecycle_status: checked
-- latest_run_id: m8 cutover
-- latest_trace_ids: [m0-m7, m8-cutover]
-- latest_check_id: m8 gate 2026-09-06 (full Rust gate green on master; revert path proven via v0.2.0-go-final tag)
-- latest_handoff_id: none
+- active_phase: none
+- lifecycle_status: done
+- latest_run_id: handoff-final-review
+- latest_trace_ids: [m0-m8 all done]
+- latest_check_id: m8 full independent review 2026-09-06 (APPROVE_WITH_REQUESTS → requests applied → re-verified)
+- latest_handoff_id: handoff-2026-09-06
 - blockers: none
-- open_items: ["final complete manual review + done transition belongs to handoff closure", "p95 100K bench comparison stays a release gate (box too slow)"]
-- exact_next_action: handoff (plan → docs/plans/completed/ + final review) or next initiative
+- open_items: none
+- exact_next_action: none — initiative complete; p95 100K bench comparison lives on as the release gate per docs/release.md
 
 ## Progress (append)
 - 2026-09-05 | phase: m4-index-query | wave: W1-W2 | task: W1.T1,W1.T2,W2.T1,W2.T2,W2.T3,parity | task_status: DONE | run_id: rust-rewrite-r4-m4 (subagent) | verification: 304 tests (+94); parity OK x5 (setup/claims/lifecycle/index/ask); cross-format proof (Go opens Rust-written index and vice versa, byte-identical to self-read baseline); ask JSON byte-identity incl. fail-closed fixtures; Go oracle `go test ./internal/runtime` green; p95 bench 10K proof 384.78ms ≤ Go 498.04ms (100K comparison = release gate) | surfaces: crates/zbrain/src/{index,index_state,search,query,embedder}.rs, tests/bench_100k.rs, parity --op index/ask + read-only verify ops | commits 75b033d..905e350 on r4-m4, merged a178ca0
@@ -561,3 +562,12 @@ updated: 2026-09-04
 - 2026-09-06 | phase: m8-cutover | wave: W1 | task: W1.T2 | task_status: DONE | verification: docs sweep (README, CONTRIBUTING, trusted-memory-spec, gateway-spec, release, benchmark, PROJECT, acceptance-walkthrough; cli-contract/drift got cutover notes, proofs+historical plans untouched); tag v0.2.0-go-final created+pushed; Go tree + Go harness deleted (internal/, cmd/, go.mod/sum, fixture-gen, parity.sh, cli-parity.sh, bench-fts5.go, parity bin) | commits a6659fe (serde_yml→serde_yaml security fix), 4cdbe7b (deletion)
 - 2026-09-06 | phase: m8-cutover | gate | task_status: DONE | judge: same-session | verdict: APPROVED | gate evidence: cargo fmt ✓; cargo test --workspace ✓ (393 lib + suites, 7 consecutive full runs); clippy -D ✓; cargo audit ✓ CLEAN after serde fix; make build ✓ (4.4M→3.8M stripped); smoke rc=0 ✓; git diff --check ✓; cargo build --release ✓; tag oracle builds+runs on scratch worktree ✓ (revert path proven)
 - 2026-09-06 | m8 findings (material) | flake FIXED: view::tests::socket_smoke_serves_until_close flaked ~1/7 full runs (connect raced serve-thread scheduling under parallel load) → connect readiness probe + 30s read timeout (test-only, no product change); serde_yml/libyml UNSOUND (RUSTSEC-2025-0067/0068) in parse path → replaced with pure-Rust serde_yaml, 150-case corpus + 393 tests still green
+- 2026-09-06 | phase: m8-cutover | mode: full | verdict: APPROVE_WITH_REQUESTS | judge: independent | judge_model: independent-review-agent (fresh context, read-only) | run_id: handoff-final-review
+  - scope: complete Security, Performance, Architecture, Code Quality review of master @ cutover
+  - findings: 0 critical; 5 major (YAML C-FFI still linked via serde_yaml→unsafe-libyaml; asset 0644/0755 vs spec text; unbounded MCP frame buffer; chmod TOCTOU on lock path; freshness-walk O(inputs) per ask)
+  - fixes applied: pure-Rust yaml-rust2 mapping layer (Cargo.lock has only yaml-rust2; audit clean); spec+AGENTS carve-out for program assets (oracle-faithful 0755/0644); 8MiB session-fatal frame cap + tests; fchmod(fd); source.yaml create_new; SAFETY comments; set_file_times cfg(test)-gated; stale skill copy refreshed
+  - real bugs caught by fixes: viewer accepted sockets inherited non-blocking mode → pre-write reads dropped connections (flake root cause + production defect), fixed by restoring blocking mode in handle_connection
+  - perf deferral adjudication: accepted as sound — per-file walk is load-bearing for out-of-band edits (dir mtime misses content-only changes); Go-identical algorithm; p95 bench gate is the tripwire
+  - follow-up re-review: all 5 FIXED verified (395 tests, clippy/audit clean); 2 requests (skill copy, AGENTS note) applied
+  - proof_gaps: p95 100K comparison stays a release gate
+  - receipt: context_sources=master @ d7a76ac + cutover diff, tag v0.2.0-go-final oracle | policy=check.md full mode | judge=independent | judge_model=independent-review-agent | retries=0 | rollback_point=tag v0.2.0-go-final + git history | failure_ledger=absent | not_independently_verified=fixes implemented same-session after the review; re-verified by focused independent re-review + direct gate runs
