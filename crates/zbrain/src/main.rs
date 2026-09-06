@@ -1,4 +1,15 @@
 fn main() {
-    // m0 scaffold: the full CLI dispatch lands in m7-cli-view-eval.
-    std::process::exit(2);
+    let paths = match zbrain::paths::Paths::resolve(zbrain::paths::Options::default()) {
+        Ok(paths) => paths,
+        Err(err) => {
+            eprintln!("{err}");
+            std::process::exit(1);
+        }
+    };
+    let mut app = zbrain::cli::new_app(paths);
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    if let Err(err) = app.run(&args) {
+        eprintln!("{err}");
+        std::process::exit(err.exit_code());
+    }
 }

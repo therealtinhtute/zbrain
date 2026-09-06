@@ -34,6 +34,12 @@ impl Clock for FixedClock {
     }
 }
 
+impl Clock for std::sync::Arc<dyn Clock> {
+    fn now(&self) -> DateTime<Utc> {
+        (**self).now()
+    }
+}
+
 pub fn rfc3339(at: DateTime<Utc>) -> String {
     at.to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
 }
