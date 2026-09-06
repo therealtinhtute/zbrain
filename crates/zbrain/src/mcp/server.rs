@@ -9,8 +9,7 @@ use serde_json::{json, Value};
 use crate::mcp::protocol::{
     error_response, negotiated_version, success_response, success_response_raw,
     validate_request_meta, CallToolResult, DiscoverResult, InitializeParams, InitializeResult,
-    Implementation, ListPromptsPayload, ListResult, ListResourcesPayload,
-    ListResourceTemplatesPayload, ListToolsPayload, McpError, OrderedJson, ReadResourceResult,
+    Implementation, McpError, OrderedJson, ReadResourceResult,
     ResultMeta, RpcRequest, ServerCapabilities, SuccessPayload, ToolEntry, ValidatedMeta,
     PROTOCOL_VERSION_20260728, SERVER_NAME, SUPPORTED_PROTOCOL_VERSIONS,
 };
@@ -77,6 +76,17 @@ pub trait ToolRegistry {
     /// Runs a tool; `None` arguments means JSON-null/absent arguments.
     fn call_tool(&self, _name: &str, _arguments: Option<&Value>) -> Result<CallToolResult, McpError> {
         Err(McpError::unknown_tool(_name))
+    }
+
+    /// Runs a tool with the calling client's `name/version` identity (used
+    /// for lifecycle transition provenance). Defaults to [`ToolRegistry::call_tool`].
+    fn call_tool_with_client(
+        &self,
+        name: &str,
+        arguments: Option<&Value>,
+        _client: &str,
+    ) -> Result<CallToolResult, McpError> {
+        self.call_tool(name, arguments)
     }
 
     fn resources(&self) -> Vec<Value> {
@@ -318,54 +328,24 @@ impl<R: ToolRegistry> Server<R> {
             "notifications/cancelled" | "notifications/progress"
             | "notifications/roots/list_changed" => Ok(json!({}).into()),
             "server/discover" => self.handle_discover().map(SuccessPayload::Json),
-            "tools/list" => Ok(serde_json::to_value(ListResult {
-                result_type: meta.uses_new_protocol.then_some(RESULT_TYPE_COMPLETE),
-                meta: meta
-                    .uses_new_protocol
-                    .then(|| ResultMeta { server_info: Some(self.server_info()) }),
-                ttl_ms: TTL_MS_ZERO,
-                cache_scope: CACHE_SCOPE_PUBLIC,
-                payload: ListToolsPayload { tools: self.registry.tools() },
-            })
-            .expect("list tools result")
-            .into()),
+            "tools/list" => Ok(self.list_result_raw(
+                meta,
+                "tools",
+                OrderedJson::Array(self.registry.tools().iter().map(tool_entry_json).collect()),
+            )),
             "tools/call" => self.handle_call_tool(state, request, meta),
-            "resources/list" => Ok(serde_json::to_value(ListResult {
-                result_type: meta.uses_new_protocol.then_some(RESULT_TYPE_COMPLETE),
-                meta: meta
-                    .uses_new_protocol
-                    .then(|| ResultMeta { server_info: Some(self.server_info()) }),
-                ttl_ms: TTL_MS_ZERO,
-                cache_scope: CACHE_SCOPE_PUBLIC,
-                payload: ListResourcesPayload { resources: self.registry.resources() },
-            })
-            .expect("list resources result")
-            .into()),
-            "resources/templates/list" => Ok(serde_json::to_value(ListResult {
-                result_type: meta.uses_new_protocol.then_some(RESULT_TYPE_COMPLETE),
-                meta: meta
-                    .uses_new_protocol
-                    .then(|| ResultMeta { server_info: Some(self.server_info()) }),
-                ttl_ms: TTL_MS_ZERO,
-                cache_scope: CACHE_SCOPE_PUBLIC,
-                payload: ListResourceTemplatesPayload {
-                    resource_templates: self.registry.resource_templates(),
-                },
-            })
-            .expect("list resource templates result")
-            .into()),
+            "resources/list" => {
+                Ok(self.list_result_raw(meta, "resources", values_json(&self.registry.resources())))
+            }
+            "resources/templates/list" => Ok(self.list_result_raw(
+                meta,
+                "resourceTemplates",
+                values_json(&self.registry.resource_templates()),
+            )),
             "resources/read" => self.handle_read_resource(state, request, meta),
-            "prompts/list" => Ok(serde_json::to_value(ListResult {
-                result_type: meta.uses_new_protocol.then_some(RESULT_TYPE_COMPLETE),
-                meta: meta
-                    .uses_new_protocol
-                    .then(|| ResultMeta { server_info: Some(self.server_info()) }),
-                ttl_ms: TTL_MS_ZERO,
-                cache_scope: CACHE_SCOPE_PUBLIC,
-                payload: ListPromptsPayload { prompts: self.registry.prompts() },
-            })
-            .expect("list prompts result")
-            .into()),
+            "prompts/list" => {
+                Ok(self.list_result_raw(meta, "prompts", values_json(&self.registry.prompts())))
+            }
             "prompts/get" => {
                 let name = request
                     .params
@@ -442,8 +422,7 @@ impl<R: ToolRegistry> Server<R> {
         Ok(json!({}))
     }
 
-    fn handle_discover(&self) -> Result<Value, McpError> {
-        let result = DiscoverResult {
+    fn handle_discover(&self) -> Result<Value, McpError> {        let result = DiscoverResult {
             result_type: RESULT_TYPE_COMPLETE,
             meta: ResultMeta { server_info: Some(self.server_info()) },
             ttl_ms: TTL_MS_ZERO,
@@ -453,6 +432,27 @@ impl<R: ToolRegistry> Server<R> {
             instructions: None,
         };
         Ok(serde_json::to_value(result).expect("discover result"))
+    }
+
+    /// Renders a `*/list` result with the go-sdk field order
+    /// (`resultType`, `_meta`, `ttlMs`, `cacheScope`, payload) that
+    /// `serde_json::Value` maps cannot hold. Returned raw so the payload's
+    /// own key order (tool schemas, template entries) survives the wire.
+    fn list_result_raw(
+        &self,
+        meta: &ValidatedMeta,
+        payload_key: &'static str,
+        payload: OrderedJson,
+    ) -> SuccessPayload {
+        let mut entries: Vec<(&'static str, OrderedJson)> = Vec::new();
+        if meta.uses_new_protocol {
+            entries.push(("resultType", OrderedJson::string(RESULT_TYPE_COMPLETE)));
+            entries.push(("_meta", server_info_meta(&self.server_info())));
+        }
+        entries.push(("ttlMs", OrderedJson::Int(TTL_MS_ZERO)));
+        entries.push(("cacheScope", OrderedJson::string(CACHE_SCOPE_PUBLIC)));
+        entries.push((payload_key, payload));
+        SuccessPayload::Raw(OrderedJson::object(entries).compact())
     }
 
     fn handle_call_tool(
@@ -476,7 +476,16 @@ impl<R: ToolRegistry> Server<R> {
             .unwrap_or_default()
             .to_string();
         let arguments = params.get("arguments").filter(|a| !a.is_null());
-        let mut result = self.registry.call_tool(&name, arguments)?;
+        // Lifecycle transition provenance records the calling client
+        // (`mcpClientName` in Go): the per-request `_meta` identity wins on
+        // the stateless path, else the handshake's clientInfo.
+        let client_info = meta
+            .client_info
+            .as_ref()
+            .or_else(|| state.initialize_params.as_ref().and_then(|p| p.client_info.as_ref()));
+        let mut result = self
+            .registry
+            .call_tool_with_client(&name, arguments, &mcp_client_name(client_info))?;
         if Self::client_supports_multi_round_trip(state) {
             result.result_type = Some(RESULT_TYPE_COMPLETE);
         }
@@ -580,6 +589,45 @@ fn server_info_meta(server_info: &Implementation) -> OrderedJson {
             ("version", OrderedJson::string(&server_info.version)),
         ]),
     )])
+}
+
+/// Ports `mcpClientName`: `name/version`, or `unknown` when the session
+/// carries no usable client identity.
+fn mcp_client_name(info: Option<&Implementation>) -> String {
+    let (name, version) = match info {
+        Some(info) => (info.name.trim(), info.version.trim()),
+        None => ("", ""),
+    };
+    if name.is_empty() || version.is_empty() {
+        return "unknown".to_string();
+    }
+    format!("{name}/{version}")
+}
+
+/// One `tools/list` entry in go-sdk wire order
+/// (`description`, `inputSchema`, `name`); the schema keeps the gateway's
+/// struct field order, which `serde_json::Value` (sorted keys) cannot hold.
+fn tool_entry_json(entry: &ToolEntry) -> OrderedJson {
+    let mut fields = Vec::new();
+    if let Some(description) = &entry.description {
+        fields.push(("description", OrderedJson::string(description)));
+    }
+    fields.push(("inputSchema", entry.input_schema.clone()));
+    fields.push(("name", OrderedJson::string(&entry.name)));
+    OrderedJson::object(fields)
+}
+
+/// A `*/list` payload of pre-rendered values, spliced verbatim so any key
+/// order the registry produced survives the wire.
+fn values_json(values: &[Value]) -> OrderedJson {
+    OrderedJson::Array(
+        values
+            .iter()
+            .map(|value| {
+                OrderedJson::Raw(serde_json::to_string(value).unwrap_or_else(|_| "null".to_string()))
+            })
+            .collect(),
+    )
 }
 
 #[cfg(test)]

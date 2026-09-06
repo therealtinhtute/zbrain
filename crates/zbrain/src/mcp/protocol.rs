@@ -110,6 +110,16 @@ impl McpError {
         Self::invalid_params(format!("unknown tool {name:?}"))
     }
 
+    /// Genuine server failure (`runMCPTool`'s 5s handler timeout surfaces the
+    /// Go gateway's "tool timeout" as -32603).
+    pub fn tool_timeout() -> Self {
+        Self::Wire {
+            code: CODE_INTERNAL_ERROR,
+            message: "tool timeout".to_string(),
+            data: None,
+        }
+    }
+
     pub fn unknown_prompt(name: &str) -> Self {
         Self::invalid_params(format!("unknown prompt {name:?}"))
     }
@@ -303,6 +313,9 @@ pub enum OrderedJson {
     Str(String),
     Array(Vec<OrderedJson>),
     Object(Vec<(&'static str, OrderedJson)>),
+    /// Pre-rendered compact JSON spliced verbatim (list payloads whose key
+    /// order `serde_json::Value` cannot represent).
+    Raw(String),
 }
 
 impl OrderedJson {
@@ -349,6 +362,7 @@ impl OrderedJson {
             Self::Int(value) => out.push_str(&value.to_string()),
             Self::Float(value) => out.push_str(&go_format_f64(*value)),
             Self::Str(value) => push_escaped_json_string(out, value),
+            Self::Raw(raw) => out.push_str(raw),
             Self::Array(items) => {
                 if items.is_empty() {
                     out.push_str("[]");
@@ -418,6 +432,9 @@ fn push_indent(out: &mut String, depth: usize) {
                 .map_err(serde::ser::Error::custom)?
                 .serialize(serializer),
             Self::Str(value) => serializer.serialize_str(value),
+            Self::Raw(raw) => serde_json::value::RawValue::from_string(raw.clone())
+                .map_err(serde::ser::Error::custom)?
+                .serialize(serializer),
             Self::Array(items) => {
                 let mut seq = serializer.serialize_seq(Some(items.len()))?;
                 for item in items {

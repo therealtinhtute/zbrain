@@ -1,25 +1,30 @@
 //! gateway.rs — the real tool/resource registry behind [`ToolRegistry`].
-//! W2.T1 ported `internal/mcp/resources.go` (claim + evidence read
-//! resources) and the evidence_capture tool; W2.T2 ports the remaining
-//! non-campaign tools of `internal/mcp/tools.go` (workspace_current,
-//! memory_ask, memory_status, memory_reindex, claim_draft). Campaign tools
-//! (campaign_begin/next/submit_draft) and claim_lifecycle slot in with the
-//! m6 approval/campaign runtime (ChallengeStore/CampaignStore) and are
-//! intentionally absent.
+//! Ports `internal/mcp/tools.go` (workspace_current, memory_ask,
+//! memory_status, memory_reindex, evidence_capture, claim_draft,
+//! claim_lifecycle, campaign_begin/next/submit_draft) over the canonical
+//! claims, evidence, approval, and campaign stores.
 
 use std::path::Path;
-use std::time::Instant;
+use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use serde_json::Value;
 
+use crate::approval::{
+    Challenge, ChallengePrepare, ChallengeStore, CHALLENGE_OPERATION_APPROVE,
+    CHALLENGE_OPERATION_REVOKE, CHALLENGE_OPERATION_SUPERSEDE,
+};
+use crate::campaign::{CampaignSpec, CampaignStore};
 use crate::claims::{
-    new_claim_id, Claim, ClaimSource, ClaimStore, ClaimTransition, ClaimTransitionAuthorization,
-    Contradiction, EvidenceSpan, OKF_CLAIM_TYPE,
+    new_claim_id, verify_claim_digest, Claim, ClaimSource, ClaimStore, ClaimTransition,
+    ClaimTransitionAuthorization, Contradiction, EvidenceSpan, CLAIM_STATUS_APPROVED,
+    OKF_CLAIM_TYPE,
 };
 use crate::clock::{rfc3339, Clock};
 use crate::evidence::{Evidence, EvidenceStore};
 use crate::embedder::{rebuild_with_options, EmbeddingStore, RebuildOptions};
 use crate::index::{approved_catalog, IndexStore, IndexSummary, InvalidClaimSerde};
+use crate::lifecycle::ClaimMutationOptions;
 use crate::mcp::protocol::{
     CallToolResult, ContentBlock, McpError, OrderedJson, ReadResourceResult, ToolEntry,
 };
@@ -31,8 +36,8 @@ use crate::query::{
     TrustedQueryOptions, TrustedQueryResponse,
 };
 
-/// Sized clock reference so a `Box<dyn Clock>` satisfies the store's
-/// `&impl Clock` bound without touching the store signatures.
+/// Sized clock reference so an `Arc<dyn Clock>` also satisfies the evidence
+/// store's `&impl Clock` bound without touching the store signatures.
 struct SharedClock<'a>(&'a dyn Clock);
 
 impl Clock for SharedClock<'_> {
@@ -42,11 +47,12 @@ impl Clock for SharedClock<'_> {
 }
 
 /// Real gateway registry: tool/resource handlers wired to the canonical
-/// claims and evidence stores. Mirrors `internal/mcp.Options` (paths, clock)
-/// with the registration done in the [`ToolRegistry`] methods.
+/// claims, evidence, approval, and campaign stores. Mirrors
+/// `internal/mcp.Options` (paths, clock) with the registration done in the
+/// [`ToolRegistry`] methods.
 pub struct ZbrainRegistry {
     pub paths: Paths,
-    pub clock: Box<dyn Clock>,
+    pub clock: Arc<dyn Clock>,
     pub stderr: SafeStderr,
 }
 
@@ -55,8 +61,12 @@ pub struct ZbrainRegistry {
 enum PropertyKind {
     String,
     Boolean,
+    /// `{"type": "integer"}` (integral JSON numbers, including `3.0`).
+    Integer,
     /// `{"type": ["null", "array"], "items": {"type": "string"}}`.
     StringArray,
+    /// `campaign_begin` specs: nullable array of draft-spec objects.
+    SpecArray,
 }
 
 /// A tool's inferred input schema as `jsonschema.ForType` renders the Go
@@ -68,7 +78,7 @@ struct ToolInput {
 
 impl ZbrainRegistry {
     pub fn new(paths: Paths, clock: Box<dyn Clock>) -> Self {
-        Self { paths, clock, stderr: SafeStderr::default() }
+        Self { paths, clock: Arc::from(clock), stderr: SafeStderr::default() }
     }
 
     /// Ports `resolveWorkspace`: explicit name or the current workspace,
@@ -88,8 +98,9 @@ impl ZbrainRegistry {
 
     /// Ports `runMCPTool`: schema validation fails closed as isError,
     /// the marshaled-input bounds check maps to -32602, then the handler
-    /// body runs. (Go's 5s handler timeout has no deterministic test and is
-    /// not reproduced.)
+    /// body runs under Go's 5s dispatch timeout (a synchronous handler that
+    /// overruns surfaces -32603 `tool timeout`, matching the Go deadline
+    /// check after `fn(tctx)` returns).
     fn run_tool(
         &self,
         arguments: Option<&Value>,
@@ -105,7 +116,12 @@ impl ZbrainRegistry {
                 return Err(McpError::invalid_params("input exceeds 1MB limit"));
             }
         }
-        body(arguments.unwrap_or(&Value::Object(Default::default())))
+        let started = Instant::now();
+        let outcome = body(arguments.unwrap_or(&Value::Object(Default::default())));
+        if started.elapsed() >= Duration::from_secs(5) {
+            return Err(McpError::tool_timeout());
+        }
+        outcome
     }
 
     /// Ports the evidence_capture handler body: guards, workspace
@@ -373,6 +389,374 @@ impl ZbrainRegistry {
         })
     }
 
+    /// Ports the claim_lifecycle handler body: prepare/apply dispatch.
+    /// Structural parameter faults (`invalidLifecycleParams`) map to the
+    /// -32602 protocol error; domain failures become isError results.
+    fn run_claim_lifecycle(
+        &self,
+        arguments: Option<&Value>,
+        client: &str,
+    ) -> Result<CallToolResult, McpError> {
+        self.run_tool(arguments, &CLAIM_LIFECYCLE_INPUT, |arguments| {
+            match arguments.get("operation").and_then(Value::as_str).unwrap_or_default() {
+                "prepare" => self.prepare_lifecycle(arguments),
+                "apply" => self.apply_lifecycle(arguments, client),
+                _ => Err(McpError::invalid_params("operation must be prepare or apply")),
+            }
+        })
+    }
+
+    /// Ports `prepareLifecycle`: action binding against the current canonical
+    /// claim, then `PrepareChallenge`. No token exists until the local owner
+    /// grant ceremony releases one.
+    fn prepare_lifecycle(&self, arguments: &Value) -> Result<CallToolResult, McpError> {
+        let action_text =
+            arguments.get("action").and_then(Value::as_str).unwrap_or_default();
+        if action_text.trim().is_empty() {
+            return Err(McpError::invalid_params("action is required for prepare"));
+        }
+        let action = match lifecycle_action(action_text) {
+            Some(action) => action,
+            None => {
+                return Err(McpError::invalid_params(
+                    "action must be approve, supersede, or revoke",
+                ));
+            }
+        };
+        let workspace = match self.resolve_workspace(
+            arguments.get("workspace").and_then(Value::as_str).unwrap_or_default(),
+        ) {
+            Ok(workspace) => workspace,
+            Err(message) => return Ok(is_error_result(&message)),
+        };
+        let claim_id = arguments
+            .get("claim_id")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .trim()
+            .to_string();
+        if claim_id.is_empty() {
+            return Err(McpError::invalid_params("claim_id is required for prepare"));
+        }
+        let store = ClaimStore::new(self.paths.clone());
+        let claim = match store.read(&workspace, &claim_id) {
+            Ok(claim) => claim,
+            Err(error) if error.is_not_found() => {
+                return Ok(is_error_result("file does not exist"));
+            }
+            Err(error) => return Ok(is_error_result(&error.to_string())),
+        };
+        let canonical_digest = match store.canonical_digest(&workspace, &claim_id) {
+            Ok((_, digest)) => digest,
+            Err(error) => return Ok(is_error_result(&error.to_string())),
+        };
+        let asserted_digest =
+            arguments.get("canonical_draft_digest").and_then(Value::as_str).unwrap_or_default();
+        if !asserted_digest.is_empty() && asserted_digest != canonical_digest {
+            return Ok(is_error_result(
+                "canonical draft digest does not match the current claim",
+            ));
+        }
+
+        let mut superseded = claim.supersedes.clone();
+        superseded.sort();
+        if let Some(asserted) = arguments.get("superseded_ids").and_then(Value::as_array) {
+            let asserted: Vec<String> = asserted
+                .iter()
+                .filter_map(Value::as_str)
+                .map(str::to_string)
+                .collect();
+            if !same_lifecycle_ids(&asserted, &superseded) {
+                return Ok(is_error_result(
+                    "superseded IDs do not match the current claim",
+                ));
+            }
+        }
+
+        let mut prior_digest = String::new();
+        if action == CHALLENGE_OPERATION_SUPERSEDE {
+            match superseded_prior_digest(&store, &workspace, &superseded) {
+                Ok(digest) => prior_digest = digest,
+                Err(message) => return Ok(is_error_result(&message)),
+            }
+        } else if action == CHALLENGE_OPERATION_REVOKE && claim.status == CLAIM_STATUS_APPROVED {
+            if let Err(error) = verify_claim_digest(&claim) {
+                return Ok(is_error_result(&format!(
+                    "verify claim {claim_id} before revoke: {error}"
+                )));
+            }
+            prior_digest = claim.verified_digest.clone();
+        }
+        let asserted_prior = arguments
+            .get("prior_verification_digest")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        if !asserted_prior.is_empty() && asserted_prior != prior_digest {
+            return Ok(is_error_result(
+                "prior verification digest does not match the current claim",
+            ));
+        }
+
+        let revoke_reason =
+            arguments.get("revoke_reason").and_then(Value::as_str).unwrap_or_default().to_string();
+        if action == CHALLENGE_OPERATION_REVOKE {
+            if revoke_reason.trim().is_empty() {
+                return Err(McpError::invalid_params("revoke_reason is required for revoke"));
+            }
+        } else if !revoke_reason.is_empty() {
+            return Ok(is_error_result("revoke_reason is only valid for revoke"));
+        }
+
+        let prepared = match store.prepare_challenge(
+            &workspace,
+            ChallengePrepare {
+                workspace: workspace.clone(),
+                operation: action.to_string(),
+                claim_id: claim_id.clone(),
+                canonical_draft_digest: canonical_digest,
+                superseded_ids: superseded,
+                prior_verification_digest: prior_digest,
+                revoke_reason,
+                ..ChallengePrepare::default()
+            },
+        ) {
+            Ok(prepared) => prepared,
+            Err(error) => return Ok(is_error_result(&error.to_string())),
+        };
+        Ok(text_result(lifecycle_prepare_json(&prepared.challenge)))
+    }
+
+    /// Ports `applyLifecycle`: assertion checks against the persisted
+    /// challenge, then `ApplyChallenge` with the MCP caller provenance. The
+    /// challenge snapshot predates apply, so `token_expires_at` reports the
+    /// grant even after the token is consumed.
+    fn apply_lifecycle(
+        &self,
+        arguments: &Value,
+        client: &str,
+    ) -> Result<CallToolResult, McpError> {
+        let challenge_id = arguments
+            .get("challenge_id")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .trim()
+            .to_string();
+        if challenge_id.is_empty() {
+            return Err(McpError::invalid_params("challenge_id is required for apply"));
+        }
+        let token =
+            arguments.get("token").and_then(Value::as_str).unwrap_or_default().to_string();
+        if token.is_empty() {
+            return Err(McpError::invalid_params("token is required for apply"));
+        }
+        let (challenge, workspace) =
+            match ChallengeStore::new(self.paths.clone()).find_challenge(&challenge_id) {
+                Ok(found) => found,
+                Err(error) => return Ok(is_error_result(&error.to_string())),
+            };
+        let workspace_arg =
+            arguments.get("workspace").and_then(Value::as_str).unwrap_or_default();
+        if !workspace_arg.is_empty() && workspace_arg != workspace {
+            return Ok(is_error_result(&format!(
+                "workspace {workspace_arg:?} does not own challenge {challenge_id}"
+            )));
+        }
+        let claim_arg =
+            arguments.get("claim_id").and_then(Value::as_str).unwrap_or_default();
+        if !claim_arg.is_empty() && claim_arg.trim() != challenge.claim_id {
+            return Ok(is_error_result(&format!(
+                "claim_id does not match challenge {challenge_id}"
+            )));
+        }
+        let action_arg =
+            arguments.get("action").and_then(Value::as_str).unwrap_or_default();
+        if !action_arg.is_empty() {
+            match lifecycle_action(action_arg) {
+                None => {
+                    return Err(McpError::invalid_params(
+                        "action must be approve, supersede, or revoke",
+                    ));
+                }
+                Some(action) if action != challenge.operation => {
+                    return Ok(is_error_result(&format!(
+                        "action {action_arg:?} does not match challenge {challenge_id} action {:?}",
+                        challenge.operation
+                    )));
+                }
+                _ => {}
+            }
+        }
+        let digest_arg = arguments
+            .get("canonical_draft_digest")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        if !digest_arg.is_empty() && digest_arg != challenge.canonical_draft_digest {
+            return Ok(is_error_result(&format!(
+                "canonical draft digest does not match challenge {challenge_id}"
+            )));
+        }
+        if let Some(asserted) = arguments.get("superseded_ids").and_then(Value::as_array) {
+            let asserted: Vec<String> = asserted
+                .iter()
+                .filter_map(Value::as_str)
+                .map(str::to_string)
+                .collect();
+            if !same_lifecycle_ids(&asserted, &challenge.superseded_ids) {
+                return Ok(is_error_result(&format!(
+                    "superseded IDs do not match challenge {challenge_id}"
+                )));
+            }
+        }
+        let prior_arg = arguments
+            .get("prior_verification_digest")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        if !prior_arg.is_empty() && prior_arg != challenge.prior_verification_digest {
+            return Ok(is_error_result(&format!(
+                "prior verification digest does not match challenge {challenge_id}"
+            )));
+        }
+        let reason_arg =
+            arguments.get("revoke_reason").and_then(Value::as_str).unwrap_or_default();
+        if !reason_arg.is_empty() && reason_arg != challenge.revoke_reason {
+            return Ok(is_error_result(&format!(
+                "revoke reason does not match challenge {challenge_id}"
+            )));
+        }
+
+        let claim = match ClaimStore::with_clock(self.paths.clone(), self.clock.clone())
+            .apply_challenge(
+                &workspace,
+                &challenge_id,
+                &token,
+                ClaimMutationOptions {
+                    verified_by: "owner:mcp".to_string(),
+                    authorization: Some(ClaimTransitionAuthorization {
+                        challenge_id: challenge.id.clone(),
+                        method: "mcp.claim_lifecycle".to_string(),
+                        mcp_client: client.to_string(),
+                    }),
+                },
+            ) {
+            Ok(claim) => claim,
+            Err(error) => return Ok(is_error_result(&error.to_string())),
+        };
+        Ok(text_result(lifecycle_apply_json(&challenge, &claim)))
+    }
+
+    /// Ports the campaign_begin handler body: spec validation plus run-file
+    /// persistence. No claim is created until each draft is submitted.
+    fn run_campaign_begin(
+        &self,
+        arguments: Option<&Value>,
+    ) -> Result<CallToolResult, McpError> {
+        self.run_tool(arguments, &CAMPAIGN_BEGIN_INPUT, |arguments| {
+            let workspace = match self.resolve_workspace(
+                arguments.get("workspace").and_then(Value::as_str).unwrap_or_default(),
+            ) {
+                Ok(workspace) => workspace,
+                Err(message) => return Ok(is_error_result(&message)),
+            };
+            let specs: Vec<CampaignSpec> = arguments
+                .get("specs")
+                .and_then(Value::as_array)
+                .map(|items| items.iter().map(campaign_spec_from_json).collect())
+                .unwrap_or_default();
+            let run = match CampaignStore::with_clock(self.paths.clone(), self.clock.clone())
+                .begin_campaign(&workspace, &specs)
+            {
+                Ok(run) => run,
+                Err(error) => return Ok(is_error_result(&error.to_string())),
+            };
+            Ok(text_result(OrderedJson::object(vec![
+                ("schema_version", OrderedJson::Int(1)),
+                ("workspace", OrderedJson::string(&workspace)),
+                ("run_id", OrderedJson::string(&run.run_id)),
+                ("phase", OrderedJson::string(&run.phase)),
+                ("total_drafts", OrderedJson::Int(run.drafts.len() as i64)),
+            ])))
+        })
+    }
+
+    /// Ports the campaign_next handler body: read-only resume reporting the
+    /// run state and the next pending draft spec.
+    fn run_campaign_next(
+        &self,
+        arguments: Option<&Value>,
+    ) -> Result<CallToolResult, McpError> {
+        self.run_tool(arguments, &CAMPAIGN_NEXT_INPUT, |arguments| {
+            let workspace = match self.resolve_workspace(
+                arguments.get("workspace").and_then(Value::as_str).unwrap_or_default(),
+            ) {
+                Ok(workspace) => workspace,
+                Err(message) => return Ok(is_error_result(&message)),
+            };
+            let run_id =
+                arguments.get("run_id").and_then(Value::as_str).unwrap_or_default().trim();
+            let state = match CampaignStore::with_clock(self.paths.clone(), self.clock.clone())
+                .resume_campaign(&workspace, run_id)
+            {
+                Ok(state) => state,
+                Err(error) => return Ok(is_error_result(&error.to_string())),
+            };
+            let next_spec = if state.next_index >= 0 {
+                campaign_spec_json(&state.run.drafts[state.next_index as usize].spec)
+            } else {
+                OrderedJson::Null
+            };
+            Ok(text_result(OrderedJson::object(vec![
+                ("schema_version", OrderedJson::Int(1)),
+                ("workspace", OrderedJson::string(&workspace)),
+                ("run_id", OrderedJson::string(&state.run.run_id)),
+                ("phase", OrderedJson::string(&state.run.phase)),
+                ("pending", OrderedJson::Int(state.pending as i64)),
+                ("submitted", OrderedJson::Int(state.submitted as i64)),
+                ("superseded_by_owner", OrderedJson::Int(state.superseded_by_owner as i64)),
+                ("next_index", OrderedJson::Int(state.next_index)),
+                ("next_spec", next_spec),
+            ])))
+        })
+    }
+
+    /// Ports the campaign_submit_draft handler body: one pending draft becomes
+    /// a claim draft through the existing draft path (never trusted answer
+    /// material).
+    fn run_campaign_submit_draft(
+        &self,
+        arguments: Option<&Value>,
+    ) -> Result<CallToolResult, McpError> {
+        self.run_tool(arguments, &CAMPAIGN_SUBMIT_INPUT, |arguments| {
+            let workspace = match self.resolve_workspace(
+                arguments.get("workspace").and_then(Value::as_str).unwrap_or_default(),
+            ) {
+                Ok(workspace) => workspace,
+                Err(message) => return Ok(is_error_result(&message)),
+            };
+            let run_id =
+                arguments.get("run_id").and_then(Value::as_str).unwrap_or_default().trim();
+            let body = arguments.get("body").and_then(Value::as_str).unwrap_or_default();
+            let submission = match CampaignStore::with_clock(
+                self.paths.clone(),
+                self.clock.clone(),
+            )
+            .submit_campaign_draft(&workspace, run_id, campaign_index(arguments.get("index")), body)
+            {
+                Ok(submission) => submission,
+                Err(error) => return Ok(is_error_result(&error.to_string())),
+            };
+            Ok(text_result(OrderedJson::object(vec![
+                ("schema_version", OrderedJson::Int(1)),
+                ("workspace", OrderedJson::string(&workspace)),
+                ("run_id", OrderedJson::string(&submission.run_id)),
+                ("index", OrderedJson::Int(submission.index as i64)),
+                ("id", OrderedJson::string(&submission.claim_id)),
+                ("status", OrderedJson::string(&submission.claim_status)),
+                ("path", OrderedJson::string(&submission.claim_path)),
+                ("pending", OrderedJson::Int(submission.state.pending as i64)),
+            ])))
+        })
+    }
+
     /// Ports `readClaimResource`: canonical claim JSON text content.
     fn read_claim_resource(
         &self,
@@ -412,9 +796,29 @@ impl ToolRegistry for ZbrainRegistry {
         // The go-sdk lists tools sorted by name.
         let mut tools = vec![
             ToolEntry {
+                description: Some("Start a resumable authoring campaign that will produce claim drafts only; no claim is created until each draft is submitted.".to_string()),
+                input_schema: campaign_begin_input_schema(),
+                name: "campaign_begin".to_string(),
+            },
+            ToolEntry {
+                description: Some("Resume an authoring campaign read-only: report its state, counts, and the next pending draft spec without mutating anything.".to_string()),
+                input_schema: campaign_next_input_schema(),
+                name: "campaign_next".to_string(),
+            },
+            ToolEntry {
+                description: Some("Submit one campaign draft as a claim draft through the existing draft path (drafts are never trusted answer material).".to_string()),
+                input_schema: campaign_submit_input_schema(),
+                name: "campaign_submit_draft".to_string(),
+            },
+            ToolEntry {
                 description: Some("Create a draft claim as a promotion candidate (drafts are never trusted answer material).".to_string()),
                 input_schema: claim_draft_input_schema(),
                 name: "claim_draft".to_string(),
+            },
+            ToolEntry {
+                description: Some("Prepare an owner-pinned lifecycle challenge or apply one valid one-time token; no approval UI or HTTP mutation endpoint is exposed.".to_string()),
+                input_schema: claim_lifecycle_input_schema(),
+                name: "claim_lifecycle".to_string(),
             },
             ToolEntry {
                 description: Some("Snapshot a local source file into an immutable evidence record.".to_string()),
@@ -447,16 +851,27 @@ impl ToolRegistry for ZbrainRegistry {
     }
 
     fn call_tool(&self, name: &str, arguments: Option<&Value>) -> Result<CallToolResult, McpError> {
+        self.call_tool_with_client(name, arguments, "unknown")
+    }
+
+    fn call_tool_with_client(
+        &self,
+        name: &str,
+        arguments: Option<&Value>,
+        client: &str,
+    ) -> Result<CallToolResult, McpError> {
         let started = Instant::now();
         let outcome = match name {
+            "campaign_begin" => self.run_campaign_begin(arguments),
+            "campaign_next" => self.run_campaign_next(arguments),
+            "campaign_submit_draft" => self.run_campaign_submit_draft(arguments),
             "claim_draft" => self.run_claim_draft(arguments),
+            "claim_lifecycle" => self.run_claim_lifecycle(arguments, client),
             "evidence_capture" => self.run_evidence_capture(arguments),
             "memory_ask" => self.run_memory_ask(arguments),
             "memory_reindex" => self.run_memory_reindex(arguments),
             "memory_status" => self.run_memory_status(arguments),
             "workspace_current" => self.run_workspace_current(arguments),
-            // claim_lifecycle and campaign_* land with the m6
-            // approval/campaign runtime; unknown until then.
             _ => return Err(McpError::unknown_tool(name)),
         };
         let workspace = arguments
@@ -557,12 +972,48 @@ fn boolean_property(description: &str) -> OrderedJson {
 
 fn string_array_property(description: &str) -> OrderedJson {
     OrderedJson::object(vec![
-        ("type", OrderedJson::array(vec![OrderedJson::string("null"), OrderedJson::string("array")])),
+        ( "type", OrderedJson::array(vec![OrderedJson::string("null"), OrderedJson::string("array")])),
         (
             "items",
             OrderedJson::object(vec![("type", OrderedJson::string("string"))]),
         ),
         ("description", OrderedJson::string(description)),
+    ])
+}
+
+fn integer_property(description: &str) -> OrderedJson {
+    OrderedJson::object(vec![
+        ("type", OrderedJson::string("integer")),
+        ("description", OrderedJson::string(description)),
+    ])
+}
+
+/// `campaign_begin` specs items: the nested `campaignSpecIn` object schema
+/// (no description; the outer property carries it).
+fn campaign_spec_item_schema() -> OrderedJson {
+    OrderedJson::object(vec![
+        ("type", OrderedJson::string("object")),
+        (
+            "properties",
+            OrderedJson::object(vec![
+                ("tier", string_property("claim tier")),
+                ("title", string_property("claim title")),
+                ("basis", string_property("owner, evidence, or derived")),
+                ("evidence", string_array_property("evidence IDs to bind")),
+                ("support", string_array_property("supporting claim IDs")),
+                (
+                    "conflicts_with",
+                    string_array_property("conflicting claim IDs"),
+                ),
+            ]),
+        ),
+        (
+            "required",
+            OrderedJson::Array(
+                ["tier", "title", "basis"].iter().map(|name| OrderedJson::string(*name)).collect(),
+            ),
+        ),
+        ("additionalProperties", OrderedJson::Bool(false)),
     ])
 }
 
@@ -745,10 +1196,164 @@ fn claim_draft_input_schema() -> OrderedJson {
     )
 }
 
+/// `claim_lifecycle` (Go `lifecycleIn`): only `operation` is required.
+const CLAIM_LIFECYCLE_INPUT: ToolInput = ToolInput {
+    required: &["operation"],
+    properties: &[
+        ("operation", PropertyKind::String),
+        ("action", PropertyKind::String),
+        ("workspace", PropertyKind::String),
+        ("claim_id", PropertyKind::String),
+        ("challenge_id", PropertyKind::String),
+        ("token", PropertyKind::String),
+        ("canonical_draft_digest", PropertyKind::String),
+        ("superseded_ids", PropertyKind::StringArray),
+        ("prior_verification_digest", PropertyKind::String),
+        ("revoke_reason", PropertyKind::String),
+    ],
+};
+
+fn claim_lifecycle_input_schema() -> OrderedJson {
+    input_schema(
+        vec![
+            ("operation", string_property("prepare or apply")),
+            (
+                "action",
+                string_property("approve, supersede, or revoke for prepare"),
+            ),
+            (
+                "workspace",
+                string_property("target workspace; defaults to the current workspace for prepare; apply resolves the challenge owner"),
+            ),
+            (
+                "claim_id",
+                string_property("target claim ID for prepare or optional apply assertion"),
+            ),
+            ("challenge_id", string_property("challenge ID for apply")),
+            ("token", string_property("one-time challenge token for apply")),
+            (
+                "canonical_draft_digest",
+                string_property("canonical draft digest bound to the action"),
+            ),
+            (
+                "superseded_ids",
+                string_array_property("canonical superseded claim IDs bound to the action"),
+            ),
+            (
+                "prior_verification_digest",
+                string_property("prior verification digest bound to the action"),
+            ),
+            ("revoke_reason", string_property("reason bound to a revoke action")),
+        ],
+        &["operation"],
+    )
+}
+
+/// `campaign_begin` (Go `campaignBeginIn`).
+const CAMPAIGN_BEGIN_INPUT: ToolInput = ToolInput {
+    required: &["specs"],
+    properties: &[
+        ("workspace", PropertyKind::String),
+        ("specs", PropertyKind::SpecArray),
+    ],
+};
+
+fn campaign_begin_input_schema() -> OrderedJson {
+    let spec_property = vec![
+        (
+            "type",
+            OrderedJson::array(vec![OrderedJson::string("null"), OrderedJson::string("array")]),
+        ),
+        ("items", campaign_spec_item_schema()),
+        (
+            "description",
+            OrderedJson::string("ordered claim draft specs to author"),
+        ),
+    ];
+    input_schema(
+        vec![
+            (
+                "workspace",
+                string_property("target workspace; defaults to the current workspace"),
+            ),
+            ("specs", OrderedJson::object(spec_property)),
+        ],
+        &["specs"],
+    )
+}
+
+/// `campaign_next` (Go `campaignNextIn`).
+const CAMPAIGN_NEXT_INPUT: ToolInput = ToolInput {
+    required: &["run_id"],
+    properties: &[
+        ("workspace", PropertyKind::String),
+        ("run_id", PropertyKind::String),
+    ],
+};
+
+fn campaign_next_input_schema() -> OrderedJson {
+    input_schema(
+        vec![
+            (
+                "workspace",
+                string_property("target workspace; defaults to the current workspace"),
+            ),
+            ("run_id", string_property("campaign run ID")),
+        ],
+        &["run_id"],
+    )
+}
+
+/// `campaign_submit_draft` (Go `campaignSubmitIn`).
+const CAMPAIGN_SUBMIT_INPUT: ToolInput = ToolInput {
+    required: &["run_id", "index", "body"],
+    properties: &[
+        ("workspace", PropertyKind::String),
+        ("run_id", PropertyKind::String),
+        ("index", PropertyKind::Integer),
+        ("body", PropertyKind::String),
+    ],
+};
+
+fn campaign_submit_input_schema() -> OrderedJson {
+    input_schema(
+        vec![
+            (
+                "workspace",
+                string_property("target workspace; defaults to the current workspace"),
+            ),
+            ("run_id", string_property("campaign run ID")),
+            (
+                "index",
+                integer_property("zero-based draft index within the run"),
+            ),
+            ("body", string_property("claim body for this draft")),
+        ],
+        &["run_id", "index", "body"],
+    )
+}
+
+/// `campaign_begin` spec items: required and properties in Go struct order.
+const CAMPAIGN_SPEC_INPUT: ToolInput = ToolInput {
+    required: &["tier", "title", "basis"],
+    properties: &[
+        ("tier", PropertyKind::String),
+        ("title", PropertyKind::String),
+        ("basis", PropertyKind::String),
+        ("evidence", PropertyKind::StringArray),
+        ("support", PropertyKind::StringArray),
+        ("conflicts_with", PropertyKind::StringArray),
+    ],
+};
+
 /// Schema-validation gate shared by every tool, mirroring the SDK's
 /// `applySchema` against the inferred schema. Message shapes ported from
-/// `jsonschema-go`'s validate errors against the live Go gateway
-/// (`validating root: ` prefixes, integer/number kind names).
+/// `jsonschema-go`'s validate errors against the live Go gateway: each frame
+/// wraps its inner failure as `validating <location>: <inner>`, with the root
+/// frame at `validating root: `. Within one object, property type failures
+/// (in schema order) win over additional-properties, which win over missing
+/// required properties. JSON null fails every non-nullable type as
+/// `<invalid reflect.Value>`; only `["null", "array"]` properties accept it.
 fn validate_arguments(arguments: Option<&Value>, input: &ToolInput) -> Result<(), String> {
     let Some(arguments) = arguments else {
         // Absent (or JSON-null) arguments decode to the zero struct; with
@@ -756,7 +1361,7 @@ fn validate_arguments(arguments: Option<&Value>, input: &ToolInput) -> Result<()
         if input.required.is_empty() {
             return Ok(());
         }
-        return Err(missing_properties(input.required));
+        return Err(format!("validating root: {}", missing_properties(input.required)));
     };
     let Value::Object(map) = arguments else {
         let raw = serde_json::to_string(arguments).unwrap_or_default();
@@ -764,6 +1369,36 @@ fn validate_arguments(arguments: Option<&Value>, input: &ToolInput) -> Result<()
             "unmarshaling arguments: json: cannot unmarshal {raw:?} into Go value of type map[string]interface {{}}"
         ));
     };
+    validate_object(map, input, "").map_err(|inner| format!("validating root: {inner}"))
+}
+
+/// Validates one object level; `base` is the instance path prefix (`""` at
+/// the root, `<array-path>/items` inside spec arrays). Property failures
+/// carry their own `validating <path>: ` frame; required/additional failures
+/// are bare leaves the parent frame wraps.
+fn validate_object(
+    map: &serde_json::Map<String, Value>,
+    input: &ToolInput,
+    base: &str,
+) -> Result<(), String> {
+    for (property, kind) in input.properties {
+        let Some(value) = map.get(*property) else {
+            continue;
+        };
+        let path = format!("{base}/properties/{property}");
+        if let Err(inner) = validate_value(value, kind, &path) {
+            return Err(format!("validating {path}: {inner}"));
+        }
+    }
+    let mut unknown: Vec<&String> = map
+        .keys()
+        .filter(|key| !input.properties.iter().any(|(name, _)| name == *key))
+        .collect();
+    unknown.sort();
+    if !unknown.is_empty() {
+        let quoted: Vec<String> = unknown.iter().map(|key| format!("\"{key}\"")).collect();
+        return Err(format!("unexpected additional properties [{}]", quoted.join(" ")));
+    }
     let mut missing: Vec<&str> = Vec::new();
     for required in input.required {
         if !map.contains_key(*required) {
@@ -773,53 +1408,61 @@ fn validate_arguments(arguments: Option<&Value>, input: &ToolInput) -> Result<()
     if !missing.is_empty() {
         return Err(missing_properties(&missing));
     }
-    let mut unknown: Vec<&String> = map
-        .keys()
-        .filter(|key| !input.properties.iter().any(|(name, _)| name == *key))
-        .collect();
-    unknown.sort();
-    if !unknown.is_empty() {
-        let quoted: Vec<String> = unknown.iter().map(|key| format!("\"{key}\"")).collect();
-        return Err(format!(
-            "validating root: unexpected additional properties [{}]",
-            quoted.join(" ")
-        ));
-    }
-    for (property, kind) in input.properties {
-        let Some(value) = map.get(*property) else {
-            continue;
-        };
-        if value.is_null() {
-            // jsonschema-go treats nil instances as missing and accepts.
-            continue;
+    Ok(())
+}
+
+/// Validates one property value; array failures wrap the item failure as
+/// `validating <path>/items: <inner>`, mirroring jsonschema-go's keyword
+/// (not instance-index) locations.
+fn validate_value(value: &Value, kind: &PropertyKind, path: &str) -> Result<(), String> {
+    match kind {
+        PropertyKind::String => {
+            if !value.is_string() {
+                return Err(type_mismatch(value, "string"));
+            }
         }
-        match kind {
-            PropertyKind::String => {
-                if !value.is_string() {
-                    return Err(type_error(property, value, "string"));
-                }
+        PropertyKind::Boolean => {
+            if !value.is_boolean() {
+                return Err(type_mismatch(value, "boolean"));
             }
-            PropertyKind::Boolean => {
-                if !value.is_boolean() {
-                    return Err(type_error(property, value, "boolean"));
-                }
+        }
+        PropertyKind::Integer => {
+            if !is_integer(value) {
+                return Err(type_mismatch(value, "integer"));
             }
-            PropertyKind::StringArray => {
-                let Value::Array(items) = value else {
+        }
+        PropertyKind::StringArray => {
+            if value.is_null() {
+                return Ok(());
+            }
+            let Value::Array(items) = value else {
+                return Err(type_mismatch_one_of(value, "null, array"));
+            };
+            for item in items {
+                if !item.is_string() {
                     return Err(format!(
-                        "validating root: validating /properties/{property}: type: {} has type {:?}, want one of \"null, array\"",
-                        go_render(value),
-                        json_kind(value)
+                        "validating {path}/items: {}",
+                        type_mismatch(item, "string")
                     ));
-                };
-                for item in items {
-                    if !item.is_string() && !item.is_null() {
-                        return Err(format!(
-                            "validating root: validating /properties/{property}/items: type: {} has type {:?}, want \"string\"",
-                            go_render(item),
-                            json_kind(item)
-                        ));
+                }
+            }
+        }
+        PropertyKind::SpecArray => {
+            if value.is_null() {
+                return Ok(());
+            }
+            let Value::Array(items) = value else {
+                return Err(type_mismatch_one_of(value, "null, array"));
+            };
+            for item in items {
+                let inner = match item {
+                    Value::Object(item_map) => {
+                        validate_object(item_map, &CAMPAIGN_SPEC_INPUT, &format!("{path}/items"))
                     }
+                    _ => Err(type_mismatch(item, "object")),
+                };
+                if let Err(inner) = inner {
+                    return Err(format!("validating {path}/items: {inner}"));
                 }
             }
         }
@@ -827,33 +1470,38 @@ fn validate_arguments(arguments: Option<&Value>, input: &ToolInput) -> Result<()
     Ok(())
 }
 
-fn type_error(property: &str, value: &Value, want: &str) -> String {
+/// Bare `type: <go> has type <kind>, want <want>` leaf.
+fn type_mismatch(value: &Value, want: &str) -> String {
     format!(
-        "validating root: validating /properties/{property}: type: {} has type {:?}, want {want:?}",
+        "type: {} has type {:?}, want {want:?}",
         go_render(value),
         json_kind(value)
     )
 }
 
-/// Entry point of the missing-properties error: the root instance reports
-/// the failure with a `validating root: ` prefix.
-fn missing_properties(properties: &[&str]) -> String {
-    let quoted: Vec<String> = properties
-        .iter()
-        .map(|property| format!("\"{property}\""))
-        .collect();
+/// Bare `type: <go> has type <kind>, want one of <want>` leaf for the
+/// nullable array properties.
+fn type_mismatch_one_of(value: &Value, want: &str) -> String {
     format!(
-        "validating root: required: missing properties: [{}]",
-        quoted.join(" ")
+        "type: {} has type {:?}, want one of {want:?}",
+        go_render(value),
+        json_kind(value)
     )
 }
 
+/// Bare `required: missing properties: [...]` leaf.
+fn missing_properties(properties: &[&str]) -> String {
+    let quoted: Vec<String> =
+        properties.iter().map(|property| format!("\"{property}\"")).collect();
+    format!("required: missing properties: [{}]", quoted.join(" "))
+}
+
 /// jsonschema-go's instance kind names: integral JSON numbers are
-/// "integer", fractional ones "number".
+/// "integer", fractional ones "number", booleans "boolean".
 fn json_kind(value: &Value) -> &'static str {
     match value {
         Value::Null => "null",
-        Value::Bool(_) => "bool",
+        Value::Bool(_) => "boolean",
         Value::Number(number) => {
             if number.as_f64().is_some_and(|f| f.fract() == 0.0) {
                 "integer"
@@ -867,10 +1515,24 @@ fn json_kind(value: &Value) -> &'static str {
     }
 }
 
+/// Whether a JSON value decodes into Go's `int` (integral numbers only).
+fn is_integer(value: &Value) -> bool {
+    match value {
+        Value::Number(number) => {
+            number.as_i64().is_some()
+                || number.as_u64().is_some()
+                || number.as_f64().is_some_and(|f| f.fract() == 0.0)
+        }
+        _ => false,
+    }
+}
+
 /// Go `%v` rendering of a decoded JSON value, for type-error messages.
+/// JSON null decodes to an untyped nil interface, which `%v` renders as
+/// `<invalid reflect.Value>` (verified against the live gateway).
 fn go_render(value: &Value) -> String {
     match value {
-        Value::Null => "<nil>".to_string(),
+        Value::Null => "<invalid reflect.Value>".to_string(),
         Value::Bool(true) => "true".to_string(),
         Value::Bool(false) => "false".to_string(),
         Value::Number(number) => number.to_string(),
@@ -1190,11 +1852,214 @@ fn evidence_fence_json(evidence: &Evidence, raw: &[u8]) -> OrderedJson {
     ])
 }
 
+/// Ports `lifecycleAction`: approve, supersede, or revoke (trimmed).
+fn lifecycle_action(action: &str) -> Option<&'static str> {
+    match action.trim() {
+        CHALLENGE_OPERATION_APPROVE => Some(CHALLENGE_OPERATION_APPROVE),
+        CHALLENGE_OPERATION_SUPERSEDE => Some(CHALLENGE_OPERATION_SUPERSEDE),
+        CHALLENGE_OPERATION_REVOKE => Some(CHALLENGE_OPERATION_REVOKE),
+        _ => None,
+    }
+}
+
+/// Ports `sameLifecycleIDs`: order-insensitive ID comparison.
+fn same_lifecycle_ids(left: &[String], right: &[String]) -> bool {
+    if left.len() != right.len() {
+        return false;
+    }
+    let mut left_sorted = left.to_vec();
+    let mut right_sorted = right.to_vec();
+    left_sorted.sort();
+    right_sorted.sort();
+    left_sorted == right_sorted
+}
+
+/// Ports `supersededPriorVerificationDigest`: the verified digest of the
+/// first superseded claim, which must be approved and digest-valid.
+fn superseded_prior_digest(
+    store: &ClaimStore,
+    workspace: &str,
+    ids: &[String],
+) -> Result<String, String> {
+    if ids.is_empty() {
+        return Ok(String::new());
+    }
+    let claim = match store.read(workspace, &ids[0]) {
+        Ok(claim) => claim,
+        Err(error) if error.is_not_found() => return Err("file does not exist".to_string()),
+        Err(error) => return Err(error.to_string()),
+    };
+    if claim.status != CLAIM_STATUS_APPROVED {
+        return Err(format!(
+            "claim {} is {}; only approved claims can be superseded",
+            claim.id, claim.status
+        ));
+    }
+    if let Err(error) = verify_claim_digest(&claim) {
+        return Err(format!("verify superseded claim {}: {error}", claim.id));
+    }
+    Ok(claim.verified_digest.clone())
+}
+
+/// Decodes one validated `campaignSpecIn` object into the runtime spec.
+fn campaign_spec_from_json(item: &Value) -> CampaignSpec {
+    let strings = |key: &str| -> Vec<String> {
+        item.get(key)
+            .and_then(Value::as_array)
+            .map(|items| {
+                items.iter().filter_map(Value::as_str).map(str::to_string).collect()
+            })
+            .unwrap_or_default()
+    };
+    CampaignSpec {
+        tier: item.get("tier").and_then(Value::as_str).unwrap_or_default().to_string(),
+        title: item.get("title").and_then(Value::as_str).unwrap_or_default().to_string(),
+        basis: item.get("basis").and_then(Value::as_str).unwrap_or_default().to_string(),
+        evidence_ids: strings("evidence"),
+        supporting_claim_ids: strings("support"),
+        conflicts_with: strings("conflicts_with"),
+    }
+}
+
+/// Renders one `campaignSpecIn` as the `campaign_next` `next_spec` object
+/// (Go struct order, array fields omitempty).
+fn campaign_spec_json(spec: &CampaignSpec) -> OrderedJson {
+    let mut entries = vec![
+        ("tier", OrderedJson::string(&spec.tier)),
+        ("title", OrderedJson::string(&spec.title)),
+        ("basis", OrderedJson::string(&spec.basis)),
+    ];
+    if !spec.evidence_ids.is_empty() {
+        entries.push((
+            "evidence",
+            OrderedJson::Array(spec.evidence_ids.iter().map(OrderedJson::string).collect()),
+        ));
+    }
+    if !spec.supporting_claim_ids.is_empty() {
+        entries.push((
+            "support",
+            OrderedJson::Array(
+                spec.supporting_claim_ids.iter().map(OrderedJson::string).collect(),
+            ),
+        ));
+    }
+    if !spec.conflicts_with.is_empty() {
+        entries.push((
+            "conflicts_with",
+            OrderedJson::Array(spec.conflicts_with.iter().map(OrderedJson::string).collect()),
+        ));
+    }
+    OrderedJson::object(entries)
+}
+
+/// Decodes the validated `campaign_submit_draft` index: Go decodes the JSON
+/// number into `int`, so integral floats arrive as their integer value.
+fn campaign_index(value: Option<&Value>) -> i64 {
+    match value {
+        Some(Value::Number(number)) => number
+            .as_i64()
+            .or_else(|| number.as_u64().and_then(|n| i64::try_from(n).ok()))
+            .unwrap_or_else(|| number.as_f64().map(|f| f as i64).unwrap_or_default()),
+        _ => 0,
+    }
+}
+
+/// Go `lifecycleResult` for prepare: schema_version, operation, action,
+/// workspace, claim_id, challenge_id, action_summary, action_digest,
+/// expires_at (no token material before the owner grant).
+fn lifecycle_prepare_json(challenge: &Challenge) -> OrderedJson {
+    OrderedJson::object(vec![
+        ("schema_version", OrderedJson::Int(1)),
+        ("operation", OrderedJson::string("prepare")),
+        ("action", OrderedJson::string(&challenge.operation)),
+        ("workspace", OrderedJson::string(&challenge.workspace)),
+        ("claim_id", OrderedJson::string(&challenge.claim_id)),
+        ("challenge_id", OrderedJson::string(&challenge.id)),
+        ("action_summary", lifecycle_action_summary_json(challenge)),
+        ("action_digest", OrderedJson::string(&challenge.action_digest)),
+        ("expires_at", OrderedJson::string(&challenge.expires_at)),
+    ])
+}
+
+/// Go `lifecycleResult` for apply: the prepare shape plus the grant-time
+/// token expiry, the transition outcome, and the resulting claim. `token`
+/// itself stays omitempty-absent: plaintext tokens leave only through the
+/// local grant ceremony.
+fn lifecycle_apply_json(challenge: &Challenge, claim: &Claim) -> OrderedJson {
+    let mut entries = vec![
+        ("schema_version", OrderedJson::Int(1)),
+        ("operation", OrderedJson::string("apply")),
+        ("action", OrderedJson::string(&challenge.operation)),
+        ("workspace", OrderedJson::string(&challenge.workspace)),
+        ("claim_id", OrderedJson::string(&claim.id)),
+        ("challenge_id", OrderedJson::string(&challenge.id)),
+        ("action_summary", lifecycle_action_summary_json(challenge)),
+        ("action_digest", OrderedJson::string(&challenge.action_digest)),
+        ("expires_at", OrderedJson::string(&challenge.expires_at)),
+    ];
+    if !challenge.token_expires_at.is_empty() {
+        entries.push((
+            "token_expires_at",
+            OrderedJson::string(&challenge.token_expires_at),
+        ));
+    }
+    if !claim.status.is_empty() {
+        entries.push(("status", OrderedJson::string(&claim.status)));
+    }
+    if !claim.verified_by.is_empty() {
+        entries.push(("verified_by", OrderedJson::string(&claim.verified_by)));
+    }
+    entries.push(("claim", claim_apply_json(claim, &challenge.operation)));
+    OrderedJson::object(entries)
+}
+
+/// Go `lifecycleActionSummary`: superseded IDs render `[]` when empty (the
+/// Go constructor normalizes nil to an empty slice).
+fn lifecycle_action_summary_json(challenge: &Challenge) -> OrderedJson {
+    OrderedJson::object(vec![
+        ("action", OrderedJson::string(&challenge.operation)),
+        ("workspace", OrderedJson::string(&challenge.workspace)),
+        ("claim_id", OrderedJson::string(&challenge.claim_id)),
+        (
+            "canonical_draft_digest",
+            OrderedJson::string(&challenge.canonical_draft_digest),
+        ),
+        (
+            "superseded_ids",
+            OrderedJson::Array(
+                challenge.superseded_ids.iter().map(OrderedJson::string).collect(),
+            ),
+        ),
+        (
+            "prior_verification_digest",
+            OrderedJson::string(&challenge.prior_verification_digest),
+        ),
+        ("revoke_reason", OrderedJson::string(&challenge.revoke_reason)),
+    ])
+}
+
+/// The apply-result claim: identical to the canonical claim resource except
+/// for `Sources`. Approve/supersede always materialize sources through
+/// `claimSources` (`make([]ClaimSource, 0, ...)` renders `[]` when empty);
+/// revoke leaves the on-disk value, where an absent section is nil (`null`).
+fn claim_apply_json(claim: &Claim, operation: &str) -> OrderedJson {
+    let sources = if claim.sources.is_empty() && operation != CHALLENGE_OPERATION_REVOKE {
+        OrderedJson::Array(Vec::new())
+    } else {
+        optional_slice(&claim.sources, claim_source_json)
+    };
+    claim_json_with_sources(claim, sources)
+}
+
 /// Canonical claim JSON as `json.MarshalIndent(claim)` renders the Go
 /// `Claim` struct: PascalCase field names (the struct has no json tags),
 /// every field present, nil slices as `null`, nested structs using their
 /// snake_case json tags.
 fn claim_resource_json(claim: &Claim) -> OrderedJson {
+    claim_json_with_sources(claim, optional_slice(&claim.sources, claim_source_json))
+}
+
+fn claim_json_with_sources(claim: &Claim, sources: OrderedJson) -> OrderedJson {
     OrderedJson::object(vec![
         ("Schema", OrderedJson::string(&claim.schema)),
         ("Type", OrderedJson::string(&claim.claim_type)),
@@ -1212,13 +2077,7 @@ fn claim_resource_json(claim: &Claim) -> OrderedJson {
         ("VerifiedBy", OrderedJson::string(&claim.verified_by)),
         ("VerifiedDigest", OrderedJson::string(&claim.verified_digest)),
         ("StaleAfter", OrderedJson::string(&claim.stale_after)),
-        (
-            "Sources",
-            optional_slice(
-                &claim.sources,
-                claim_source_json,
-            ),
-        ),
+        ("Sources", sources),
         ("EvidenceIDs", OrderedJson::strings_or_null(&claim.evidence_ids)),
         (
             "SupportingClaimIDs",
@@ -1688,11 +2547,15 @@ mod tests {
     fn evidence_capture_is_the_registered_tool_with_exact_schema() {
         let fix = fixture("tool-schema");
         let tools = registry(&fix).tools();
-        assert_eq!(tools.len(), 6);
+        assert_eq!(tools.len(), 10);
         assert_eq!(
             tools.iter().map(|tool| tool.name.as_str()).collect::<Vec<_>>(),
             vec![
+                "campaign_begin",
+                "campaign_next",
+                "campaign_submit_draft",
                 "claim_draft",
+                "claim_lifecycle",
                 "evidence_capture",
                 "memory_ask",
                 "memory_reindex",
@@ -2123,7 +2986,7 @@ mod tests {
         let stderr = SafeStderr::new(Box::new(buffer.clone()));
         let reg = ZbrainRegistry {
             paths: fixture.paths.clone(),
-            clock: Box::new(FixedClock::new(fixture.clock.now())),
+            clock: std::sync::Arc::new(FixedClock::new(fixture.clock.now())),
             stderr,
         };
         (reg, buffer)
@@ -2351,7 +3214,7 @@ mod tests {
             .unwrap();
         assert_eq!(
             result.content[0].text,
-            "validating \"arguments\": validating root: validating /properties/include/items: type: 1 has type \"integer\", want \"string\""
+            "validating \"arguments\": validating root: validating /properties/include: validating /properties/include/items: type: 1 has type \"integer\", want \"string\""
         );
         let result = reg
             .call_tool("memory_ask", Some(&args(r#"{"query":"x","include":null}"#)))
@@ -2865,5 +3728,1203 @@ mod tests {
         assert!(logged.contains("workspace=current"), "log: {logged}");
         assert!(logged.contains("duration="), "log: {logged}");
         assert!(!logged.contains("Resource Claim"), "audit log leaked query");
+    }
+
+    // --- W2.T2 (full): claim_lifecycle + campaign tools (ports
+    // TestToolSurface's lifecycle case, TestClaimLifecycle*, TestToolInputSchemas,
+    // TestCampaignToolSurface, TestCampaignTools*) ---
+
+    /// Ports `lifecycleDraft`: a fresh owner-basis draft claim.
+    fn lifecycle_draft(fixture: &Fixture, title: &str) -> Claim {
+        let created = ClaimStore::new(fixture.paths.clone())
+            .write_draft(
+                "research",
+                Claim {
+                    claim_type: OKF_CLAIM_TYPE.to_string(),
+                    id: new_claim_id().unwrap(),
+                    tier: "projects".to_string(),
+                    title: title.to_string(),
+                    basis: crate::claims::CLAIM_BASIS_OWNER.to_string(),
+                    created_at: rfc3339(fixture.clock.now()),
+                    created_by: "test".to_string(),
+                    body: format!("{title} body"),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        assert_eq!(created.status, "draft");
+        created
+    }
+
+    /// Ports `grantLifecycleToken`: the owner ceremony releases the one-time
+    /// token through the challenge store directly.
+    fn grant_lifecycle_token(fixture: &Fixture, challenge_id: &str) -> String {
+        crate::approval::ChallengeStore::with_clock(
+            fixture.paths.clone(),
+            std::sync::Arc::new(FixedClock::new(fixture.clock.now())),
+        )
+        .grant("research", challenge_id)
+        .unwrap()
+        .token
+    }
+
+    fn initialize_named_frame(id: i64, name: &str, version: &str) -> String {
+        format!(
+            r#"{{"jsonrpc":"2.0","id":{id},"method":"initialize","params":{{"protocolVersion":"2025-06-18","capabilities":{{}},"clientInfo":{{"name":"{name}","version":"{version}"}}}}}}"#
+        )
+    }
+
+    /// Runs apply through a connected session (client `zbrain-test-client`).
+    fn session_apply(
+        fixture: &Fixture,
+        id: i64,
+        arguments: &str,
+    ) -> Value {
+        run_session(
+            registry(fixture),
+            &format!(
+                "{}\n{}\n{}\n",
+                initialize_named_frame(1, "zbrain-test-client", "0.0.0"),
+                r#"{"jsonrpc":"2.0","method":"notifications/initialized"}"#,
+                tools_call_named_frame(id, "claim_lifecycle", arguments),
+            ),
+        )[1]
+            .clone()
+    }
+
+    #[test]
+    fn new_tool_schemas_match_go_wire_capture() {
+        let fix = memory_fixture("w2t2-new-schemas");
+        let tools = registry(&fix).tools();
+        let schema = |name: &str| -> String {
+            tools
+                .iter()
+                .find(|tool| tool.name == name)
+                .unwrap_or_else(|| panic!("{name} listed"))
+                .input_schema
+                .compact()
+        };
+        assert_eq!(
+            schema("claim_lifecycle"),
+            r#"{"type":"object","properties":{"operation":{"type":"string","description":"prepare or apply"},"action":{"type":"string","description":"approve, supersede, or revoke for prepare"},"workspace":{"type":"string","description":"target workspace; defaults to the current workspace for prepare; apply resolves the challenge owner"},"claim_id":{"type":"string","description":"target claim ID for prepare or optional apply assertion"},"challenge_id":{"type":"string","description":"challenge ID for apply"},"token":{"type":"string","description":"one-time challenge token for apply"},"canonical_draft_digest":{"type":"string","description":"canonical draft digest bound to the action"},"superseded_ids":{"type":["null","array"],"items":{"type":"string"},"description":"canonical superseded claim IDs bound to the action"},"prior_verification_digest":{"type":"string","description":"prior verification digest bound to the action"},"revoke_reason":{"type":"string","description":"reason bound to a revoke action"}},"required":["operation"],"additionalProperties":false}"#
+        );
+        assert_eq!(
+            schema("campaign_begin"),
+            r#"{"type":"object","properties":{"workspace":{"type":"string","description":"target workspace; defaults to the current workspace"},"specs":{"type":["null","array"],"items":{"type":"object","properties":{"tier":{"type":"string","description":"claim tier"},"title":{"type":"string","description":"claim title"},"basis":{"type":"string","description":"owner, evidence, or derived"},"evidence":{"type":["null","array"],"items":{"type":"string"},"description":"evidence IDs to bind"},"support":{"type":["null","array"],"items":{"type":"string"},"description":"supporting claim IDs"},"conflicts_with":{"type":["null","array"],"items":{"type":"string"},"description":"conflicting claim IDs"}},"required":["tier","title","basis"],"additionalProperties":false},"description":"ordered claim draft specs to author"}},"required":["specs"],"additionalProperties":false}"#
+        );
+        assert_eq!(
+            schema("campaign_next"),
+            r#"{"type":"object","properties":{"workspace":{"type":"string","description":"target workspace; defaults to the current workspace"},"run_id":{"type":"string","description":"campaign run ID"}},"required":["run_id"],"additionalProperties":false}"#
+        );
+        assert_eq!(
+            schema("campaign_submit_draft"),
+            r#"{"type":"object","properties":{"workspace":{"type":"string","description":"target workspace; defaults to the current workspace"},"run_id":{"type":"string","description":"campaign run ID"},"index":{"type":"integer","description":"zero-based draft index within the run"},"body":{"type":"string","description":"claim body for this draft"}},"required":["run_id","index","body"],"additionalProperties":false}"#
+        );
+        let descriptions: Vec<(&str, &str)> = tools
+            .iter()
+            .map(|tool| (tool.name.as_str(), tool.description.as_deref().unwrap_or_default()))
+            .collect();
+        assert!(
+            descriptions.contains(&(
+                "claim_lifecycle",
+                "Prepare an owner-pinned lifecycle challenge or apply one valid one-time token; no approval UI or HTTP mutation endpoint is exposed."
+            )),
+            "{descriptions:?}"
+        );
+        assert!(
+            descriptions.contains(&(
+                "campaign_begin",
+                "Start a resumable authoring campaign that will produce claim drafts only; no claim is created until each draft is submitted."
+            )),
+            "{descriptions:?}"
+        );
+        assert!(
+            descriptions.contains(&(
+                "campaign_next",
+                "Resume an authoring campaign read-only: report its state, counts, and the next pending draft spec without mutating anything."
+            )),
+            "{descriptions:?}"
+        );
+        assert!(
+            descriptions.contains(&(
+                "campaign_submit_draft",
+                "Submit one campaign draft as a claim draft through the existing draft path (drafts are never trusted answer material)."
+            )),
+            "{descriptions:?}"
+        );
+    }
+
+    #[test]
+    fn lifecycle_param_errors_match_go_wire_capture() {
+        let fix = memory_fixture("lifecycle-params");
+        let reg = registry(&fix);
+        let args = |json_text: &str| serde_json::from_str::<Value>(json_text).unwrap();
+        // Structural parameter faults are -32602 protocol errors, not isError.
+        let wire = |result: Result<CallToolResult, McpError>| {
+            result.unwrap_err().to_wire("tools/call")
+        };
+        let error = wire(reg.call_tool(
+            "claim_lifecycle",
+            Some(&args(r#"{"operation":"bogus"}"#)),
+        ));
+        assert_eq!(error.code, -32602);
+        assert_eq!(error.message, "operation must be prepare or apply");
+        let error = wire(reg.call_tool(
+            "claim_lifecycle",
+            Some(&args(r#"{"operation":"prepare"}"#)),
+        ));
+        assert_eq!(error.message, "action is required for prepare");
+        let error = wire(reg.call_tool(
+            "claim_lifecycle",
+            Some(&args(r#"{"operation":"prepare","action":"bogus","claim_id":"clm_00000000000000000000000000000000"}"#)),
+        ));
+        assert_eq!(error.message, "action must be approve, supersede, or revoke");
+        let error = wire(reg.call_tool(
+            "claim_lifecycle",
+            Some(&args(r#"{"operation":"prepare","action":"approve"}"#)),
+        ));
+        assert_eq!(error.message, "claim_id is required for prepare");
+        let error = wire(reg.call_tool(
+            "claim_lifecycle",
+            Some(&args(r#"{"operation":"apply"}"#)),
+        ));
+        assert_eq!(error.message, "challenge_id is required for apply");
+        let error = wire(reg.call_tool(
+            "claim_lifecycle",
+            Some(&args(r#"{"operation":"apply","challenge_id":"chg_00000000000000000000000000000000"}"#)),
+        ));
+        assert_eq!(error.message, "token is required for apply");
+        let error = wire(reg.call_tool(
+            "claim_lifecycle",
+            Some(&args(&format!(
+                r#"{{"operation":"prepare","action":"revoke","claim_id":"{}"}}"#,
+                fix.claim_id
+            ))),
+        ));
+        assert_eq!(error.message, "revoke_reason is required for revoke");
+        // Schema faults stay isError results.
+        let result = reg.call_tool("claim_lifecycle", Some(&args("{}"))).unwrap();
+        assert!(result.is_error);
+        assert_eq!(
+            result.content[0].text,
+            "validating \"arguments\": validating root: required: missing properties: [\"operation\"]"
+        );
+        let result = reg
+            .call_tool("claim_lifecycle", Some(&args(r#"{"operation":3}"#)))
+            .unwrap();
+        assert_eq!(
+            result.content[0].text,
+            "validating \"arguments\": validating root: validating /properties/operation: type: 3 has type \"integer\", want \"string\""
+        );
+        let result = reg
+            .call_tool(
+                "claim_lifecycle",
+                Some(&args(r#"{"operation":null}"#)),
+            )
+            .unwrap();
+        assert_eq!(
+            result.content[0].text,
+            "validating \"arguments\": validating root: validating /properties/operation: type: <invalid reflect.Value> has type \"null\", want \"string\""
+        );
+        let result = reg
+            .call_tool(
+                "claim_lifecycle",
+                Some(&args(
+                    r#"{"operation":"prepare","action":"approve","claim_id":"x","extra":1}"#,
+                )),
+            )
+            .unwrap();
+        assert_eq!(
+            result.content[0].text,
+            "validating \"arguments\": validating root: unexpected additional properties [\"extra\"]"
+        );
+        // Domain failures are isError results.
+        let result = reg
+            .call_tool(
+                "claim_lifecycle",
+                Some(&args(
+                    r#"{"operation":"prepare","action":"approve","claim_id":"clm_00000000000000000000000000000000"}"#,
+                )),
+            )
+            .unwrap();
+        assert!(result.is_error);
+        assert_eq!(result.content[0].text, "file does not exist");
+        let result = reg
+            .call_tool(
+                "claim_lifecycle",
+                Some(&args(&format!(
+                    r#"{{"operation":"prepare","action":"approve","claim_id":"{}","canonical_draft_digest":"sha256:0000"}}"#,
+                    fix.claim_id
+                ))),
+            )
+            .unwrap();
+        assert_eq!(
+            result.content[0].text,
+            "canonical draft digest does not match the current claim"
+        );
+        let result = reg
+            .call_tool(
+                "claim_lifecycle",
+                Some(&args(&format!(
+                    r#"{{"operation":"prepare","action":"approve","claim_id":"{}","superseded_ids":["clm_00000000000000000000000000000000"]}}"#,
+                    fix.claim_id
+                ))),
+            )
+            .unwrap();
+        assert_eq!(
+            result.content[0].text,
+            "superseded IDs do not match the current claim"
+        );
+        let result = reg
+            .call_tool(
+                "claim_lifecycle",
+                Some(&args(&format!(
+                    r#"{{"operation":"prepare","action":"approve","claim_id":"{}","prior_verification_digest":"sha256:0000"}}"#,
+                    fix.claim_id
+                ))),
+            )
+            .unwrap();
+        assert_eq!(
+            result.content[0].text,
+            "prior verification digest does not match the current claim"
+        );
+        let result = reg
+            .call_tool(
+                "claim_lifecycle",
+                Some(&args(&format!(
+                    r#"{{"operation":"prepare","action":"approve","claim_id":"{}","revoke_reason":"x"}}"#,
+                    fix.claim_id
+                ))),
+            )
+            .unwrap();
+        assert_eq!(
+            result.content[0].text,
+            "revoke_reason is only valid for revoke"
+        );
+    }
+
+    #[test]
+    fn lifecycle_approve_and_provenance() {
+        // Ports TestClaimLifecycleApproveAndProvenance.
+        let fix = memory_fixture("lifecycle-approve");
+        let draft = lifecycle_draft(&fix, "MCP approval");
+        let claim_id_json = draft.id.clone();
+        let responses = run_session(
+            registry(&fix),
+            &format!(
+                "{}\n{}\n{}\n",
+                initialize_named_frame(1, "zbrain-test-client", "0.0.0"),
+                r#"{"jsonrpc":"2.0","method":"notifications/initialized"}"#,
+                tools_call_named_frame(
+                    2,
+                    "claim_lifecycle",
+                    &format!(r#"{{"operation":"prepare","action":"approve","workspace":"research","claim_id":"{claim_id_json}"}}"#),
+                ),
+            ),
+        );
+        let text = responses[1]["result"]["content"][0]["text"].as_str().expect("text");
+        let parsed: Value = serde_json::from_str(text).unwrap();
+        assert_key_order(
+            text,
+            &[
+                "schema_version",
+                "operation",
+                "action",
+                "workspace",
+                "claim_id",
+                "challenge_id",
+                "action_summary",
+                "action",
+                "canonical_draft_digest",
+                "superseded_ids",
+                "prior_verification_digest",
+                "revoke_reason",
+                "action_digest",
+                "expires_at",
+            ],
+        );
+        assert_eq!(parsed["operation"], "prepare");
+        assert_eq!(parsed["action"], "approve");
+        assert_eq!(parsed["workspace"], "research");
+        assert_eq!(parsed["claim_id"], claim_id_json);
+        assert!(parsed.get("token").is_none(), "prepare exposed plaintext token");
+        assert!(parsed.get("token_expires_at").is_none());
+        assert!(!parsed["action_digest"].as_str().unwrap_or_default().is_empty());
+        assert!(!parsed["expires_at"].as_str().unwrap_or_default().is_empty());
+        assert_eq!(parsed["action_summary"]["superseded_ids"], serde_json::json!([]));
+        let challenge_id = parsed["challenge_id"].as_str().unwrap().to_string();
+        assert!(challenge_id.starts_with("chg_"));
+        // No token material is persisted before the owner grant.
+        let persisted = std::fs::read(
+            fix.paths.workspaces_dir.join(format!("research/.zbrain/challenges/{challenge_id}.json")),
+        )
+        .unwrap();
+        let persisted_json: Value = serde_json::from_slice(&persisted).unwrap();
+        assert_eq!(persisted_json["token_sha256"], "");
+        assert_eq!(persisted_json["token_expires_at"], "");
+
+        // Applying before the grant fails closed without mutating the claim.
+        let blocked = session_apply(
+            &fix,
+            3,
+            &format!(r#"{{"operation":"apply","action":"approve","workspace":"research","claim_id":"{claim_id_json}","challenge_id":"{challenge_id}","token":"not-issued"}}"#),
+        );
+        assert_eq!(blocked["result"]["isError"], true);
+        assert!(
+            blocked["result"]["content"][0]["text"]
+                .as_str()
+                .unwrap()
+                .contains("has not been owner-granted"),
+            "{blocked}"
+        );
+        let unchanged =
+            ClaimStore::new(fix.paths.clone()).read("research", &claim_id_json).unwrap();
+        assert_eq!(unchanged.status, "draft");
+        assert!(unchanged.transitions.is_empty());
+
+        let token = grant_lifecycle_token(&fix, &challenge_id);
+        let applied = session_apply(
+            &fix,
+            4,
+            &format!(r#"{{"operation":"apply","action":"approve","workspace":"research","claim_id":"{claim_id_json}","challenge_id":"{challenge_id}","token":"{token}"}}"#),
+        );
+        assert!(
+            applied["result"].get("isError").is_none(),
+            "apply failed: {applied}"
+        );
+        let applied_text = applied["result"]["content"][0]["text"].as_str().expect("text");
+        let applied_out: Value = serde_json::from_str(applied_text).unwrap();
+        assert_key_order(
+            applied_text,
+            &[
+                "schema_version",
+                "operation",
+                "action",
+                "workspace",
+                "claim_id",
+                "challenge_id",
+                "action_summary",
+                "action_digest",
+                "expires_at",
+                "token_expires_at",
+                "status",
+                "verified_by",
+                "claim",
+            ],
+        );
+        assert_eq!(applied_out["status"], "approved");
+        assert_eq!(applied_out["verified_by"], "owner:mcp");
+        assert_eq!(applied_out["operation"], "apply");
+        assert!(!applied_out["token_expires_at"].as_str().unwrap_or_default().is_empty());
+        let claim =
+            ClaimStore::new(fix.paths.clone()).read("research", &claim_id_json).unwrap();
+        assert_eq!(claim.status, "approved");
+        assert_eq!(claim.verified_by, "owner:mcp");
+        assert_eq!(claim.transitions.len(), 1);
+        let authorization =
+            claim.transitions[0].authorization.as_ref().expect("authorization");
+        assert_eq!(authorization.challenge_id, challenge_id);
+        assert_eq!(authorization.method, "mcp.claim_lifecycle");
+        assert_eq!(authorization.mcp_client, "zbrain-test-client/0.0.0");
+        // Approve without evidence materializes an empty (non-null) sources
+        // list, matching Go's `make([]ClaimSource, 0, ...)`.
+        assert_eq!(applied_out["claim"]["Sources"], serde_json::json!([]));
+
+        // Replaying the consumed token fails closed.
+        let replay = session_apply(
+            &fix,
+            5,
+            &format!(r#"{{"operation":"apply","challenge_id":"{challenge_id}","token":"{token}"}}"#),
+        );
+        assert_eq!(replay["result"]["isError"], true);
+        assert!(
+            replay["result"]["content"][0]["text"]
+                .as_str()
+                .unwrap()
+                .contains("already consumed"),
+            "{replay}"
+        );
+    }
+
+    #[test]
+    fn lifecycle_supersede_and_revoke() {
+        // Ports TestClaimLifecycleSupersedeAndRevoke.
+        let fix = memory_fixture("lifecycle-sup-rev");
+        let reg = registry(&fix);
+        let args = |json_text: &str| serde_json::from_str::<Value>(json_text).unwrap();
+
+        // Supersede: the replacement draft binds the approved fixture claim.
+        let approved_id = fix.claim_id.clone();
+        let replacement = ClaimStore::new(fix.paths.clone())
+            .write_superseding_draft(
+                "research",
+                &approved_id,
+                Claim {
+                    claim_type: OKF_CLAIM_TYPE.to_string(),
+                    id: new_claim_id().unwrap(),
+                    tier: "projects".to_string(),
+                    title: "Resource Claim replacement".to_string(),
+                    basis: crate::claims::CLAIM_BASIS_OWNER.to_string(),
+                    created_at: rfc3339(fix.clock.now()),
+                    created_by: "test".to_string(),
+                    body: "replacement body".to_string(),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        let prepared = reg
+            .call_tool(
+                "claim_lifecycle",
+                Some(&args(&format!(
+                    r#"{{"operation":"prepare","action":"supersede","claim_id":"{}"}}"#,
+                    replacement.id
+                ))),
+            )
+            .unwrap();
+        assert!(!prepared.is_error, "{}", prepared.content[0].text);
+        let prepared_out: Value = serde_json::from_str(&prepared.content[0].text).unwrap();
+        let challenge_id = prepared_out["challenge_id"].as_str().unwrap().to_string();
+        assert_eq!(
+            prepared_out["action_summary"]["superseded_ids"],
+            serde_json::json!([approved_id])
+        );
+        assert!(
+            !prepared_out["action_summary"]["prior_verification_digest"]
+                .as_str()
+                .unwrap_or_default()
+                .is_empty()
+        );
+        let token = grant_lifecycle_token(&fix, &challenge_id);
+        // An explicit empty superseded list contradicts the bound action.
+        let empty = reg
+            .call_tool(
+                "claim_lifecycle",
+                Some(&args(&format!(
+                    r#"{{"operation":"apply","challenge_id":"{challenge_id}","token":"{token}","superseded_ids":[]}}"#
+                ))),
+            )
+            .unwrap();
+        assert!(empty.is_error);
+        assert!(empty.content[0].text.contains("superseded IDs"), "{}", empty.content[0].text);
+        let applied = reg
+            .call_tool(
+                "claim_lifecycle",
+                Some(&args(&format!(
+                    r#"{{"operation":"apply","challenge_id":"{challenge_id}","token":"{token}"}}"#
+                ))),
+            )
+            .unwrap();
+        assert!(!applied.is_error, "{}", applied.content[0].text);
+        let store = ClaimStore::new(fix.paths.clone());
+        assert_eq!(store.read("research", &replacement.id).unwrap().status, "approved");
+        assert_eq!(store.read("research", &approved_id).unwrap().status, "superseded");
+
+        // Revoke: the remaining approved claim leaves with reason + provenance.
+        let victim = lifecycle_draft(&fix, "revoke victim");
+        let store_clocked = ClaimStore::with_clock(
+            fix.paths.clone(),
+            std::sync::Arc::new(FixedClock::new(fix.clock.now())),
+        );
+        store_clocked.approve("research", &victim.id).unwrap();
+        let prepared = reg
+            .call_tool(
+                "claim_lifecycle",
+                Some(&args(&format!(
+                    r#"{{"operation":"prepare","action":"revoke","claim_id":"{}","revoke_reason":"no longer current"}}"#,
+                    victim.id
+                ))),
+            )
+            .unwrap();
+        assert!(!prepared.is_error, "{}", prepared.content[0].text);
+        let prepared_out: Value = serde_json::from_str(&prepared.content[0].text).unwrap();
+        let challenge_id = prepared_out["challenge_id"].as_str().unwrap().to_string();
+        let token = grant_lifecycle_token(&fix, &challenge_id);
+        let applied = reg
+            .call_tool(
+                "claim_lifecycle",
+                Some(&args(&format!(
+                    r#"{{"operation":"apply","challenge_id":"{challenge_id}","token":"{token}"}}"#
+                ))),
+            )
+            .unwrap();
+        assert!(!applied.is_error, "{}", applied.content[0].text);
+        let revoked = store.read("research", &victim.id).unwrap();
+        assert_eq!(revoked.status, "revoked");
+        let transition = revoked.transitions.last().expect("revoke transition");
+        assert_eq!(transition.by, "owner:mcp");
+        assert_eq!(transition.reason, "no longer current");
+        assert!(transition.authorization.is_some());
+    }
+
+    #[test]
+    fn lifecycle_failure_boundaries() {
+        // Ports TestClaimLifecycleFailureBoundaries.
+        let args = |json_text: &str| serde_json::from_str::<Value>(json_text).unwrap();
+
+        // Wrong token, then the right one still works.
+        let fix = memory_fixture("lifecycle-wrong-token");
+        let draft = lifecycle_draft(&fix, "wrong token");
+        let reg = registry(&fix);
+        let prepared = reg
+            .call_tool(
+                "claim_lifecycle",
+                Some(&args(&format!(
+                    r#"{{"operation":"prepare","action":"approve","claim_id":"{}"}}"#,
+                    draft.id
+                ))),
+            )
+            .unwrap();
+        let challenge_id =
+            serde_json::from_str::<Value>(&prepared.content[0].text).unwrap()["challenge_id"]
+                .as_str()
+                .unwrap()
+                .to_string();
+        let token = grant_lifecycle_token(&fix, &challenge_id);
+        let wrong = reg
+            .call_tool(
+                "claim_lifecycle",
+                Some(&args(&format!(
+                    r#"{{"operation":"apply","challenge_id":"{challenge_id}","token":"wrong"}}"#
+                ))),
+            )
+            .unwrap();
+        assert!(wrong.is_error);
+        assert!(wrong.content[0].text.contains("token mismatch"), "{}", wrong.content[0].text);
+        let correct = reg
+            .call_tool(
+                "claim_lifecycle",
+                Some(&args(&format!(
+                    r#"{{"operation":"apply","challenge_id":"{challenge_id}","token":"{token}"}}"#
+                ))),
+            )
+            .unwrap();
+        assert!(!correct.is_error, "{}", correct.content[0].text);
+
+        // Mutating the draft after prepare makes the challenge stale.
+        let fix = memory_fixture("lifecycle-stale");
+        let draft = lifecycle_draft(&fix, "stale canonical");
+        let reg = registry(&fix);
+        let prepared = reg
+            .call_tool(
+                "claim_lifecycle",
+                Some(&args(&format!(
+                    r#"{{"operation":"prepare","action":"approve","claim_id":"{}"}}"#,
+                    draft.id
+                ))),
+            )
+            .unwrap();
+        let challenge_id =
+            serde_json::from_str::<Value>(&prepared.content[0].text).unwrap()["challenge_id"]
+                .as_str()
+                .unwrap()
+                .to_string();
+        let token = grant_lifecycle_token(&fix, &challenge_id);
+        let mut stale = draft.clone();
+        stale.body = "changed after prepare".to_string();
+        ClaimStore::new(fix.paths.clone()).write_draft("research", stale).unwrap();
+        let result = reg
+            .call_tool(
+                "claim_lifecycle",
+                Some(&args(&format!(
+                    r#"{{"operation":"apply","challenge_id":"{challenge_id}","token":"{token}"}}"#
+                ))),
+            )
+            .unwrap();
+        assert!(result.is_error);
+        assert!(result.content[0].text.contains("stale"), "{}", result.content[0].text);
+        assert_eq!(
+            ClaimStore::new(fix.paths.clone()).read("research", &draft.id).unwrap().status,
+            "draft"
+        );
+
+        // A challenge applies only in its owning workspace.
+        let fix = memory_fixture("lifecycle-workspace");
+        create_workspace(&fix.paths, "other", &fix.clock).unwrap();
+        let draft = lifecycle_draft(&fix, "wrong workspace");
+        let reg = registry(&fix);
+        let prepared = reg
+            .call_tool(
+                "claim_lifecycle",
+                Some(&args(&format!(
+                    r#"{{"operation":"prepare","action":"approve","workspace":"research","claim_id":"{}"}}"#,
+                    draft.id
+                ))),
+            )
+            .unwrap();
+        let challenge_id =
+            serde_json::from_str::<Value>(&prepared.content[0].text).unwrap()["challenge_id"]
+                .as_str()
+                .unwrap()
+                .to_string();
+        let result = reg
+            .call_tool(
+                "claim_lifecycle",
+                Some(&args(&format!(
+                    r#"{{"operation":"apply","workspace":"other","challenge_id":"{challenge_id}","token":"not-issued"}}"#
+                ))),
+            )
+            .unwrap();
+        assert!(result.is_error);
+        assert!(result.content[0].text.contains("does not own"), "{}", result.content[0].text);
+
+        // An unapplied token expires with the grant clock.
+        let fix = memory_fixture("lifecycle-expiry");
+        let draft = lifecycle_draft(&fix, "expired token");
+        let reg = registry(&fix);
+        let prepared = reg
+            .call_tool(
+                "claim_lifecycle",
+                Some(&args(&format!(
+                    r#"{{"operation":"prepare","action":"approve","claim_id":"{}"}}"#,
+                    draft.id
+                ))),
+            )
+            .unwrap();
+        let challenge_id =
+            serde_json::from_str::<Value>(&prepared.content[0].text).unwrap()["challenge_id"]
+                .as_str()
+                .unwrap()
+                .to_string();
+        let token = grant_lifecycle_token(&fix, &challenge_id);
+        let later = ZbrainRegistry {
+            paths: fix.paths.clone(),
+            clock: std::sync::Arc::new(FixedClock::new(
+                fix.clock.now() + chrono::Duration::minutes(6),
+            )),
+            stderr: SafeStderr::default(),
+        };
+        let result = later
+            .call_tool(
+                "claim_lifecycle",
+                Some(&args(&format!(
+                    r#"{{"operation":"apply","challenge_id":"{challenge_id}","token":"{token}"}}"#
+                ))),
+            )
+            .unwrap();
+        assert!(result.is_error);
+        assert!(result.content[0].text.contains("token expired"), "{}", result.content[0].text);
+    }
+
+    #[test]
+    fn lifecycle_concurrent_apply_has_exactly_one_winner() {
+        // Ports TestClaimLifecycleConcurrentApply.
+        let fix = memory_fixture("lifecycle-concurrent");
+        let draft = lifecycle_draft(&fix, "concurrent apply");
+        let reg = registry(&fix);
+        let args = |json_text: &str| serde_json::from_str::<Value>(json_text).unwrap();
+        let prepared = reg
+            .call_tool(
+                "claim_lifecycle",
+                Some(&args(&format!(
+                    r#"{{"operation":"prepare","action":"approve","claim_id":"{}"}}"#,
+                    draft.id
+                ))),
+            )
+            .unwrap();
+        let challenge_id =
+            serde_json::from_str::<Value>(&prepared.content[0].text).unwrap()["challenge_id"]
+                .as_str()
+                .unwrap()
+                .to_string();
+        let token = grant_lifecycle_token(&fix, &challenge_id);
+        let shared = std::sync::Arc::new(reg);
+        let arguments = args(&format!(
+            r#"{{"operation":"apply","challenge_id":"{challenge_id}","token":"{token}"}}"#
+        ));
+        let mut winners = 0;
+        std::thread::scope(|scope| {
+            let mut handles = Vec::new();
+            for _ in 0..8 {
+                handles.push(scope.spawn(|| {
+                    shared.call_tool("claim_lifecycle", Some(&arguments))
+                }));
+            }
+            for handle in handles {
+                let result = handle.join().expect("worker").expect("protocol");
+                if !result.is_error {
+                    winners += 1;
+                }
+            }
+        });
+        assert_eq!(winners, 1, "want exactly one concurrent apply winner");
+    }
+
+    #[test]
+    fn lifecycle_provenance_without_session_is_unknown() {
+        // Ports TestMCPClientProvenanceNilSafe: a direct registry call carries
+        // no session identity, so the transition records `unknown`.
+        let fix = memory_fixture("lifecycle-unknown-client");
+        let draft = lifecycle_draft(&fix, "nil client provenance");
+        let reg = registry(&fix);
+        let args = |json_text: &str| serde_json::from_str::<Value>(json_text).unwrap();
+        let prepared = reg
+            .call_tool(
+                "claim_lifecycle",
+                Some(&args(&format!(
+                    r#"{{"operation":"prepare","action":"approve","claim_id":"{}"}}"#,
+                    draft.id
+                ))),
+            )
+            .unwrap();
+        assert!(!prepared.is_error, "{}", prepared.content[0].text);
+        let challenge_id =
+            serde_json::from_str::<Value>(&prepared.content[0].text).unwrap()["challenge_id"]
+                .as_str()
+                .unwrap()
+                .to_string();
+        let token = grant_lifecycle_token(&fix, &challenge_id);
+        let applied = reg
+            .call_tool(
+                "claim_lifecycle",
+                Some(&args(&format!(
+                    r#"{{"operation":"apply","challenge_id":"{challenge_id}","token":"{token}"}}"#
+                ))),
+            )
+            .unwrap();
+        assert!(!applied.is_error, "{}", applied.content[0].text);
+        let claim =
+            ClaimStore::new(fix.paths.clone()).read("research", &draft.id).unwrap();
+        assert_eq!(claim.transitions.len(), 1);
+        assert_eq!(
+            claim.transitions[0].authorization.as_ref().expect("authorization").mcp_client,
+            "unknown"
+        );
+    }
+
+    // --- Campaign tools (ports TestCampaignToolSurface,
+    // TestCampaignToolsAuthorDraftsOnly, TestCampaignToolsFailClosed,
+    // TestCampaignToolsWorkspaceBindingMatchesClaimDraft) ---
+
+    fn campaign_specs_arguments() -> Value {
+        serde_json::json!([
+            {"tier": "projects", "title": "Campaign MCP One", "basis": "owner"},
+            {"tier": "projects", "title": "Campaign MCP Two", "basis": "evidence"},
+        ])
+    }
+
+    fn campaign_begin_arguments(workspace: Option<&str>) -> Value {
+        let mut arguments =
+            serde_json::json!({"specs": campaign_specs_arguments()});
+        if let Some(workspace) = workspace {
+            arguments["workspace"] = Value::from(workspace);
+        }
+        arguments
+    }
+
+    #[test]
+    fn campaign_tools_author_drafts_only() {
+        let fix = memory_fixture("campaign-drafts-only");
+        let reg = registry(&fix);
+        let before_published = crate::coordination::read_workspace_generation(&fix.paths, "research")
+            .map(|generation| generation.published)
+            .unwrap_or_default();
+
+        let begin = reg
+            .call_tool("campaign_begin", Some(&campaign_begin_arguments(Some("research"))))
+            .unwrap();
+        assert!(!begin.is_error, "{}", begin.content[0].text);
+        let begun: Value = serde_json::from_str(&begin.content[0].text).unwrap();
+        assert_key_order(&begin.content[0].text, &["schema_version", "workspace", "run_id", "phase", "total_drafts"]);
+        assert_eq!(begun["phase"], "drafting");
+        assert_eq!(begun["total_drafts"], 2);
+        let run_id = begun["run_id"].as_str().unwrap().to_string();
+        assert!(run_id.starts_with("cmp_"));
+
+        let next = reg
+            .call_tool(
+                "campaign_next",
+                Some(&serde_json::json!({"workspace": "research", "run_id": run_id})),
+            )
+            .unwrap();
+        assert!(!next.is_error, "{}", next.content[0].text);
+        assert_key_order(
+            &next.content[0].text,
+            &[
+                "schema_version", "workspace", "run_id", "phase", "pending", "submitted",
+                "superseded_by_owner", "next_index", "next_spec",
+            ],
+        );
+        let state: Value = serde_json::from_str(&next.content[0].text).unwrap();
+        assert_eq!(state["phase"], "drafting");
+        assert_eq!(state["pending"], 2);
+        assert_eq!(state["next_index"], 0);
+        assert_eq!(state["next_spec"]["title"], "Campaign MCP One");
+
+        let first = reg
+            .call_tool(
+                "campaign_submit_draft",
+                Some(&serde_json::json!({"workspace": "research", "run_id": run_id, "index": 0, "body": "first body\n"})),
+            )
+            .unwrap();
+        assert!(!first.is_error, "{}", first.content[0].text);
+        assert_key_order(
+            &first.content[0].text,
+            &["schema_version", "workspace", "run_id", "index", "id", "status", "path", "pending"],
+        );
+        let submitted: Value = serde_json::from_str(&first.content[0].text).unwrap();
+        assert_eq!(submitted["status"], "draft");
+        assert_eq!(submitted["pending"], 1);
+        let claim = ClaimStore::new(fix.paths.clone())
+            .read("research", submitted["id"].as_str().unwrap())
+            .unwrap();
+        assert_eq!(claim.status, "draft");
+        assert!(claim.verified_digest.is_empty());
+        assert!(claim.transitions.is_empty());
+
+        // Submitting the same index twice fails closed as isError.
+        let replay = reg
+            .call_tool(
+                "campaign_submit_draft",
+                Some(&serde_json::json!({"workspace": "research", "run_id": run_id, "index": 0, "body": "again\n"})),
+            )
+            .unwrap();
+        assert!(replay.is_error);
+        assert!(replay.content[0].text.contains("only pending drafts"), "{}", replay.content[0].text);
+
+        let second = reg
+            .call_tool(
+                "campaign_submit_draft",
+                Some(&serde_json::json!({"run_id": run_id, "index": 1, "body": "second body\n"})),
+            )
+            .unwrap();
+        assert!(!second.is_error, "{}", second.content[0].text);
+
+        // Campaign tools never publish: the published generation is unchanged
+        // and the derived index is left dirty.
+        let after = crate::coordination::read_workspace_generation(&fix.paths, "research").unwrap();
+        assert_eq!(after.published, before_published);
+        let dirty = IndexStore::new(fix.paths.clone()).dirty_path("research").unwrap();
+        assert!(dirty.exists(), "campaign tools did not leave the index dirty");
+
+        let exhausted = reg
+            .call_tool("campaign_next", Some(&serde_json::json!({"run_id": run_id})))
+            .unwrap();
+        assert!(!exhausted.is_error, "{}", exhausted.content[0].text);
+        let drained: Value = serde_json::from_str(&exhausted.content[0].text).unwrap();
+        assert_eq!(drained["pending"], 0);
+        assert_eq!(drained["next_index"], -1);
+        assert!(drained["next_spec"].is_null());
+    }
+
+    #[test]
+    fn campaign_tools_fail_closed() {
+        let fix = memory_fixture("campaign-fail-closed");
+        let reg = registry(&fix);
+        let args = |json_text: &str| serde_json::from_str::<Value>(json_text).unwrap();
+
+        let invalid = reg
+            .call_tool(
+                "campaign_begin",
+                Some(&args(r#"{"specs":[{"tier":"not-a-tier","title":"Bad","basis":"owner"}]}"#)),
+            )
+            .unwrap();
+        assert!(invalid.is_error);
+        assert!(invalid.content[0].text.contains("campaign spec 0"), "{}", invalid.content[0].text);
+        let empty = reg
+            .call_tool("campaign_begin", Some(&args(r#"{"specs":[]}"#)))
+            .unwrap();
+        assert!(empty.is_error);
+        assert!(empty.content[0].text.contains("at least one draft spec"), "{}", empty.content[0].text);
+        let unknown = reg
+            .call_tool(
+                "campaign_next",
+                Some(&args(r#"{"run_id":"cmp_00000000000000000000000000000000"}"#)),
+            )
+            .unwrap();
+        assert!(unknown.is_error);
+        assert!(unknown.content[0].text.contains("not found"), "{}", unknown.content[0].text);
+        let malformed = reg
+            .call_tool("campaign_next", Some(&args(r#"{"run_id":"not-a-run-id"}"#)))
+            .unwrap();
+        assert!(malformed.is_error);
+        let unknown_submit = reg
+            .call_tool(
+                "campaign_submit_draft",
+                Some(&args(r#"{"run_id":"cmp_00000000000000000000000000000000","index":0,"body":"body"}"#)),
+            )
+            .unwrap();
+        assert!(unknown_submit.is_error);
+
+        let begin = reg
+            .call_tool("campaign_begin", Some(&campaign_begin_arguments(Some("research"))))
+            .unwrap();
+        assert!(!begin.is_error, "{}", begin.content[0].text);
+        let run_id = serde_json::from_str::<Value>(&begin.content[0].text).unwrap()["run_id"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        let bad_index = reg
+            .call_tool(
+                "campaign_submit_draft",
+                Some(&args(&format!(r#"{{"run_id":"{run_id}","index":7,"body":"body"}}"#))),
+            )
+            .unwrap();
+        assert!(bad_index.is_error);
+        assert!(bad_index.content[0].text.contains("out of range"), "{}", bad_index.content[0].text);
+        reg.call_tool(
+            "campaign_submit_draft",
+            Some(&args(&format!(r#"{{"run_id":"{run_id}","index":0,"body":"body"}}"#))),
+        )
+        .unwrap();
+        let twice = reg
+            .call_tool(
+                "campaign_submit_draft",
+                Some(&args(&format!(r#"{{"run_id":"{run_id}","index":0,"body":"body"}}"#))),
+            )
+            .unwrap();
+        assert!(twice.is_error);
+        assert!(twice.content[0].text.contains("only pending drafts"), "{}", twice.content[0].text);
+    }
+
+    #[test]
+    fn campaign_tools_workspace_binding_matches_claim_draft() {
+        let fix = memory_fixture("campaign-binding");
+        create_workspace(&fix.paths, "other", &fix.clock).unwrap();
+        let reg = registry(&fix);
+
+        // Default workspace binding: no workspace param behaves like claim_draft.
+        let begin_default = reg
+            .call_tool("campaign_begin", Some(&campaign_begin_arguments(None)))
+            .unwrap();
+        assert!(!begin_default.is_error, "{}", begin_default.content[0].text);
+        let begun: Value = serde_json::from_str(&begin_default.content[0].text).unwrap();
+        assert_eq!(begun["workspace"], "research");
+        let run_id = begun["run_id"].as_str().unwrap().to_string();
+
+        // Explicit workspace binding.
+        let begin_other = reg
+            .call_tool("campaign_begin", Some(&campaign_begin_arguments(Some("other"))))
+            .unwrap();
+        assert!(!begin_other.is_error, "{}", begin_other.content[0].text);
+        let other_begun: Value = serde_json::from_str(&begin_other.content[0].text).unwrap();
+        assert_eq!(other_begun["workspace"], "other");
+        let other_run_id = other_begun["run_id"].as_str().unwrap().to_string();
+        assert!(
+            fix.paths.workspaces_dir.join(format!("other/campaigns/{other_run_id}.json")).exists(),
+            "run file not bound to workspace other"
+        );
+
+        // A run started in one workspace is invisible from another.
+        let cross = reg
+            .call_tool(
+                "campaign_next",
+                Some(&serde_json::json!({"workspace": "other", "run_id": run_id})),
+            )
+            .unwrap();
+        assert!(cross.is_error);
+        assert!(cross.content[0].text.contains("not found"), "{}", cross.content[0].text);
+        let nonexistent = reg
+            .call_tool("campaign_begin", Some(&campaign_begin_arguments(Some("nonexistent"))))
+            .unwrap();
+        assert!(nonexistent.is_error);
+    }
+
+    #[test]
+    fn campaign_validation_shapes_match_go_wire_capture() {
+        let fix = memory_fixture("campaign-validation");
+        let reg = registry(&fix);
+        let args = |json_text: &str| serde_json::from_str::<Value>(json_text).unwrap();
+        let invalid = |name: &str, json_text: &str| -> String {
+            reg.call_tool(name, Some(&args(json_text))).unwrap().content[0].text.clone()
+        };
+        assert_eq!(
+            invalid("campaign_begin", "{}"),
+            "validating \"arguments\": validating root: required: missing properties: [\"specs\"]"
+        );
+        assert_eq!(
+            invalid("campaign_begin", r#"{"specs":"x"}"#),
+            "validating \"arguments\": validating root: validating /properties/specs: type: x has type \"string\", want one of \"null, array\""
+        );
+        assert_eq!(
+            invalid("campaign_begin", r#"{"specs":[null]}"#),
+            "validating \"arguments\": validating root: validating /properties/specs: validating /properties/specs/items: type: <invalid reflect.Value> has type \"null\", want \"object\""
+        );
+        assert_eq!(
+            invalid("campaign_begin", r#"{"specs":[{}]}"#),
+            "validating \"arguments\": validating root: validating /properties/specs: validating /properties/specs/items: required: missing properties: [\"tier\" \"title\" \"basis\"]"
+        );
+        assert_eq!(
+            invalid("campaign_begin", r#"{"specs":[{"title":"t","basis":"owner"}]}"#),
+            "validating \"arguments\": validating root: validating /properties/specs: validating /properties/specs/items: required: missing properties: [\"tier\"]"
+        );
+        assert_eq!(
+            invalid(
+                "campaign_begin",
+                r#"{"specs":[{"tier":"projects","title":"t","basis":"owner","bogus":1}]}"#
+            ),
+            "validating \"arguments\": validating root: validating /properties/specs: validating /properties/specs/items: unexpected additional properties [\"bogus\"]"
+        );
+        assert_eq!(
+            invalid("campaign_begin", r#"{"specs":[{"tier":3,"title":"t","basis":"owner"}]}"#),
+            "validating \"arguments\": validating root: validating /properties/specs: validating /properties/specs/items: validating /properties/specs/items/properties/tier: type: 3 has type \"integer\", want \"string\""
+        );
+        assert_eq!(
+            invalid(
+                "campaign_begin",
+                r#"{"specs":[{"tier":"projects","title":"t","basis":"owner","evidence":[3]}]}"#
+            ),
+            "validating \"arguments\": validating root: validating /properties/specs: validating /properties/specs/items: validating /properties/specs/items/properties/evidence: validating /properties/specs/items/properties/evidence/items: type: 3 has type \"integer\", want \"string\""
+        );
+        // Nullable specs reach the handler, which requires at least one spec.
+        assert_eq!(
+            invalid("campaign_begin", r#"{"specs":null}"#),
+            "campaign requires at least one draft spec"
+        );
+        assert_eq!(
+            invalid("campaign_next", "{}"),
+            "validating \"arguments\": validating root: required: missing properties: [\"run_id\"]"
+        );
+        assert_eq!(
+            invalid("campaign_next", r#"{"run_id":3}"#),
+            "validating \"arguments\": validating root: validating /properties/run_id: type: 3 has type \"integer\", want \"string\""
+        );
+        assert_eq!(
+            invalid("campaign_next", r#"{"run_id":"not-a-run-id"}"#),
+            "campaign run id must match cmp_<32 lowercase hex chars>"
+        );
+        assert_eq!(
+            invalid("campaign_submit_draft", "{}"),
+            "validating \"arguments\": validating root: required: missing properties: [\"run_id\" \"index\" \"body\"]"
+        );
+        assert_eq!(
+            invalid(
+                "campaign_submit_draft",
+                r#"{"run_id":"cmp_00000000000000000000000000000000","index":"0","body":"b"}"#
+            ),
+            "validating \"arguments\": validating root: validating /properties/index: type: 0 has type \"string\", want \"integer\""
+        );
+        assert_eq!(
+            invalid(
+                "campaign_submit_draft",
+                r#"{"run_id":"cmp_00000000000000000000000000000000","index":1.5,"body":"b"}"#
+            ),
+            "validating \"arguments\": validating root: validating /properties/index: type: 1.5 has type \"number\", want \"integer\""
+        );
+        assert_eq!(
+            invalid(
+                "campaign_submit_draft",
+                r#"{"run_id":"cmp_00000000000000000000000000000000","index":true,"body":"b"}"#
+            ),
+            "validating \"arguments\": validating root: validating /properties/index: type: true has type \"boolean\", want \"integer\""
+        );
+        assert_eq!(
+            invalid(
+                "campaign_submit_draft",
+                r#"{"run_id":"cmp_00000000000000000000000000000000","index":0,"body":3}"#
+            ),
+            "validating \"arguments\": validating root: validating /properties/body: type: 3 has type \"integer\", want \"string\""
+        );
+        // An integral float decodes into the Go `int` index and reaches the handler.
+        assert_eq!(
+            invalid(
+                "campaign_submit_draft",
+                r#"{"run_id":"cmp_00000000000000000000000000000000","index":3.0,"body":"b"}"#
+            ),
+            "campaign run cmp_00000000000000000000000000000000 not found in workspace \"research\""
+        );
+    }
+
+    #[test]
+    fn validation_null_and_bool_shapes_match_go_wire_capture() {
+        // Ports the corrected null/boolean kind shapes: JSON null fails every
+        // non-nullable type, and booleans report as "boolean".
+        let fix = memory_fixture("validation-shapes");
+        let reg = registry(&fix);
+        let args = |json_text: &str| serde_json::from_str::<Value>(json_text).unwrap();
+        let invalid = |name: &str, json_text: &str| -> String {
+            reg.call_tool(name, Some(&args(json_text))).unwrap().content[0].text.clone()
+        };
+        assert_eq!(
+            invalid("memory_ask", r#"{"query":null}"#),
+            "validating \"arguments\": validating root: validating /properties/query: type: <invalid reflect.Value> has type \"null\", want \"string\""
+        );
+        assert_eq!(
+            invalid("memory_ask", r#"{"query":"x","embedding":null}"#),
+            "validating \"arguments\": validating root: validating /properties/embedding: type: <invalid reflect.Value> has type \"null\", want \"boolean\""
+        );
+        assert_eq!(
+            invalid(
+                "claim_draft",
+                r#"{"tier":true,"title":"t","basis":"owner","body":"b"}"#
+            ),
+            "validating \"arguments\": validating root: validating /properties/tier: type: true has type \"boolean\", want \"string\""
+        );
+        assert_eq!(
+            invalid("claim_draft", r#"{"tier":null,"title":"t","basis":"owner","body":"b"}"#),
+            "validating \"arguments\": validating root: validating /properties/tier: type: <invalid reflect.Value> has type \"null\", want \"string\""
+        );
+        assert_eq!(
+            invalid("memory_ask", r#"{"query":"x","include":[null]}"#),
+            "validating \"arguments\": validating root: validating /properties/include: validating /properties/include/items: type: <invalid reflect.Value> has type \"null\", want \"string\""
+        );
+        assert_eq!(
+            invalid(
+                "claim_draft",
+                r#"{"tier":"projects","title":"t","basis":"owner","body":"b","evidence":[null]}"#
+            ),
+            "validating \"arguments\": validating root: validating /properties/evidence: validating /properties/evidence/items: type: <invalid reflect.Value> has type \"null\", want \"string\""
+        );
+        // Nullable arrays still accept null.
+        assert!(
+            reg.call_tool("memory_ask", Some(&args(r#"{"query":"x","include":null}"#)))
+                .unwrap()
+                .content[0]
+                .text
+                .contains("\"status\""),
+            "null include must pass schema"
+        );
+        // Type failures win over additional properties and missing required.
+        assert_eq!(
+            invalid("memory_ask", r#"{"query":3,"extra":1}"#),
+            "validating \"arguments\": validating root: validating /properties/query: type: 3 has type \"integer\", want \"string\""
+        );
+        assert_eq!(
+            invalid("memory_ask", r#"{"extra":1}"#),
+            "validating \"arguments\": validating root: unexpected additional properties [\"extra\"]"
+        );
+        assert_eq!(
+            invalid("claim_draft", r#"{"tier":3,"title":"t"}"#),
+            "validating \"arguments\": validating root: validating /properties/tier: type: 3 has type \"integer\", want \"string\""
+        );
+    }
+
+    #[test]
+    fn list_frames_keep_go_field_order() {
+        // The `*/list` frames keep struct field order on the wire; the
+        // sorted-key `serde_json::Value` rendering cannot hold tool schemas.
+        let fix = memory_fixture("list-order");
+        let frames = run_session_raw(
+            registry(&fix),
+            &format!(
+                "{}\n{}\n{}\n{}\n",
+                initialize_frame(1),
+                tools_call_named_frame(2, "memory_status", "{}"),
+                r#"{"jsonrpc":"2.0","id":3,"method":"tools/list"}"#,
+                r#"{"jsonrpc":"2.0","id":4,"method":"resources/list"}"#,
+            ),
+        );
+        assert!(
+            frames[2].starts_with(
+                "{\"jsonrpc\":\"2.0\",\"id\":3,\"result\":{\"ttlMs\":0,\"cacheScope\":\"public\",\"tools\":[{\"description\":"
+            ),
+            "unexpected tools/list frame: {}",
+            &frames[2][..200.min(frames[2].len())]
+        );
+        assert!(
+            frames[2].contains("\"campaign_begin\""),
+            "tools/list missing campaign tools"
+        );
+        // Tool schemas keep jsonschema field order, not sorted keys.
+        assert!(
+            frames[2].contains("\"inputSchema\":{\"type\":\"object\",\"properties\":{\"query\":{\"type\":\"string\""),
+            "memory_ask schema misordered"
+        );
+        assert!(
+            frames[3].starts_with(
+                "{\"jsonrpc\":\"2.0\",\"id\":4,\"result\":{\"ttlMs\":0,\"cacheScope\":\"public\",\"resources\":[]}}"
+            ),
+            "unexpected resources/list frame: {}",
+            frames[3]
+        );
     }
 }
