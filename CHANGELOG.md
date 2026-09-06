@@ -1,5 +1,29 @@
 # CHANGELOG
 
+## 0.4.0 (2026-09-06) — Rust cutover
+
+The Go implementation is replaced by a Rust workspace with verified
+behavioral parity. Trust contract, file layouts, and CLI surface unchanged.
+
+### Changed
+- Runtime rewritten in Rust (`crates/zbrain`): same OKF Markdown claims,
+  immutable evidence snapshots, FTS5 index (rusqlite bundled), fail-closed
+  trusted retrieval, owner-pinned approval ceremony, stdio MCP gateway,
+  loopback viewer
+- CI, Makefile, AGENTS.md, and docs are Rust-authoritative (`cargo test`,
+  `cargo clippy -D warnings`, `cargo fmt --check`, `cargo audit`)
+- Binary shrinks from ~22M to ~4.4M (3.8M stripped)
+
+### Fixed
+- Replaced unsound `serde_yml`/`libyml` (RUSTSEC-2025-0067/0068) with
+  pure-Rust `yaml-rust2` for frontmatter parsing
+- Hardened viewer accepted sockets (blocking mode) and capped MCP frame
+  buffer at 8 MiB (session-fatal)
+
+### Notes
+- Pre-cutover Go tree preserved under tag `v0.2.0-go-final`
+- Decision record: `docs/adr/0001-go-to-rust-cutover.md`
+
 ## 0.3.1 (2026-08-26) — docs site + Pages deploy + CI runtime bumps
 
 Docs site and landing page ship to GitHub Pages; CI actions move off the
