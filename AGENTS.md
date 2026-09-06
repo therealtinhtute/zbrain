@@ -1,34 +1,37 @@
 # AGENTS.md
 
-Go 1.25.13 (CI matrix 1.25.x), Go-native CLI at `cmd/zbrain`. Do not reintroduce Bun/Node/TypeScript.
+Rust (stable toolchain via `rust-toolchain.toml`), Rust-native CLI in `crates/zbrain`. Cut over from Go at m8 (pre-cutover Go tree preserved under tag `v0.2.0-go-final`); the Go oracle lives in git history only. Do not reintroduce Bun/Node/TypeScript.
 
 ## Layout
 
-- `cmd/zbrain/` — binary entrypoint (thin, delegates to runtime)
-- `internal/cli/` — arg parsing, dispatch, JSON/text output; `cli.go:Version = "0.2.0"`
-- `internal/runtime/` — durable logic: paths, config, assets, workspaces, claims, evidence, trust validation, index (FTS5), query; 30+ `*_test.go` alongside
-- `internal/mcp/`, `internal/view/` — stdio MCP gateway and loopback viewer
-- `assets/` — embedded source of truth (`assets.go` via `go:embed`), copied by `zbrain setup`; never edit extracted runtime directly
+- `crates/zbrain/src/main.rs` — binary entrypoint (thin dispatch, delegates to `cli`)
+- `crates/zbrain/src/cli.rs` — arg parsing, dispatch, JSON/text output; version `0.3.0`
+- `crates/zbrain/src/` — durable logic: paths, config, assets, setup, workspace, claims, evidence, lifecycle, transition, trust validation, lint, index (FTS5 via rusqlite bundled), query, embedder, approval, campaign; unit tests alongside each module
+- `crates/zbrain/src/mcp/` — stdio MCP gateway (hand-rolled JSON-RPC)
+- `crates/zbrain/src/view.rs` — loopback viewer (std TcpListener)
+- `crates/zbrain/tests/` — integration suites (`eval_suite.rs`, `bench_100k.rs`, capture tests) + committed golden fixtures
+- `assets/` — embedded source of truth (`include_dir`), copied by `zbrain setup`; never edit extracted runtime directly
 - `docs/` — specs and authored docs; `docs/README.md` is the doc map
 
 ## Commands — use these exact forms
 
 ```bash
-go test ./...                          # full gate (CI: ubuntu+macos)
-go test ./internal/runtime -run ^TestFoo$ -count=1 -v  # single test
-go test ./internal/runtime -count=1 -v                 # single package
-go test -race ./internal/runtime ./internal/cli ./internal/view ./internal/mcp
-go vet ./...
-make build                             # → dist/zbrain (embeds assets/)
-make smoke                             # full lifecycle in isolated ZBRAIN_HOME (uses trash)
-CGO_ENABLED=0 go build ./cmd/zbrain    # CI requires CGO-free build
+cargo test --workspace               # full gate (CI: ubuntu+macos)
+cargo test -p zbrain --lib           # unit tests only
+cargo test -p zbrain --test eval_suite   # eval suite
+cargo clippy --workspace --all-targets -- -D warnings
+cargo fmt --all -- --check
+cargo audit                          # dependency advisories (CI)
+make build                           # → dist/zbrain + dist/zbrain.stripped (embeds assets/)
+make smoke                           # release binary, full lifecycle in isolated ZBRAIN_HOME (uses trash)
+cargo build --release                # CI release-mode build
 git diff --check
-ZBRAIN_BENCH_100K=1 go test ./internal/runtime -run '^TestAskP95At100K$' -count=1 -v
+./scripts/smoke.sh --bin ./dist/zbrain
 ```
 
-CI order in `.github/workflows/test.yml` (push `master`/`v2/**`, PR→`master`): `go test ./...` → `go vet ./...` → `go test -race ...` → `make build` → `make smoke` → `git diff --check` → `CGO_ENABLED=0 go build`.
+CI order in `.github/workflows/test.yml` (push `master`/`v2/**`, PR→`master`): `cargo fmt --check` → `cargo test --workspace` → `cargo clippy -D warnings` → `cargo audit` → `make build` → stripped verify → `make smoke` → `git diff --check` → `cargo build --release`.
 
-Verify CLI surface: `go run ./cmd/zbrain --help` and sub-helps (`workspace`, `evidence`, `claim`, `migrate`, `reindex`, `ask`, `status`, `doctor`, `mcp serve`, `view`, `approval`).
+Verify CLI surface: `cargo run -q -p zbrain -- --help` and sub-helps (`workspace`, `evidence`, `claim`, `migrate`, `reindex`, `ask`, `status`, `doctor`, `mcp serve`, `view`, `approval`).
 
 ## Workspace & Runtime Gotchas
 
@@ -38,7 +41,7 @@ Verify CLI surface: `go run ./cmd/zbrain --help` and sub-helps (`workspace`, `ev
 - `claim draft` reads body from **stdin**; metadata via flags. Lifecycle is `draft -> approved -> superseded|revoked` — approved claims are superseded, never edited in place. `claim approve` records `verified.at/by/digest`; `reindex` validates before publishing.
 - `ask` default is lexical; `--embed` opts into local loopback embedding sidecar (also `memory_ask`/`memory_reindex` `embedding: true`). Missing sidecar falls back to lexical, no network calls.
 - `mcp serve` is stdio-only (stdout=protocol, stderr=diagnostics). Protocol revisions: legacy handshake `2025-06-18`…`2025-11-25`, stateless `2026-07-28` (`server/discover`, per-request `_meta`); no Tasks/MRTR/subscriptions extensions; schema-invalid tool input → `isError`, oversized/unknown → `-32602`, server faults → `-32603`. `view` binds `127.0.0.1` only, `GET`/`HEAD` only, strict CSP/`nosniff`, no CORS. Owner-pinned lifecycle: `claim_lifecycle prepare` → `approval show <id>` → `approval grant <id>` (TTY, confirm last 16 hex of digest) → `claim_lifecycle apply`. Challenge 15m, token 5m capped by challenge, single-use.
-- File modes enforced in `internal/runtime/paths.go`: dirs `0700`, mutable metadata/canonical Markdown `0600`, evidence snapshots+`source.yaml` `0400`, derived indexes/dirty `0600`.
+- File modes enforced in `crates/zbrain/src/paths.rs`: dirs `0700`, mutable metadata/canonical Markdown `0600`, evidence snapshots+`source.yaml` `0400`, derived indexes/dirty `0600`.
 
 ## Trust Rules — do not violate
 
@@ -50,14 +53,14 @@ Verify CLI surface: `go run ./cmd/zbrain --help` and sub-helps (`workspace`, `ev
 ## Assets & Style
 
 - After editing `assets/`, rebuild and run tests+smoke — binary embeds them.
-- Skill files `assets/skills/*/SKILL.md` require frontmatter `name`, `description`, `version`. Templates use `{{placeholder}}` tokens; claim templates must be OKF Markdown; evidence `source.yaml` must match `evidence.go`.
-- Keep handlers thin, put durable behavior in `internal/runtime/`. Use `trash`, never `rm` (see `Makefile:32,40`). Use standard `gofmt`; no extra linter config.
+- Skill files `assets/skills/*/SKILL.md` require frontmatter `name`, `description`, `version`. Templates use `{{placeholder}}` tokens; claim templates must be OKF Markdown; evidence `source.yaml` must match `evidence.rs`.
+- Keep handlers thin, put durable behavior in `crates/zbrain/src/`. Use `trash`, never `rm` (see `Makefile:32,40`). Use `cargo fmt`; no extra linter config beyond clippy `-D warnings`.
 - Gitignored: `dist/`, `harness.db*`, `.kit/`, `.opencode/`, `workspaces/`, `.cache/` — never commit runtime output or secrets.
 
 ## Commits & Docs
 
 - Conventional Commits: `feat(cli): ...`, `fix(runtime): ...`, `docs(spec): ...` with specific scope.
-- Authoritative sources: `README.md`, `CONTRIBUTING.md`, `trusted-memory-spec.md`, `docs/trusted-agent-gateway-spec.md`. If docs conflict with `go run ./cmd/zbrain --help` or `internal/runtime/`, trust the executable.
+- Authoritative sources: `README.md`, `CONTRIBUTING.md`, `trusted-memory-spec.md`, `docs/trusted-agent-gateway-spec.md`. If docs conflict with `cargo run -q -p zbrain -- --help` or `crates/zbrain/src/`, trust the executable.
 
 <!-- ZHARNESS:BEGIN -->
 ## Harness

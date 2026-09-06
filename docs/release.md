@@ -2,19 +2,20 @@
 
 ## Build
 
-zbrain is a standalone Go binary. Build it with:
+zbrain is a standalone Rust binary. Build it with:
 
 ```bash
 make build
 ```
 
-This runs `go build -o dist/zbrain ./cmd/zbrain` and produces `dist/zbrain`.
+This runs `cargo build --release -p zbrain --bin zbrain` and produces `dist/zbrain`
+plus `dist/zbrain.stripped`.
 The binary needs no JavaScript runtime, package manager, external database, or
 retrieval service.
 
 ## Packaging strategy
 
-Build on the target platform with the same Go-native command. The binary embeds
+Build on the target platform with the same Rust-native command. The binary embeds
 runtime content from `assets/`; `zbrain setup` extracts `README.md`, `agents/`,
 `engine/`, `skills/`, and `templates/` under `ZBRAIN_HOME` or the default
 `~/.zbrain/`. Any embedded `workspaces/` seed is skipped. `workspace create`
@@ -29,15 +30,15 @@ runtime output from another operator.
 Verify the root command surface and command groups:
 
 ```bash
-go run ./cmd/zbrain --help
-go run ./cmd/zbrain workspace --help
-go run ./cmd/zbrain evidence --help
-go run ./cmd/zbrain claim --help
-go run ./cmd/zbrain migrate --help
-go run ./cmd/zbrain reindex --help
-go run ./cmd/zbrain ask --help
-go run ./cmd/zbrain status --help
-go run ./cmd/zbrain doctor --help
+cargo run -q -p zbrain -- --help
+cargo run -q -p zbrain -- workspace --help
+cargo run -q -p zbrain -- evidence --help
+cargo run -q -p zbrain -- claim --help
+cargo run -q -p zbrain -- migrate --help
+cargo run -q -p zbrain -- reindex --help
+cargo run -q -p zbrain -- ask --help
+cargo run -q -p zbrain -- status --help
+cargo run -q -p zbrain -- doctor --help
 ```
 
 Run the isolated smoke target:
@@ -55,9 +56,9 @@ rebuilds the index, and queries trusted context.
 Run all quality and trust gates before release:
 
 ```bash
-go test ./...
-go vet ./...
-go test -race ./internal/runtime ./internal/cli
+cargo test --workspace
+cargo clippy --workspace --all-targets -- -D warnings
+cargo fmt --all -- --check
 make build
 make smoke
 git diff --check
@@ -72,18 +73,18 @@ interrupted supersession recovery.
 The 100k-claim query benchmark must keep p95 below two seconds:
 
 ```bash
-ZBRAIN_BENCH_100K=1 go test ./internal/runtime -run '^TestAskP95At100K$' -count=1 -v
+ZBRAIN_BENCH_100K=1 cargo test -p zbrain --test bench_100k
 ```
 
 A benchmark result above two seconds is a release blocker.
 
 ## Release checklist
 
-1. `go run ./cmd/zbrain --help` matches the documented shipped surface.
+1. `cargo run -q -p zbrain -- --help` matches the documented shipped surface.
 2. Every documented command group returns the expected `--help` output.
-3. `go test ./...` passes.
-4. `go vet ./...` passes.
-5. `go test -race ./internal/runtime ./internal/cli` passes.
+3. `cargo test --workspace` passes.
+4. `cargo clippy --workspace --all-targets -- -D warnings` passes.
+5. `cargo fmt --all -- --check` passes.
 6. `make build` passes.
 7. `make smoke` passes with isolated `ZBRAIN_HOME`.
 8. The 100k-claim query p95 is at or below two seconds.

@@ -1,59 +1,31 @@
 .DEFAULT_GOAL := help
 
-.PHONY: help build build-stripped test smoke install-local clean bench eval
+.PHONY: help build test smoke install-local clean bench eval eval-suite
 
 help: ## Show available targets
 	@printf "Available targets:\n"
 	@awk 'BEGIN {FS = ":.*## "}; /^[a-zA-Z0-9_-]+:.*## / {printf "  %-14s %s\n", $$1, $$2}' $(MAKEFILE_LIST)
 
-build: ## Compile the Go CLI (debug + stripped)
+build: ## Compile the Rust CLI release binary (dist/zbrain + stripped)
 	@mkdir -p dist
-	go build -o dist/zbrain ./cmd/zbrain
-	go build -ldflags="-s -w" -trimpath -o dist/zbrain.stripped ./cmd/zbrain
+	cargo build --release -p zbrain --bin zbrain
+	cp target/release/zbrain dist/zbrain
+	strip dist/zbrain -o dist/zbrain.stripped 2>/dev/null || cp dist/zbrain dist/zbrain.stripped
 	@ls -lh dist/zbrain* 2>/dev/null || true
 
-build-stripped: ## Compile stripped binary (~14-16M, no debug_info)
-	@mkdir -p dist
-	go build -ldflags="-s -w" -trimpath -o dist/zbrain.stripped ./cmd/zbrain
-	@ls -lh dist/zbrain.stripped
-	@file dist/zbrain.stripped
+test: ## Run the Rust test suite
+	cargo test --workspace
 
-bench: build ## Run FTS5/perf baseline (100, 1k)
-	go run ./scripts/bench-fts5.go --sizes=100,1000
+smoke: build ## Run smoke checks against dist/zbrain in isolated ZBRAIN_HOME
+	./scripts/smoke.sh --bin ./dist/zbrain
 
-eval: build ## Run retrieval eval (P@K/R@K/MRR/NDCG) on 1k syn corpus
-	go run ./internal/eval --corpus=1000 --limit=10 --json docs/proofs/eval-baseline.json
-	@cat docs/proofs/eval-baseline.json | python3 -m json.tool | head -40
+bench: ## Run ask p95 bench (100k corpus; set ZBRAIN_BENCH_100K=1, slow box)
+	ZBRAIN_BENCH_100K=1 cargo test -p zbrain --test bench_100k -- --nocapture
 
-eval-suite: ## Run eval-suite runners (trust integrity, lifecycle, draft precision, retrieval + drift metrics)
-	go test ./internal/eval ./internal/runtime -run 'TestEval' -count=1
+eval: ## Run the retrieval eval suite
+	cargo test -p zbrain --test eval_suite
 
-test: ## Run the Go test suite
-	go test ./...
-
-smoke: build ## Run smoke checks against dist/zbrain
-	./dist/zbrain --help
-	@tmp_root=$$(cd "$${TMPDIR:-/tmp}" && pwd -P); \
-	tmp_home=$$(mktemp -d "$$tmp_root/zbrain-smoke.XXXXXX"); \
-	source_file=$$(mktemp "$$tmp_root/zbrain-source.XXXXXX"); \
-	printf 'trusted source bytes\n' > "$$source_file"; \
-	ZBRAIN_HOME="$$tmp_home" ./dist/zbrain setup; \
-	ZBRAIN_HOME="$$tmp_home" ./dist/zbrain workspace create research; \
-	ZBRAIN_HOME="$$tmp_home" ./dist/zbrain workspace current; \
-	evidence_json=$$(ZBRAIN_HOME="$$tmp_home" ./dist/zbrain evidence add --file "$$source_file" --origin "file://smoke" --media-type text/plain); \
-	evidence_id=$$(printf '%s' "$$evidence_json" | python3 -c 'import json,sys; print(json.load(sys.stdin)["id"])'); \
-	claim_json=$$(printf 'trusted smoke answer\n' | ZBRAIN_HOME="$$tmp_home" ./dist/zbrain claim draft --tier projects --title 'Smoke Claim' --basis evidence --evidence "$$evidence_id"); \
-	claim_id=$$(printf '%s' "$$claim_json" | python3 -c 'import json,sys; print(json.load(sys.stdin)["id"])'); \
-	ZBRAIN_HOME="$$tmp_home" ./dist/zbrain claim approve "$$claim_id"; \
-	ZBRAIN_HOME="$$tmp_home" ./dist/zbrain reindex; \
-	ZBRAIN_HOME="$$tmp_home" ./dist/zbrain ask trusted smoke; \
-	if command -v trash >/dev/null 2>&1; then \
-		trash "$$source_file"; \
-		trash "$$tmp_home"; \
-	else \
-		rm -f "$$source_file"; \
-		rm -rf "$$tmp_home"; \
-	fi
+eval-suite: eval ## Alias for eval
 
 install-local: build ## Install zbrain into ~/.local/bin
 	mkdir -p "$$HOME/.local/bin"
@@ -61,4 +33,4 @@ install-local: build ## Install zbrain into ~/.local/bin
 	chmod +x "$$HOME/.local/bin/zbrain"
 
 clean: ## Remove generated build output
-	trash dist
+	trash dist target 2>/dev/null || rm -rf dist target

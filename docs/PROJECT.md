@@ -2,7 +2,7 @@
 # brainstorm lock; keep the whole file at or under 50 lines)
 
 ## What is this project?
-- `zbrain` is a local-first, Go-native CLI for workspace-isolated trusted
+- `zbrain` is a local-first, Rust-native CLI for workspace-isolated trusted
   memory: canonical OKF Markdown claims, immutable evidence snapshots, a
   disposable SQLite FTS5 index, and fail-closed trusted context JSON for
   coding agents.
@@ -19,14 +19,13 @@
   mutation APIs or remote binds.
 
 ## How do we run the tests?
-- `go test ./...` · `go vet ./...` · `make build` · `make smoke`
-- plus `go test -race ./internal/runtime ./internal/cli ./internal/view ./internal/mcp`
-  and `CGO_ENABLED=0 go build ./cmd/zbrain`
+- `cargo test --workspace` · `cargo clippy --workspace --all-targets -- -D warnings` · `cargo fmt --all -- --check` · `make build` · `make smoke`
+- plus `cargo audit` and `cargo build --release`
 
 ## Architecture in one breath
-- runtime shape: thin CLI in `cmd/zbrain`/`internal/cli`; durable behavior in
-  `internal/runtime`; stdio MCP gateway in `internal/mcp`; loopback viewer in
-  `internal/view`
+- runtime shape: thin CLI in `crates/zbrain/src/main.rs`/`cli.rs`; durable behavior in
+  `crates/zbrain/src/`; stdio MCP gateway in `crates/zbrain/src/mcp/`; loopback viewer in
+  `crates/zbrain/src/view.rs`
 - where state lives: `~/.zbrain` (or `ZBRAIN_HOME`) — canonical OKF Markdown
   claims (0600), immutable evidence snapshots (0400), disposable SQLite FTS5
   indexes (0600, rebuildable via `zbrain reindex`)
@@ -34,4 +33,4 @@
   (127.0.0.1 only)
 
 ## What are we working on right now?
-- plan: none active (trusted-memory-hygiene completed 2026-09-04; PR #28 merged)
+- plan: docs/plans/active/go-to-rust-migration.md — Go→Rust big-bang rewrite, m8 cutover in progress; Rust is authoritative at cutover

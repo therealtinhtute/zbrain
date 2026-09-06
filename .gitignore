@@ -13,6 +13,9 @@ zbrain-darwin-x64
 zbrain-linux-x64
 zbrain-win-x64.exe
 
+# Rust build output
+target/
+
 # Runtime data (not in repo — lives at ~/.zbrain/)
 workspaces/
 .cache/

@@ -147,7 +147,7 @@ The shipped implementation landed in this order:
 4. optional hybrid retrieval;
 5. read-only viewer.
 
-The release gate for every surface is `go test ./...`, `go vet ./...`,
-`go test -race ./internal/runtime ./internal/cli ./internal/view ./internal/mcp`,
-`make build`, `make smoke`, `git diff --check`, and
-`CGO_ENABLED=0 go build ./cmd/zbrain`.
+The release gate for every surface is `cargo test --workspace`,
+`cargo clippy --workspace --all-targets -- -D warnings`,
+`cargo fmt --all -- --check`, `make build`, `make smoke`, `git diff --check`, and
+`cargo build --release`.

@@ -2,29 +2,23 @@
 
 This document tracks the disposable SQLite FTS5 baseline for `zbrain` trusted memory retrieval.
 
-> **Hardware note:** single run on local machine, not vendor comparison. Report `go env`, `ls -lh dist/zbrain`, and `uname -a` alongside numbers. Use the JSON artifact for diffing across commits.
+> **Hardware note:** single run on local machine, not vendor comparison. Report `rustc --version`, `ls -lh dist/zbrain`, and `uname -a` alongside numbers. Use the JSON artifact for diffing across commits.
 
 ## How to reproduce
 
 ```bash
-# Fast sanity (100, 1k) — used by `make bench`
-go run ./scripts/bench-fts5.go --sizes=100,1000 --json /tmp/b.json
+# Ask p95 bench (env-gated; set ZBRAIN_BENCH_100K=1 for the full 100k corpus)
+ZBRAIN_BENCH_100K=1 cargo test -p zbrain --test bench_100k
 
-# Full baseline (100, 1k, 10k) — reference like mcp-fts5-starter
-go run ./scripts/bench-fts5.go --sizes=100,1000,10000 --json docs/proofs/bench-baseline.json
-
-# Custom workspace / sizes
-go run ./scripts/bench-fts5.go --sizes=100,1000 --workspace bench --json /tmp/b.json
-cat /tmp/b.json | python3 -m json.tool
+# The legacy Go harness (scripts/bench-fts5.go) was retired at the Rust
+# cutover; historical numbers live in docs/proofs/bench-baseline*.json.
 ```
 
 Flags:
 
-- `--sizes` — comma-separated corpus sizes (default `100,1000,10000`)
-- `--json` — write JSON array of results to file
-- `--workspace` — workspace name (default `bench`, must satisfy `IsSafeWorkspaceName`)
+- `ZBRAIN_BENCH_100K` — run the full 100k corpus (default off; smaller corpus otherwise)
 
-Isolation: the harness creates a temporary `ZBRAIN_HOME` (`mktemp -d`), runs `EnsureConfig` + `CreateWorkspace(bench)` inside it, generates synthetic claims via `internal/runtime.ClaimStore`, approves them, then times cold `IndexStore.Rebuild("bench")`. The real `~/.zbrain` is never touched. The temp directory is removed with `os.RemoveAll`.
+Isolation: the harness creates a temporary `ZBRAIN_HOME` (`mktemp -d`), runs `ensure_config` + `create_workspace(bench)` inside it, generates synthetic claims via the claim store, approves them, then times cold index rebuilds. The real `~/.zbrain` is never touched.
 
 ## Corpus shape (mirrors mcp-fts5-starter note)
 
@@ -104,6 +98,6 @@ Use `diff` across runs to evaluate perf regressions after Phase 1 (WAL+NORMAL, s
 
 ## References
 
-- `internal/runtime/index_benchmark_test.go` `TestAskP95At100K` — claim generation pattern for 100k corpus (adapted here).
-- `internal/runtime/index_test.go` `indexClaim` helper — claim shape.
+- `index_benchmark_test.go` `TestAskP95At100K` (Go era) — claim generation pattern for 100k corpus (adapted here).
+- `index_test.go` `indexClaim` helper (Go era) — claim shape.
 - `mcp-fts5-starter/docs/benchmark.md` — narrow-vocab methodology, table shape (corpus size | index time | throughput | DB size | peak heap | p50/p95/p99).
