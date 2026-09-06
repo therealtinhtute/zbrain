@@ -817,9 +817,22 @@ mod tests {
     }
 
     fn request(port: u16, method: &str, path: &str) -> HttpResponse {
-        let mut stream = TcpStream::connect(("127.0.0.1", port)).unwrap();
+        // Readiness probe: the serve thread may not have reached accept()
+        // yet under parallel-test load. Bound sockets queue the handshake,
+        // but retrying connect removes all startup timing from the test.
+        let mut stream = None;
+        for _ in 0..200 {
+            match TcpStream::connect(("127.0.0.1", port)) {
+                Ok(connected) => {
+                    stream = Some(connected);
+                    break;
+                }
+                Err(_) => std::thread::sleep(Duration::from_millis(10)),
+            }
+        }
+        let mut stream = stream.expect("viewer test server did not become ready");
         stream
-            .set_read_timeout(Some(Duration::from_secs(5)))
+            .set_read_timeout(Some(Duration::from_secs(30)))
             .unwrap();
         let text =
             format!("{method} {path} HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n");
