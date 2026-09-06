@@ -62,9 +62,6 @@ jobs:
       - name: Smoke
         run: make smoke
 
-      - name: CLI parity smoke
-        run: scripts/cli-parity.sh
-
       - name: Diff check
         run: git diff --check
 

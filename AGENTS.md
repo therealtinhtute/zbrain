@@ -9,7 +9,6 @@ Rust (stable toolchain via `rust-toolchain.toml`), Rust-native CLI in `crates/zb
 - `crates/zbrain/src/` — durable logic: paths, config, assets, setup, workspace, claims, evidence, lifecycle, transition, trust validation, lint, index (FTS5 via rusqlite bundled), query, embedder, approval, campaign; unit tests alongside each module
 - `crates/zbrain/src/mcp/` — stdio MCP gateway (hand-rolled JSON-RPC)
 - `crates/zbrain/src/view.rs` — loopback viewer (std TcpListener)
-- `crates/zbrain/src/bin/parity.rs` — differential parity runner vs the frozen Go oracle (see `scripts/parity.sh`, `scripts/cli-parity.sh`)
 - `crates/zbrain/tests/` — integration suites (`eval_suite.rs`, `bench_100k.rs`, capture tests) + committed golden fixtures
 - `assets/` — embedded source of truth (`include_dir`), copied by `zbrain setup`; never edit extracted runtime directly
 - `docs/` — specs and authored docs; `docs/README.md` is the doc map
@@ -27,12 +26,10 @@ make build                           # → dist/zbrain + dist/zbrain.stripped (e
 make smoke                           # release binary, full lifecycle in isolated ZBRAIN_HOME (uses trash)
 cargo build --release                # CI release-mode build
 git diff --check
-./scripts/parity.sh research <op>    # differential vs frozen Go oracle (setup/workspace/claims/lifecycle/index/ask/approval)
-./scripts/cli-parity.sh              # full CLI surface diff vs Go binary (60 cases)
 ./scripts/smoke.sh --bin ./dist/zbrain
 ```
 
-CI order in `.github/workflows/test.yml` (push `master`/`v2/**`, PR→`master`): `cargo fmt --check` → `cargo test --workspace` → `cargo clippy -D warnings` → `cargo audit` → `make build` → stripped verify → `make smoke` → `cli-parity` → `git diff --check` → `cargo build --release`.
+CI order in `.github/workflows/test.yml` (push `master`/`v2/**`, PR→`master`): `cargo fmt --check` → `cargo test --workspace` → `cargo clippy -D warnings` → `cargo audit` → `make build` → stripped verify → `make smoke` → `git diff --check` → `cargo build --release`.
 
 Verify CLI surface: `cargo run -q -p zbrain -- --help` and sub-helps (`workspace`, `evidence`, `claim`, `migrate`, `reindex`, `ask`, `status`, `doctor`, `mcp serve`, `view`, `approval`).
 
