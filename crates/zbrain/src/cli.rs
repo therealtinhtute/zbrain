@@ -1090,7 +1090,7 @@ impl App {
     fn print_help(&mut self) {
         let _ = write!(
             self.stdout,
-            "zbrain - Go-native OKF trusted memory CLI\n\
+            "zbrain - Rust-native OKF trusted memory CLI\n\
              \n\
              Usage:\n\
              \x20 zbrain <command> [arguments]\n\
@@ -1402,7 +1402,7 @@ mod tests {
         let (mut app, fix) = fixture();
         let out = run_ok(&mut app, &fix, &["--help"]);
         for want in [
-            "zbrain - Go-native OKF trusted memory CLI",
+            "zbrain - Rust-native OKF trusted memory CLI",
             "claim draft --tier <tier>",
             "approval grant <challenge-id>",
             "Use `zbrain <command> --help` for command-specific help.",
