@@ -320,7 +320,7 @@ updated: 2026-09-04
 
   - phase_slug: m6-approval-campaign
     story_id: rust-m6-approval-campaign-20260904
-    status: planned
+    status: checked
     goal: Owner-pinned approval ceremony, batch approval, and authoring campaign ported 1:1
     depends_on: m3-lifecycle-trust
     requirements: [R3, R7]
@@ -492,3 +492,7 @@ updated: 2026-09-04
 ## Progress (append)
 - 2026-09-05 | phase: m4-index-query | wave: W1-W2 | task: W1.T1,W1.T2,W2.T1,W2.T2,W2.T3,parity | task_status: DONE | run_id: rust-rewrite-r4-m4 (subagent) | verification: 304 tests (+94); parity OK x5 (setup/claims/lifecycle/index/ask); cross-format proof (Go opens Rust-written index and vice versa, byte-identical to self-read baseline); ask JSON byte-identity incl. fail-closed fixtures; Go oracle `go test ./internal/runtime` green; p95 bench 10K proof 384.78ms ≤ Go 498.04ms (100K comparison = release gate) | surfaces: crates/zbrain/src/{index,index_state,search,query,embedder}.rs, tests/bench_100k.rs, parity --op index/ask + read-only verify ops | commits 75b033d..905e350 on r4-m4, merged a178ca0
 - 2026-09-05 | phase: m4-index-query | gate | task_status: DONE | judge: same-session | verdict: APPROVED | notes: search scores compared at 6-dp rounding (bm25 float formatting ryu-vs-Go), rank+IDs exact; serde_json raw_value for Go float formatting; TestFileChangeToken reflection fakes adapted (real-file token + invalid-range cases 1:1); nil-tx validation cases unrepresentable in Rust types (validation functions ported)
+
+## Progress (append)
+- 2026-09-05 | phase: m6-approval-campaign | wave: W1-W2 | task: W1.T1,W2.T1,W2.T2 | task_status: DONE | run_id: rust-rewrite-r6-m6 (subagent) | verification: 340 tests (+36 over m4); parity OK x7 (approval new + all previous ops); TTY injection via term.rs ApprovalPrompt trait (StdinPrompt isatty-gated, ScriptedPrompt for tests); grant walks CLI-ready for m7 | surfaces: crates/zbrain/src/{approval,campaign,term}.rs, parity --op approval | commit aeced7c on r6-m6, merged to rust-rewrite
+- 2026-09-05 | phase: m6-approval-campaign | gate | task_status: DONE | judge: same-session | verdict: APPROVED | notes: post-merge rust-rewrite 340 tests + clippy clean verified directly; null-drafts JSON rejects at deserialization (same fail-closed wrapper as Go nil-slice validation); tree-sort sha256 tiebreak for normalized challenge files
