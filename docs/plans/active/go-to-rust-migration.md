@@ -477,17 +477,68 @@ updated: 2026-09-04
   - not_independently_verified: cross-process flock blocking probed by a same-authored python child process; parity harness is self-diffed (oracle trust anchors on the Go tree being correct).
   - proof_gaps: none
   - receipt: context_sources=plan m0-foundation waves W1-W2, internal/runtime/{paths,config,workspace,workspace_boundary,coordination}.go | policy=AGENTS.md CI gate equivalents | judge=same-session | judge_model=opencode-go/omen-alpha | retries=0 | rollback_point=branch rust-rewrite @ master f0bae10 | failure_ledger=absent | not_independently_verified=cross-process flock probe + self-diffed parity oracle
+- 2026-09-05 | phase: m1-assets-setup | mode: gate | verdict: APPROVED | judge: same-session | judge_model: opencode-go/omen-alpha | run_id: rust-rewrite-r2-m1
+  - `cargo test -p zbrain --lib` -> ok. 36 passed (rc=0)
+  - `cargo clippy --workspace --all-targets -- -D warnings` -> clean (rc=0)
+  - `scripts/parity.sh research workspace` -> parity: OK (rc=0)
+  - `scripts/parity.sh research setup` -> parity: OK (rc=0)
+  - `go vet ./crates/tools/fixture-gen` -> clean; `CGO_ENABLED=0 go build ./cmd/zbrain` -> ok; `go test ./...` -> all ok
+  - proof_gaps: none
+  - receipt: context_sources=plan m1-assets-setup W1, internal/runtime/assets.go, cli.go runSetup | policy=AGENTS.md CI gate equivalents | judge=same-session | judge_model=opencode-go/omen-alpha | retries=0 | rollback_point=branch rust-rewrite | failure_ledger=absent | not_independently_verified=subagent-authored port, orchestrator-verified outputs only
+- 2026-09-05 | phase: m2-claims-evidence | mode: gate | verdict: APPROVED | judge: same-session | judge_model: opencode-go/omen-alpha | run_id: rust-rewrite-r2-m2
+  - `cargo test -p zbrain --lib` -> ok. 145 passed (+55) (rc=0)
+  - 150-case Go-oracle YAML scalar corpus byte-identical; 3-way claims parity (Go-tree vs Rust-tree byte-identical, bidirectional verify) (rc=0)
+  - `cargo clippy --workspace --all-targets -- -D warnings` -> clean; `go test ./internal/runtime -run TestEvidence` -> ok
+  - proof_gaps: ~20 lifecycle tests deferred to m3, 4 index-coupled tests deferred to m4 (enumerated in Progress)
+  - receipt: context_sources=plan m2-claims-evidence W1-W3, internal/runtime/{claim,claim_store,evidence,manifest}.go | policy=AGENTS.md CI gate equivalents | judge=same-session | judge_model=opencode-go/omen-alpha | retries=0 | rollback_point=branch rust-rewrite | failure_ledger=absent | not_independently_verified=subagent-authored port, orchestrator-verified outputs only
+- 2026-09-05 | phase: m3-lifecycle-trust | mode: gate | verdict: APPROVED | judge: same-session | judge_model: opencode-go/omen-alpha | run_id: rust-rewrite-r3-m3
+  - `cargo test -p zbrain --lib` -> ok. 194 passed (+49) (rc=0)
+  - `scripts/parity.sh research lifecycle` -> parity: OK; claims/workspace parity stay OK (rc=0)
+  - `cargo clippy --workspace --all-targets -- -D warnings` -> clean; Go oracle lifecycle/approve/supersede/revoke/structural tests green
+  - proof_gaps: challenge surfaces deferred to m6, 3 index-coupled tests deferred to m4 (enumerated in Progress)
+  - receipt: context_sources=plan m3-lifecycle-trust W1-W2, internal/runtime/{lifecycle,transition,trust_validation,lint}.go | policy=AGENTS.md CI gate equivalents | judge=same-session | judge_model=opencode-go/omen-alpha | retries=0 | rollback_point=branch rust-rewrite | failure_ledger=absent | not_independently_verified=subagent-authored port, orchestrator-verified outputs only
+- 2026-09-05 | phase: m4-index-query | mode: gate | verdict: APPROVED | judge: same-session | judge_model: opencode-go/omen-alpha | run_id: rust-rewrite-r4-m4
+  - `cargo test -p zbrain --lib` -> ok. 304 passed (+94) (rc=0)
+  - `scripts/parity.sh research index` + `research ask` -> parity: OK; cross-format proof both directions byte-identical to self-read baselines (rc=0)
+  - `cargo clippy --workspace --all-targets -- -D warnings` -> clean; `go test ./internal/runtime -count=1` -> ok 12.4s
+  - proof_gaps: p95 100K comparison stays a release gate (box too slow; 10K proof 384.78ms ≤ Go 498.04ms)
+  - receipt: context_sources=plan m4-index-query W1-W2, internal/runtime/{index,index_state,search,query,embedder}.go | policy=AGENTS.md CI gate equivalents | judge=same-session | judge_model=opencode-go/omen-alpha | retries=0 | rollback_point=branch rust-rewrite | failure_ledger=absent | not_independently_verified=subagent-authored port, orchestrator-verified outputs only
+- 2026-09-05 | phase: m5-mcp-gateway | mode: gate | verdict: APPROVED | judge: same-session | judge_model: opencode-go/omen-alpha | run_id: rust-rewrite-r5-w2t2
+  - `cargo test -p zbrain --lib` -> ok. 364 passed (+24); mcp 94 passed (rc=0)
+  - 16/16 conformance responses schema-identical vs live Go gateway; 7/7 parity ops OK (rc=0)
+  - `cargo clippy --workspace --all-targets -- -D warnings` -> clean; Go oracle internal/... green
+  - proof_gaps: none
+  - receipt: context_sources=plan m5-mcp-gateway W1-W2, internal/mcp/* | policy=AGENTS.md CI gate equivalents | judge=same-session | judge_model=opencode-go/omen-alpha | retries=0 | rollback_point=branch rust-rewrite | failure_ledger=absent | not_independently_verified=subagent-authored port, orchestrator-verified outputs only
+- 2026-09-06 | phase: m6-approval-campaign | mode: gate | verdict: APPROVED | judge: same-session | judge_model: opencode-go/omen-alpha | run_id: rust-rewrite-r6-m6
+  - `cargo test -p zbrain --lib` -> ok. 340 passed (rc=0) — note: m6 merged before m5-W2, count predates W2.T2
+  - `scripts/parity.sh research approval` -> parity: OK; all previous ops stay OK (rc=0)
+  - `cargo clippy --workspace --all-targets -- -D warnings` -> clean; Go oracle challenge/campaign tests green
+  - proof_gaps: none
+  - receipt: context_sources=plan m6-approval-campaign W1-W2, internal/runtime/{challenge,campaign}.go | policy=AGENTS.md CI gate equivalents | judge=same-session | judge_model=opencode-go/omen-alpha | retries=0 | rollback_point=branch rust-rewrite | failure_ledger=absent | not_independently_verified=subagent-authored port, orchestrator-verified outputs only
+- 2026-09-05 | phase: m7-cli-view-eval | mode: gate | verdict: APPROVED | judge: same-session | judge_model: opencode-go/omen-alpha | run_id: rust-rewrite-r7-m7
+  - `cargo test --workspace` -> ok. 393 lib + 6 eval_suite (rc=0)
+  - `scripts/cli-parity.sh` -> 60 passed, 0 failed; `scripts/smoke.sh` -> rc=0; 7/7 parity OK (rc=0)
+  - `cargo clippy --workspace --all-targets -- -D warnings` -> clean; Go oracle cli/view/eval green
+  - proof_gaps: one transient parallel-run failure seen once, unreproduced ≥6 runs (later root-caused + fixed in m8: socket readiness probe)
+  - receipt: context_sources=plan m7-cli-view-eval W1-W2, internal/{cli,view,eval}/* | policy=AGENTS.md CI gate equivalents | judge=same-session | judge_model=opencode-go/omen-alpha | retries=0 | rollback_point=branch rust-rewrite | failure_ledger=absent | not_independently_verified=subagent-authored port, orchestrator-verified outputs only
+- 2026-09-06 | phase: m8-cutover | mode: gate | verdict: APPROVED | judge: same-session | judge_model: opencode-go/omen-alpha | run_id: m8 cutover
+  - `cargo fmt --all -- --check` -> clean; `cargo test --workspace` -> 393 lib + suites green, 7 consecutive full runs (rc=0)
+  - `cargo clippy --workspace --all-targets -- -D warnings` -> clean; `cargo audit` -> CLEAN after serde fix (rc=0)
+  - `make build` -> 4.4M→3.8M stripped; `make smoke` -> rc=0; `git diff --check` -> clean; `cargo build --release` -> ok
+  - tag v0.2.0-go-final oracle builds+runs on scratch worktree (revert path proven)
+  - proof_gaps: p95 100K comparison stays a release gate
+  - receipt: context_sources=plan m8-cutover W1, CI/Makefile/AGENTS.md/docs sweep, Go-tree deletion | policy=.github/workflows/test.yml Rust gate | judge=same-session | judge_model=opencode-go/omen-alpha | retries=0 | rollback_point=tag v0.2.0-go-final + git history | failure_ledger=absent | not_independently_verified=gate-depth only; complete manual review pending (handoff step 6)
 
 ## Current State and Next Action
-- active_phase: none (m0/m1/m2/m3 checked; m5 in-progress with W2 gated on m4)
+- active_phase: none (all m0–m8 checked; cutover PR #29 merged to master as 3c3808f + banner fix d7a76ac)
 - lifecycle_status: checked
-- latest_run_id: rust-rewrite-r3-m3
-- latest_trace_ids: [m0-foundation, m1-assets-setup, m2-claims-evidence, m3-lifecycle-trust, m5-mcp-gateway W1]
-- latest_check_id: m3 self-check 2026-09-04 (194 tests, 3-way lifecycle parity)
+- latest_run_id: m8 cutover
+- latest_trace_ids: [m0-m7, m8-cutover]
+- latest_check_id: m8 gate 2026-09-06 (full Rust gate green on master; revert path proven via v0.2.0-go-final tag)
 - latest_handoff_id: none
 - blockers: none
-- open_items: ["m4-index-query next (core data track)", "m5 W2.T1/W2.T2 gated on m4-index-query", "m6-approval-campaign gated on m3 (done)"]
-- exact_next_action: work m4-index-query ∥ m6-approval-campaign (both unblocked now that m3 is done)
+- open_items: ["final complete manual review + done transition belongs to handoff closure", "p95 100K bench comparison stays a release gate (box too slow)"]
+- exact_next_action: handoff (plan → docs/plans/completed/ + final review) or next initiative
 
 ## Progress (append)
 - 2026-09-05 | phase: m4-index-query | wave: W1-W2 | task: W1.T1,W1.T2,W2.T1,W2.T2,W2.T3,parity | task_status: DONE | run_id: rust-rewrite-r4-m4 (subagent) | verification: 304 tests (+94); parity OK x5 (setup/claims/lifecycle/index/ask); cross-format proof (Go opens Rust-written index and vice versa, byte-identical to self-read baseline); ask JSON byte-identity incl. fail-closed fixtures; Go oracle `go test ./internal/runtime` green; p95 bench 10K proof 384.78ms ≤ Go 498.04ms (100K comparison = release gate) | surfaces: crates/zbrain/src/{index,index_state,search,query,embedder}.rs, tests/bench_100k.rs, parity --op index/ask + read-only verify ops | commits 75b033d..905e350 on r4-m4, merged a178ca0

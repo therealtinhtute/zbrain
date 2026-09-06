@@ -6,8 +6,10 @@
 //! 2-space steps inside block sequence items, yaml.v3 scalar quoting). The
 //! libyaml-based serde_yml emitter cannot reproduce that style, so it was used
 //! only for unmarshal, where output style is irrelevant. serde_yml was later
-//! removed (RUSTSEC-2025-0067/0068: unsound + unmaintained); parsing now uses
-//! pure-Rust serde_yaml, covered by the same 150-case oracle corpus.
+//! removed (RUSTSEC-2025-0067/0068: unsound + unmaintained), and its
+//! successor serde_yaml still linked C libyaml, so parsing now uses pure-Rust
+//! yaml-rust2 over the same closed schemas, covered by the oracle corpus and
+//! the full test suite.
 
 use std::fmt::Write as _;
 
@@ -662,5 +664,191 @@ mod tests {
              sources:\n    - id: evd_0123456789abcdef0123456789abcdef\n      spans:\n        - evidence_id: evd_0123456789abcdef0123456789abcdef\n          start_line: 2\n          digest: sha256:span-v1:abc\n\
              zbrain:\n    profile: zbrain.trusted-memory/v1\n    transitions:\n        - kind: approve\n          related_claim_ids:\n            - clm_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\n"
         );
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Pure-Rust parsing for the closed frontmatter schemas.
+//
+// yaml-rust2 resolves scalars per YAML 1.2 core (unlike libyaml's 1.1
+// quirks), but every parse target here is a closed struct of String / i64 /
+// Vec<String> / nested-mapping / Option fields, and the mapping below mirrors
+// the previously pinned serde behavior: missing keys fall back to field
+// defaults, unknown keys are ignored, and type mismatches (including explicit
+// null into a scalar) are hard errors. Duplicate mapping keys keep the last
+// value; serde errored there instead — no in-domain document relies on it.
+// ---------------------------------------------------------------------------
+
+/// Pure-Rust YAML document parsing for frontmatter and metadata files.
+pub mod de {
+    use std::collections::BTreeMap;
+    use std::fmt;
+
+    use yaml_rust2::Yaml;
+
+    /// A YAML parse failure. Callers wrap it with their own context
+    /// (e.g. "parse metadata: ...").
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    pub struct Error(pub String);
+
+    impl fmt::Display for Error {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            write!(f, "invalid yaml: {}", self.0)
+        }
+    }
+
+    impl std::error::Error for Error {}
+
+    fn fail(message: impl Into<String>) -> Error {
+        Error(message.into())
+    }
+
+    /// Parse exactly one YAML mapping document. Multi-document input,
+    /// empty input, and non-mapping top levels are errors.
+    pub fn document(bytes: &[u8]) -> Result<BTreeMap<String, Yaml>, Error> {
+        let text = std::str::from_utf8(bytes)
+            .map_err(|err| fail(format!("frontmatter is not utf-8: {err}")))?;
+        let mut docs =
+            yaml_rust2::YamlLoader::load_from_str(text).map_err(|err| fail(format!("{err}")))?;
+        if docs.len() != 1 {
+            return Err(fail("expected a single yaml document"));
+        }
+        match docs.pop() {
+            Some(Yaml::Hash(hash)) => {
+                let mut map = BTreeMap::new();
+                for (key, value) in hash {
+                    match key {
+                        Yaml::String(name) => {
+                            map.insert(name, value);
+                        }
+                        _ => return Err(fail("mapping keys must be strings")),
+                    }
+                }
+                Ok(map)
+            }
+            Some(_) => Err(fail("expected a yaml mapping at top level")),
+            None => Err(fail("expected a single yaml document")),
+        }
+    }
+
+    fn kind_of(value: &Yaml) -> &'static str {
+        match value {
+            Yaml::Real(_) => "number",
+            Yaml::Integer(_) => "integer",
+            Yaml::String(_) => "string",
+            Yaml::Boolean(_) => "boolean",
+            Yaml::Array(_) => "sequence",
+            Yaml::Hash(_) => "mapping",
+            Yaml::Alias(_) => "alias",
+            Yaml::Null => "null",
+            Yaml::BadValue => "invalid",
+        }
+    }
+
+    /// Required string field; a missing key falls back to `""` (mirrors the
+    /// container-level `default` the serde_derive structs carried).
+    pub fn string(map: &BTreeMap<String, Yaml>, key: &str) -> Result<String, Error> {
+        match map.get(key) {
+            None => Ok(String::new()),
+            Some(Yaml::String(value)) => Ok(value.clone()),
+            Some(other) => Err(fail(format!(
+                "field {key:?} must be a string, got {}",
+                kind_of(other)
+            ))),
+        }
+    }
+
+    /// Required integer field; missing falls back to `0`.
+    pub fn integer(map: &BTreeMap<String, Yaml>, key: &str) -> Result<i64, Error> {
+        match map.get(key) {
+            None => Ok(0),
+            Some(Yaml::Integer(value)) => Ok(*value),
+            Some(other) => Err(fail(format!(
+                "field {key:?} must be an integer, got {}",
+                kind_of(other)
+            ))),
+        }
+    }
+
+    /// Required string-sequence field; missing falls back to empty.
+    pub fn string_list(map: &BTreeMap<String, Yaml>, key: &str) -> Result<Vec<String>, Error> {
+        match map.get(key) {
+            None => Ok(Vec::new()),
+            Some(Yaml::Array(items)) => items
+                .iter()
+                .map(|item| match item {
+                    Yaml::String(value) => Ok(value.clone()),
+                    other => Err(fail(format!(
+                        "field {key:?} must be a sequence of strings, got {}",
+                        kind_of(other)
+                    ))),
+                })
+                .collect(),
+            Some(other) => Err(fail(format!(
+                "field {key:?} must be a sequence, got {}",
+                kind_of(other)
+            ))),
+        }
+    }
+
+    /// Nested mapping field; missing or explicit null yields `None`.
+    pub fn mapping(
+        map: &BTreeMap<String, Yaml>,
+        key: &str,
+    ) -> Result<Option<BTreeMap<String, Yaml>>, Error> {
+        match map.get(key) {
+            None | Some(Yaml::Null) => Ok(None),
+            Some(Yaml::Hash(hash)) => {
+                let mut nested = BTreeMap::new();
+                for (key, value) in hash {
+                    match key {
+                        Yaml::String(name) => {
+                            nested.insert(name.clone(), value.clone());
+                        }
+                        _ => return Err(fail("mapping keys must be strings")),
+                    }
+                }
+                Ok(Some(nested))
+            }
+            Some(other) => Err(fail(format!(
+                "field {key:?} must be a mapping, got {}",
+                kind_of(other)
+            ))),
+        }
+    }
+
+    /// Nested sequence-of-mappings field; missing yields empty.
+    pub fn mapping_list(
+        map: &BTreeMap<String, Yaml>,
+        key: &str,
+    ) -> Result<Vec<BTreeMap<String, Yaml>>, Error> {
+        match map.get(key) {
+            None => Ok(Vec::new()),
+            Some(Yaml::Array(items)) => items
+                .iter()
+                .map(|item| match item {
+                    Yaml::Hash(hash) => {
+                        let mut nested = BTreeMap::new();
+                        for (key, value) in hash {
+                            match key {
+                                Yaml::String(name) => {
+                                    nested.insert(name.clone(), value.clone());
+                                }
+                                _ => return Err(fail("mapping keys must be strings")),
+                            }
+                        }
+                        Ok(nested)
+                    }
+                    other => Err(fail(format!(
+                        "field {key:?} must be a sequence of mappings, got {}",
+                        kind_of(other)
+                    ))),
+                })
+                .collect(),
+            Some(other) => Err(fail(format!(
+                "field {key:?} must be a sequence, got {}",
+                kind_of(other)
+            ))),
+        }
     }
 }

@@ -101,6 +101,9 @@ pub fn acquire_workspace_lock(
         )
     })?;
     let flags = libc::O_RDWR | libc::O_CREAT | libc::O_CLOEXEC | libc::O_NOFOLLOW;
+    // SAFETY: c_path is a NUL-free CString alive for the call; O_NOFOLLOW
+    // rejects symlink lock files; the fd is closed on every error path below
+    // and owned by WorkspaceLock on success.
     let fd = unsafe { libc::open(c_path.as_ptr(), flags, 0o600) };
     if fd < 0 {
         return Err(LockError::Io(
@@ -108,7 +111,11 @@ pub fn acquire_workspace_lock(
             std::io::Error::last_os_error(),
         ));
     }
-    let close_on_error = |fd: i32| unsafe { libc::close(fd) };
+    let close_on_error = |fd: i32| unsafe {
+        // SAFETY: fd is an open descriptor owned by this function on every
+        // path that reaches this closure.
+        libc::close(fd)
+    };
     let is_regular = fd_is_regular_file(fd);
     if matches!(&is_regular, Ok(false)) {
         close_on_error(fd);
@@ -118,11 +125,15 @@ pub fn acquire_workspace_lock(
         close_on_error(fd);
         return Err(LockError::Io("stat coordination lock".into(), source));
     }
-    if let Err(source) = set_permissions(&lock_path, 0o600) {
+    // fchmod on the open fd (not chmod on the path): the fd was opened
+    // O_NOFOLLOW and fstat-verified regular above, so no racing writer can
+    // redirect this permission change via a swapped symlink.
+    let rc = unsafe { libc::fchmod(fd, 0o600) };
+    if rc != 0 {
         close_on_error(fd);
         return Err(LockError::Io(
             "set coordination lock permissions".into(),
-            source,
+            std::io::Error::last_os_error(),
         ));
     }
     let mode = if exclusive {
@@ -145,6 +156,8 @@ pub fn acquire_workspace_lock(
 /// Take ownership of a raw fd opened via libc::open.
 fn wrap_raw_fd(fd: i32) -> File {
     use std::os::unix::io::FromRawFd;
+    // SAFETY: fd is open and uniquely owned here — every error path above
+    // closed it, and the success path moves it into WorkspaceLock exactly once.
     unsafe { File::from_raw_fd(fd) }
 }
 
@@ -152,6 +165,8 @@ fn fd_is_regular_file(fd: i32) -> Result<bool, std::io::Error> {
     // fstat without disturbing fd ownership: we never wrap the fd in a File
     // here, so there is nothing to forget or close.
     unsafe {
+        // SAFETY: zeroed libc::stat is valid init memory; fstat only writes
+        // through the pointer and never retains it.
         let mut stat: libc::stat = std::mem::zeroed();
         if libc::fstat(fd, &mut stat) != 0 {
             return Err(std::io::Error::last_os_error());
@@ -163,6 +178,8 @@ fn fd_is_regular_file(fd: i32) -> Result<bool, std::io::Error> {
 impl Drop for WorkspaceLock {
     fn drop(&mut self) {
         unsafe {
+            // SAFETY: unlocks the still-open owned fd; the File close that
+            // follows releases it. No other owner exists.
             libc::flock(self.fd(), libc::LOCK_UN);
         }
     }

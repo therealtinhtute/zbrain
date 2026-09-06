@@ -19,6 +19,7 @@ impl StdinPrompt {
         // Gate on whether stdin itself is a terminal (mirrors the Go oracle's
         // term.IsTerminal(int(stdin.Fd())) check); console's no-echo read is
         // then used for the confirmation line.
+        // SAFETY: isatty takes a bare fd and performs no memory access.
         if unsafe { libc::isatty(0) } != 1 {
             return Err(io::Error::other(
                 "approval grant requires an interactive terminal (TTY)",

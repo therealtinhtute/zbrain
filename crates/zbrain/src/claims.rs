@@ -2,12 +2,13 @@
 //! surface: parse/render/validate/digests/contradictions, WriteDraft, Read,
 //! ScanWorkspace/ScanWorkspaceForTrust, write-once canonical Markdown).
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
 
-use serde::Deserialize;
+use crate::yaml::de::{self, Error as YamlParseError};
 use sha2::{Digest as ShaDigest, Sha256};
+use yaml_rust2::Yaml as YamlValue;
 
 use crate::boundary::{
     resolve_workspace_path, safe_relative_path, validate_workspace, BoundaryError,
@@ -152,8 +153,8 @@ impl From<MutationError> for ClaimError {
     }
 }
 
-impl From<serde_yaml::Error> for ClaimError {
-    fn from(source: serde_yaml::Error) -> Self {
+impl From<YamlParseError> for ClaimError {
+    fn from(source: YamlParseError) -> Self {
         Self::Message(source.to_string())
     }
 }
@@ -220,31 +221,26 @@ fn hex_lower(bytes: &[u8]) -> String {
 }
 
 // ---------------------------------------------------------------------------
-// Frontmatter parsing (serde_yaml — output style is irrelevant on this side).
+// Frontmatter parsing (pure-Rust yaml_rust2 over closed schemas — output
+// style is irrelevant on this side).
 // ---------------------------------------------------------------------------
 
-#[derive(Deserialize, Default)]
-#[serde(default)]
+#[derive(Default)]
 struct ProbeFrontmatter {
     schema: String,
-    #[serde(rename = "type")]
     claim_type: String,
 }
 
-#[derive(Deserialize, Default, Clone)]
-#[serde(default)]
+#[derive(Default, Clone)]
 struct ClaimSourceYaml {
     id: String,
     resource: String,
-    #[serde(default)]
     title: String,
     digest: String,
-    #[serde(default)]
     spans: Vec<EvidenceSpanYaml>,
 }
 
-#[derive(Deserialize, Default, Clone)]
-#[serde(default)]
+#[derive(Default, Clone)]
 struct EvidenceSpanYaml {
     evidence_id: String,
     start_line: i64,
@@ -252,15 +248,13 @@ struct EvidenceSpanYaml {
     digest: String,
 }
 
-#[derive(Deserialize, Default, Clone)]
-#[serde(default)]
+#[derive(Default, Clone)]
 struct ContradictionYaml {
     claim_id: String,
     heuristic: String,
 }
 
-#[derive(Deserialize, Default, Clone)]
-#[serde(default)]
+#[derive(Default, Clone)]
 struct ClaimTransitionYaml {
     kind: String,
     at: String,
@@ -271,31 +265,27 @@ struct ClaimTransitionYaml {
     authorization: Option<ClaimTransitionAuthorizationYaml>,
 }
 
-#[derive(Deserialize, Default, Clone)]
-#[serde(default)]
+#[derive(Default, Clone)]
 struct ClaimTransitionAuthorizationYaml {
     challenge_id: String,
     method: String,
     mcp_client: String,
 }
 
-#[derive(Deserialize, Default)]
-#[serde(default)]
+#[derive(Default)]
 struct GeneratedYaml {
     at: String,
     by: String,
 }
 
-#[derive(Deserialize, Default)]
-#[serde(default)]
+#[derive(Default)]
 struct VerifiedYaml {
     at: String,
     by: String,
     digest: String,
 }
 
-#[derive(Deserialize, Default)]
-#[serde(default)]
+#[derive(Default)]
 struct ZbrainProfileYaml {
     profile: String,
     id: String,
@@ -309,10 +299,8 @@ struct ZbrainProfileYaml {
     transitions: Vec<ClaimTransitionYaml>,
 }
 
-#[derive(Deserialize, Default)]
-#[serde(default)]
+#[derive(Default)]
 struct OkfFrontmatterYaml {
-    #[serde(rename = "type")]
     claim_type: String,
     title: String,
     description: String,
@@ -326,8 +314,7 @@ struct OkfFrontmatterYaml {
     zbrain: ZbrainProfileYaml,
 }
 
-#[derive(Deserialize, Default)]
-#[serde(default)]
+#[derive(Default)]
 struct LegacyFrontmatterYaml {
     schema: String,
     id: String,
@@ -347,6 +334,189 @@ struct LegacyFrontmatterYaml {
     conflicts_with: Vec<String>,
     tags: Vec<String>,
     transitions: Vec<ClaimTransitionYaml>,
+}
+
+type YamlMap = BTreeMap<String, YamlValue>;
+
+fn parse_frontmatter_map(frontmatter: &[u8]) -> Result<YamlMap, ClaimError> {
+    de::document(frontmatter).map_err(|err| ClaimError::Message(err.to_string()))
+}
+
+impl ProbeFrontmatter {
+    fn from_map(map: &YamlMap) -> Result<Self, YamlParseError> {
+        Ok(Self {
+            schema: de::string(map, "schema")?,
+            claim_type: de::string(map, "type")?,
+        })
+    }
+}
+
+impl ClaimSourceYaml {
+    fn from_map(map: &YamlMap) -> Result<Self, YamlParseError> {
+        Ok(Self {
+            id: de::string(map, "id")?,
+            resource: de::string(map, "resource")?,
+            title: de::string(map, "title")?,
+            digest: de::string(map, "digest")?,
+            spans: de::mapping_list(map, "spans")?
+                .iter()
+                .map(EvidenceSpanYaml::from_map)
+                .collect::<Result<Vec<_>, _>>()?,
+        })
+    }
+}
+
+impl EvidenceSpanYaml {
+    fn from_map(map: &YamlMap) -> Result<Self, YamlParseError> {
+        Ok(Self {
+            evidence_id: de::string(map, "evidence_id")?,
+            start_line: de::integer(map, "start_line")?,
+            end_line: de::integer(map, "end_line")?,
+            digest: de::string(map, "digest")?,
+        })
+    }
+}
+
+impl ContradictionYaml {
+    fn from_map(map: &YamlMap) -> Result<Self, YamlParseError> {
+        Ok(Self {
+            claim_id: de::string(map, "claim_id")?,
+            heuristic: de::string(map, "heuristic")?,
+        })
+    }
+}
+
+impl ClaimTransitionAuthorizationYaml {
+    fn from_map(map: &YamlMap) -> Result<Self, YamlParseError> {
+        Ok(Self {
+            challenge_id: de::string(map, "challenge_id")?,
+            method: de::string(map, "method")?,
+            mcp_client: de::string(map, "mcp_client")?,
+        })
+    }
+}
+
+impl ClaimTransitionYaml {
+    fn from_map(map: &YamlMap) -> Result<Self, YamlParseError> {
+        Ok(Self {
+            kind: de::string(map, "kind")?,
+            at: de::string(map, "at")?,
+            by: de::string(map, "by")?,
+            reason: de::string(map, "reason")?,
+            related_claim_ids: de::string_list(map, "related_claim_ids")?,
+            prior_verification_digest: de::string(map, "prior_verification_digest")?,
+            authorization: match de::mapping(map, "authorization")? {
+                None => None,
+                Some(nested) => Some(ClaimTransitionAuthorizationYaml::from_map(&nested)?),
+            },
+        })
+    }
+}
+
+impl GeneratedYaml {
+    fn from_map(map: &YamlMap) -> Result<Self, YamlParseError> {
+        Ok(Self {
+            at: de::string(map, "at")?,
+            by: de::string(map, "by")?,
+        })
+    }
+}
+
+impl VerifiedYaml {
+    fn from_map(map: &YamlMap) -> Result<Self, YamlParseError> {
+        Ok(Self {
+            at: de::string(map, "at")?,
+            by: de::string(map, "by")?,
+            digest: de::string(map, "digest")?,
+        })
+    }
+}
+
+impl ZbrainProfileYaml {
+    fn from_map(map: &YamlMap) -> Result<Self, YamlParseError> {
+        Ok(Self {
+            profile: de::string(map, "profile")?,
+            id: de::string(map, "id")?,
+            tier: de::string(map, "tier")?,
+            basis: de::string(map, "basis")?,
+            evidence_ids: de::string_list(map, "evidence_ids")?,
+            supporting_claim_ids: de::string_list(map, "supporting_claim_ids")?,
+            supersedes: de::string_list(map, "supersedes")?,
+            conflicts_with: de::string_list(map, "conflicts_with")?,
+            contradicts: de::mapping_list(map, "contradicts")?
+                .iter()
+                .map(ContradictionYaml::from_map)
+                .collect::<Result<Vec<_>, _>>()?,
+            transitions: de::mapping_list(map, "transitions")?
+                .iter()
+                .map(ClaimTransitionYaml::from_map)
+                .collect::<Result<Vec<_>, _>>()?,
+        })
+    }
+}
+
+impl OkfFrontmatterYaml {
+    fn from_map(map: &YamlMap) -> Result<Self, YamlParseError> {
+        Ok(Self {
+            claim_type: de::string(map, "type")?,
+            title: de::string(map, "title")?,
+            description: de::string(map, "description")?,
+            resource: de::string(map, "resource")?,
+            tags: de::string_list(map, "tags")?,
+            sources: de::mapping_list(map, "sources")?
+                .iter()
+                .map(ClaimSourceYaml::from_map)
+                .collect::<Result<Vec<_>, _>>()?,
+            generated: match de::mapping(map, "generated")? {
+                None => None,
+                Some(nested) => Some(GeneratedYaml::from_map(&nested)?),
+            },
+            verified: match de::mapping(map, "verified")? {
+                None => None,
+                Some(nested) => Some(VerifiedYaml::from_map(&nested)?),
+            },
+            status: de::string(map, "status")?,
+            stale_after: de::string(map, "stale_after")?,
+            zbrain: match de::mapping(map, "zbrain")? {
+                None => ZbrainProfileYaml::default(),
+                Some(nested) => ZbrainProfileYaml::from_map(&nested)?,
+            },
+        })
+    }
+}
+
+impl LegacyFrontmatterYaml {
+    fn from_map(map: &YamlMap) -> Result<Self, YamlParseError> {
+        Ok(Self {
+            schema: de::string(map, "schema")?,
+            id: de::string(map, "id")?,
+            status: de::string(map, "status")?,
+            title: de::string(map, "title")?,
+            description: de::string(map, "description")?,
+            resource: de::string(map, "resource")?,
+            basis: de::string(map, "basis")?,
+            created_at: de::string(map, "created_at")?,
+            created_by: de::string(map, "created_by")?,
+            verified: match de::mapping(map, "verified")? {
+                None => None,
+                Some(nested) => Some(VerifiedYaml::from_map(&nested)?),
+            },
+            stale_after: de::string(map, "stale_after")?,
+            sources: de::mapping_list(map, "sources")?
+                .iter()
+                .map(ClaimSourceYaml::from_map)
+                .collect::<Result<Vec<_>, _>>()?,
+            evidence_ids: de::string_list(map, "evidence_ids")?,
+            supporting_claim_ids: de::string_list(map, "supporting_claim_ids")?,
+            supersedes: de::string_list(map, "supersedes")?,
+            conflicts_with: de::string_list(map, "conflicts_with")?,
+            tags: de::string_list(map, "tags")?,
+            transitions: de::mapping_list(map, "transitions")?
+                .iter()
+                .map(ClaimTransitionYaml::from_map)
+                .collect::<Result<Vec<_>, _>>()?,
+        })
+    }
 }
 
 fn source_from_yaml(source: ClaimSourceYaml) -> ClaimSource {
@@ -407,7 +577,7 @@ pub fn parse_claim_markdown(
         )));
     }
 
-    let probe: ProbeFrontmatter = serde_yaml::from_slice(frontmatter)?;
+    let probe = ProbeFrontmatter::from_map(&parse_frontmatter_map(frontmatter)?)?;
     let claim = if probe.schema == CLAIM_SCHEMA_VERSION {
         parse_legacy_claim_frontmatter(frontmatter, tier, rel_path, body)?
     } else if probe.claim_type == OKF_CLAIM_TYPE {
@@ -441,7 +611,7 @@ fn parse_legacy_claim_frontmatter(
     rel_path: &str,
     body: &[u8],
 ) -> Result<Claim, ClaimError> {
-    let metadata: LegacyFrontmatterYaml = serde_yaml::from_slice(frontmatter)?;
+    let metadata = LegacyFrontmatterYaml::from_map(&parse_frontmatter_map(frontmatter)?)?;
     let (verified_at, verified_by, verified_digest) = metadata
         .verified
         .map(|verified| (verified.at, verified.by, verified.digest))
@@ -497,7 +667,7 @@ fn parse_okf_claim_frontmatter(
     rel_path: &str,
     body: &[u8],
 ) -> Result<Claim, ClaimError> {
-    let metadata: OkfFrontmatterYaml = serde_yaml::from_slice(frontmatter)?;
+    let metadata = OkfFrontmatterYaml::from_map(&parse_frontmatter_map(frontmatter)?)?;
     let mut claim = Claim {
         claim_type: metadata.claim_type,
         id: metadata.zbrain.id,
@@ -1288,7 +1458,10 @@ fn is_zbrain_claim_document(contents: &[u8]) -> bool {
     let Ok((frontmatter, _)) = split_markdown_frontmatter(contents) else {
         return false;
     };
-    let Ok(probe) = serde_yaml::from_slice::<ProbeFrontmatter>(frontmatter) else {
+    let Ok(map) = parse_frontmatter_map(frontmatter) else {
+        return false;
+    };
+    let Ok(probe) = ProbeFrontmatter::from_map(&map) else {
         return false;
     };
     probe.schema == CLAIM_SCHEMA_VERSION || probe.claim_type == OKF_CLAIM_TYPE

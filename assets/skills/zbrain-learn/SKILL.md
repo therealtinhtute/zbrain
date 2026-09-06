@@ -1,6 +1,6 @@
 ---
 name: zbrain:learn
-description: Deprecated placeholder. The Go runtime uses `zbrain evidence add` and `zbrain claim draft` instead.
+description: Placeholder. The runtime uses `zbrain evidence add` and `zbrain claim draft` instead.
 version: "2.0.0"
 ---
 

@@ -3,11 +3,14 @@
 //! workspace-boundary reads, verify (tamper/size/hash/metadata), validator
 //! cache, and read-only origin drift classification.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::io::{Read as _, Write as _};
 use std::path::{Path, PathBuf};
 
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
+use yaml_rust2::Yaml as YamlValue;
+
+use crate::yaml::de::{self, Error as YamlParseError};
 use sha2::{Digest as ShaDigest, Sha256};
 
 use crate::boundary::{resolve_workspace_path, validate_workspace, BoundaryError};
@@ -23,7 +26,7 @@ use crate::paths::{
 };
 use crate::yaml::{self, Yaml};
 
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
 pub struct Evidence {
     pub id: String,
     pub origin: String,
@@ -105,8 +108,22 @@ impl From<LockError> for EvidenceError {
     }
 }
 
-impl From<serde_yaml::Error> for EvidenceError {
-    fn from(source: serde_yaml::Error) -> Self {
+impl Evidence {
+    fn from_map(map: &BTreeMap<String, YamlValue>) -> Result<Self, YamlParseError> {
+        Ok(Self {
+            id: de::string(map, "id")?,
+            origin: de::string(map, "origin")?,
+            captured_at: de::string(map, "captured_at")?,
+            media_type: de::string(map, "media_type")?,
+            byte_length: de::integer(map, "byte_length")?,
+            sha256: de::string(map, "sha256")?,
+            deduped: false,
+        })
+    }
+}
+
+impl From<YamlParseError> for EvidenceError {
+    fn from(source: YamlParseError) -> Self {
         Self::Message(source.to_string())
     }
 }
@@ -287,7 +304,18 @@ impl EvidenceStore {
         };
         let metadata = yaml::emit(&evidence_to_yaml(&evidence));
         let metadata_path = self.evidence_file_path(workspace, id, "source.yaml")?;
-        std::fs::write(&metadata_path, &metadata)?;
+        // create_new (not truncate): the fresh evd_* dir is ours, but a
+        // racing writer must never silently replace metadata either.
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            let mut file = std::fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .mode(0o600)
+                .open(&metadata_path)
+                .map_err(EvidenceError::from)?;
+            file.write_all(&metadata).map_err(EvidenceError::from)?;
+        }
         set_permissions(&metadata_path, EVIDENCE_FILE_MODE)?;
         ensure_file_mode(&metadata_path, EVIDENCE_FILE_MODE)?;
         Ok(evidence)
@@ -301,7 +329,7 @@ impl EvidenceStore {
         }
         let metadata_path = self.evidence_file_path(workspace, id, "source.yaml")?;
         let contents = std::fs::read(&metadata_path)?;
-        let evidence: Evidence = serde_yaml::from_slice(&contents)?;
+        let evidence = Evidence::from_map(&de::document(&contents)?)?;
         if evidence.id != id {
             return Err(EvidenceError::Message(format!(
                 "evidence metadata id {:?} does not match path id {id:?}",
@@ -520,7 +548,7 @@ impl EvidenceValidator {
                 ));
             }
         };
-        let evidence: Evidence = match serde_yaml::from_slice(&contents) {
+        let evidence = match de::document(&contents).and_then(|map| Evidence::from_map(&map)) {
             Ok(evidence) => evidence,
             Err(err) => {
                 return Err(failure(
@@ -1609,7 +1637,7 @@ mod tests {
                 .join("tests/fixtures/evidence-source.yaml"),
         )
         .unwrap();
-        let evidence: Evidence = serde_yaml::from_slice(&contents).unwrap();
+        let evidence = Evidence::from_map(&de::document(&contents).unwrap()).unwrap();
         assert_eq!(yaml::emit(&evidence_to_yaml(&evidence)), contents);
         let _ = fixture("metafixture");
     }

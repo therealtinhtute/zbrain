@@ -1525,6 +1525,8 @@ fn set_file_times_now(path: &Path) -> Result<(), std::io::Error> {
         tv_nsec: now.subsec_nanos() as libc::c_long,
     };
     let times = [stamp, stamp];
+    // SAFETY: c_path is a NUL-free CString alive for the call; times points
+    // to a live 2-element array; utimensat retains neither pointer.
     let rc = unsafe { libc::utimensat(libc::AT_FDCWD, c_path.as_ptr(), times.as_ptr(), 0) };
     if rc != 0 {
         return Err(std::io::Error::last_os_error());
@@ -1805,6 +1807,8 @@ pub(crate) mod test_support {
     }
 
     // os.Chtimes(path, at, at).
+    // Test-only helper (panics instead of returning errors by design).
+    #[cfg(test)]
     pub fn set_file_times(path: &Path, at: chrono::DateTime<Utc>) {
         use std::ffi::CString;
         let c_path = CString::new(path.as_os_str().as_encoded_bytes()).unwrap();
@@ -1813,6 +1817,7 @@ pub(crate) mod test_support {
             tv_nsec: 0,
         };
         let times = [stamp, stamp];
+        // SAFETY: same contract as set_file_times_now above; test-only.
         let rc = unsafe { libc::utimensat(libc::AT_FDCWD, c_path.as_ptr(), times.as_ptr(), 0) };
         assert_eq!(rc, 0, "utimensat failed for {}", path.display());
     }

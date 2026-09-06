@@ -153,6 +153,12 @@ Runtime ownership permissions are part of this boundary contract:
 - immutable evidence raw snapshots and metadata are owner-only read (`0400`);
 - derived SQLite indexes and dirty markers are owner-only read/write (`0600`).
 
+Extracted program assets (`README.md`, `agents/`, `engine/`, `skills/`,
+`templates/`) are non-secret documentation and tooling shipped with the
+binary; they extract world-readable (`0644` files, `0755` directories),
+matching the Go oracle byte-for-byte. Only canonical user data (claims,
+evidence, config, indexes) carries the owner-only modes above.
+
 Fresh outputs and normal mutation paths normalize these modes without changing
 canonical claim or evidence content semantics.
 

@@ -17,11 +17,23 @@ use crate::mcp::protocol::{decode_frame, Frame, RpcRequest, TransportError};
 /// check): values may be separated by a `\n` or `\r` (plus further
 /// whitespace); any other byte immediately after a value is a fatal
 /// "invalid trailing data" error, matching `newIOConn`.
+///
+/// Hardening beyond the Go oracle: the buffer is capped at
+/// [`MAX_FRAME_BYTES`]. A stdio peer streaming more bytes than that without
+/// completing a value fails the session instead of growing memory without
+/// bound. Legitimate frames (including large `initialize` payloads) are far
+/// below the cap, so parity with the oracle is unaffected.
 pub struct FrameReader<R: Read> {
     inner: R,
     buf: Vec<u8>,
     eof: bool,
 }
+
+/// Maximum buffered-but-unparsed bytes per frame. Mirrors the spirit of the
+/// 1 MiB tool-input bound while leaving headroom for large `initialize`
+/// payloads; anything beyond this without completing a JSON value is treated
+/// as a hostile peer and fails the session.
+pub const MAX_FRAME_BYTES: usize = 8 * 1024 * 1024;
 
 enum ScanError {
     Incomplete,
@@ -41,7 +53,10 @@ impl<R: Read> FrameReader<R> {
         if self.eof {
             return Ok(());
         }
-        let mut chunk = [0u8; 4096];
+        // 64 KiB reads: large enough that rescan-per-fill stays cheap even
+        // for multi-megabyte incomplete values (the scanner restarts from the
+        // value start each round); chunk size is invisible on the wire.
+        let mut chunk = [0u8; 65536];
         let n = self.inner.read(&mut chunk)?;
         if n == 0 {
             self.eof = true;
@@ -58,6 +73,11 @@ impl<R: Read> FrameReader<R> {
     /// Reads the next JSON value, or `None` at clean EOF.
     pub fn next_value(&mut self) -> Result<Option<Value>, TransportError> {
         loop {
+            if self.buf.len() > MAX_FRAME_BYTES {
+                return Err(TransportError(
+                    "frame exceeds maximum size; failing session".to_string(),
+                ));
+            }
             let start = skip_whitespace(&self.buf);
             match scan_value_end(&self.buf, start) {
                 Ok(end) => {
@@ -451,6 +471,27 @@ mod tests {
     fn rejects_non_json_input() {
         let mut transport = MemoryTransport::with_requests("not-json-at-all\n");
         assert!(transport.read_request().is_err());
+    }
+
+    #[test]
+    fn fails_session_on_unbounded_frame() {
+        // A peer streaming past MAX_FRAME_BYTES without completing a value
+        // fails the session instead of growing memory without bound.
+        // (`{` can never complete a value, so the buffer only grows.)
+        let mut reader = FrameReader::new(std::io::Cursor::new(vec![b'{'; MAX_FRAME_BYTES + 1]));
+        let err = reader.next_value().unwrap_err();
+        assert!(err.0.contains("maximum size"), "{err:?}");
+    }
+
+    #[test]
+    fn accepts_large_valid_frame_below_cap() {
+        // A multi-megabyte initialize-style payload still parses.
+        let padding = "x".repeat(2 * 1024 * 1024);
+        let frame =
+            format!("{{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"ping\",\"pad\":\"{padding}\"}}\n");
+        let mut reader = FrameReader::new(std::io::Cursor::new(frame.into_bytes()));
+        let value = reader.next_value().unwrap().expect("frame parses");
+        assert_eq!(value["method"], "ping");
     }
 
     #[test]

@@ -1,6 +1,6 @@
 ---
 name: zbrain:research
-description: Deprecated placeholder. Network research is outside the current Go trusted-memory slice.
+description: Placeholder. Network research is outside the current trusted-memory slice.
 version: "2.0.0"
 ---
 
