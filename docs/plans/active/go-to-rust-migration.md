@@ -355,7 +355,7 @@ updated: 2026-09-04
 
   - phase_slug: m7-cli-view-eval
     story_id: rust-m7-cli-view-eval-20260904
-    status: planned
+    status: in-progress
     goal: Full CLI surface, loopback viewer, eval suite, and smoke script ported; differential harness covers every command
     depends_on: m6-approval-campaign
     notes: Parallel-eligible slices — W1.T1 (arg parsing/dispatch framework + help text) can start after m0; W2.T1 (view server) can start after m2 (claims read). The phase as a whole (full wiring + eval + smoke) completes after m4/m5/m6.
