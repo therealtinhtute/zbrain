@@ -25,7 +25,7 @@ workspaces/
 
 # Session scratch (local planning artifacts — never in repo)
 .kit/
-plans/
+/plans/
 *.cook.md
 HANDOFF.md
 workflow-state.yml
