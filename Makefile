@@ -19,8 +19,8 @@ test: ## Run the Rust test suite
 smoke: build ## Run smoke checks against dist/zbrain in isolated ZBRAIN_HOME
 	./scripts/smoke.sh --bin ./dist/zbrain
 
-bench: ## Run ask p95 bench (100k corpus; set ZBRAIN_BENCH_100K=1, slow box)
-	ZBRAIN_BENCH_100K=1 cargo test -p zbrain --test bench_100k -- --nocapture
+bench: ## Run ask p95 bench (100k corpus; set ZBRAIN_BENCH_100K=1)
+	ZBRAIN_BENCH_100K=1 cargo test --release -p zbrain --test bench_100k -- --nocapture
 
 eval: ## Run the retrieval eval suite
 	cargo test -p zbrain --test eval_suite

@@ -8,7 +8,7 @@ This document tracks the disposable SQLite FTS5 baseline for `zbrain` trusted me
 
 ```bash
 # Ask p95 bench (env-gated; set ZBRAIN_BENCH_100K=1 for the full 100k corpus)
-ZBRAIN_BENCH_100K=1 cargo test -p zbrain --test bench_100k
+ZBRAIN_BENCH_100K=1 cargo test --release -p zbrain --test bench_100k
 
 # The legacy Go harness (scripts/bench-fts5.go) was retired at the Rust
 # cutover; historical numbers live in docs/proofs/bench-baseline*.json.

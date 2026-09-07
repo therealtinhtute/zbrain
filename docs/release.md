@@ -73,7 +73,7 @@ interrupted supersession recovery.
 The 100k-claim query benchmark must keep p95 below two seconds:
 
 ```bash
-ZBRAIN_BENCH_100K=1 cargo test -p zbrain --test bench_100k
+ZBRAIN_BENCH_100K=1 cargo test --release -p zbrain --test bench_100k
 ```
 
 A benchmark result above two seconds is a release blocker.

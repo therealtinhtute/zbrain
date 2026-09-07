@@ -33,4 +33,4 @@
   (127.0.0.1 only)
 
 ## What are we working on right now?
-- plan: docs/plans/active/go-to-rust-migration.md — Go→Rust big-bang rewrite, m8 cutover in progress; Rust is authoritative at cutover
+- plan: none — v0.4.0 Rust cutover landed; 100k benchmark scale gate proven
